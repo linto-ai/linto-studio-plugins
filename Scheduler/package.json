@@ -1,0 +1,15 @@
+{
+  "name": "scheduler",
+  "version": "1.0.0",
+  "description": "- interoperates components using message broker - provides logging about the state of the system     (a) The Scheduler component uses a combination of publisher/subscriber messages, tasks, states, and events to ensure that the system operates smoothly and effectively.      (b) It co-ordinates the access to databases and provides logging capabilities.      (c) It is the only component that listens to all events in the system and prioritises actions by publishing its own messages to the appropriate listeners.      (d) Finally, it serves an API which provides a way to operate and test the entire system, including scaling and creating tasks.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "live-srt-lib": "file:../lib",
+    "uuid": "^9.0.0"
+  }
+}

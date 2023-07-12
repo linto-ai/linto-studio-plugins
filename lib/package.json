@@ -1,0 +1,19 @@
+{
+  "name": "live-srt-lib",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Damien Laine",
+  "email": "damien.laine@gmail.com",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.1.4",
+    "eventemitter3": "^5.0.1",
+    "mqtt": "^4.3.7",
+    "pg": "^8.11.1",
+    "sequelize": "^6.32.0"
+  }
+}

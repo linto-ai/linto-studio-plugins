@@ -1,0 +1,25 @@
+{
+  "name": "session-api",
+  "version": "1.0.0",
+  "description": "- Create session     - Params include which transcribers to use, or any using LANGAGE         - Returns RTMP, SRT.. mount points         - Return WS endpoints infos on transcriber - List session - Start transcription - Stop transcription",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cookie-parser": "^1.4.6",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "json-server": "^0.17.3",
+    "live-srt-lib": "file:../lib",
+    "socket.io": "^4.7.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^4.6.3",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}

@@ -1,0 +1,50 @@
+# This file contains the default values for the environment variables
+# You can override them by creating a file named .env in the same directory
+# you can also override them by setting them in the environment before running the app (e.g. export SRT_PORT=1234)
+
+TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,ASR # Comma separated list of components to run, they load in this order
+SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, they load in this order
+SESSION_API_COMPONENTS=BrokerClient,WebServer,IoHandler
+SESSION_API_HOST=http://localhost
+SESSION_API_WEBSERVER_HTTP_PORT=8000
+MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
+MIN_AUDIO_BUFFER=50 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
+BYTES_PER_SAMPLE=2 # 1 for 8-bit, 2 for 16-bit, 4 for 32-bit
+SAMPLE_RATE=16000 # 8000, 16000, 32000, 44100, 48000
+##### Inbound / Pulled streaming #####
+STREAMING_USE_PROXY=false # true, false
+STREAMING_PROXY_HOST= # Only if STREAMING_USE_PROXY=true
+STREAMING_PROTOCOL=SRT # SRT, RTMP, WEBRTC
+STREAMING_HOST=127.0.0.1 # 0.0.0.0 for all interfaces / listener, or a specific IP address in rendez-vous/caller mode
+UDP_RANGE=8889-8999
+STREAMING_PASSPHRASE=true # true, false or a passphrase (at least 10 chars). If true a random passphrase will be generated and published to the broker when registering
+#SRT
+SRT_MODE=listener # listerner, caller, rendezvous
+#RTMP
+#WEBRTC
+
+##### Database #####
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=mysecretpassword
+DB_NAME=postgres
+
+##### ASR #####
+ASR_PROVIDER=linto # google, microsoft, watson, aws
+ASR_LANGUAGE=fr-FR # en-US, es-ES, fr-FR, de-DE, pt-BR, ja-JP, ko-KR, zh-CN...
+ASR_ENDPOINT= # Only for custom ASR providers
+ASR_USERNAME= 
+ASR_REGION=westeurope
+ASR_PASSWORD= 
+ASR_API_KEY=
+
+
+
+##### Broker #####
+BROKER_HOST=localhost
+BROKER_PORT=1883
+BROKER_USERNAME=
+BROKER_PASSWORD=
+BROKER_KEEPALIVE=60
+BROKER_PROTOCOL=mqtt

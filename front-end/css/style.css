@@ -1,0 +1,87 @@
+@import url('scroller.css');
+@import url('service.css');
+
+:root {
+    --highlight-color: #9b4dca;
+    --highlight-color-text: white;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background-color: #f5f6f8;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding-top: 1rem;
+}
+
+main {
+    display: flex;
+    margin: auto;
+    flex:1;
+    min-height: 0;
+    gap:1rem;
+}
+
+h1 {
+    text-align: center;
+    font-variant-caps: small-caps;
+}
+
+button img {
+    filter: invert(1);
+    position: relative;
+    top: 3px;
+    padding-right: 6px;
+}
+
+
+#export-button {
+    position: relative;
+}
+
+button > .dropdown {
+    width: 120px;
+    background-color: white;
+    position: absolute;
+    left: 0;
+    border: 1px solid black;
+    box-shadow: 0px 0px 9px 0 rgba(76, 76, 76, 0.5);
+    display: none;
+}
+
+button > .dropdown[show] {
+    display: block;
+}
+
+.dropdown-option {
+    cursor: pointer;
+    color: black;
+}
+
+.dropdown-option:hover {
+    background-color: var(--highlight-color);
+    color:var(--highlight-color-text);
+}
+
+/* -- -- -- -- FLEX RULES -- -- -- -- */
+
+.flex1 {
+    flex:1;
+}
+
+.flex {
+    display: flex; 
+}
+
+.flex.col {
+    flex-direction: column;
+}
+     
+.flex.row {
+    flex-direction: row;
+}

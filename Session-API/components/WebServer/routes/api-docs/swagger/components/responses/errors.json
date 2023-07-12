@@ -1,0 +1,18 @@
+{
+    "NotFound": {
+        "description": "Not Found",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "example": "Transcriber config not found"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

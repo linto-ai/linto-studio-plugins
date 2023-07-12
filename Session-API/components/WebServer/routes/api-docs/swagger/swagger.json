@@ -1,0 +1,27 @@
+{
+  "definition": {
+    "openapi": "3.0.0",
+    "info": {
+      "version": "1.0.0",
+      "title": "Session management API",
+      "description": "Use session, create new configs for transcribers"
+    },
+    "schemes": [],
+    "servers": [],
+    "paths": {},
+    "components": {
+      "securitySchemes": {
+        "bearerAuth": {
+          "type": "http",
+          "scheme": "bearer",
+          "bearerFormat": "JWT"
+        }
+      }
+    },
+    "security": [
+      {
+        "bearerAuth": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+#transcription {
+    border: 1px solid lightgray;
+    padding:50px;
+    background-color: black;
+    color:white;
+    /* position: absolute; */
+    bottom: -50px;
+    left: 0px;
+    /* transform: translateY(-50%) translateX(-50%); */
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 2rem;
+}
+
+#scroller {
+    height: 2.4em;
+    line-height: 1.2em;
+    overflow: hidden;
+}
+
+#scroller.smaller {
+    animation-name: smallerText;
+    animation-duration: 1s;
+    transform: scale(0.8);
+    position: relative;
+    right: 100px;
+    bottom: 10px;
+}
+
+#scroller.normal {
+    animation-name: normalText;
+    animation-duration: 1s;
+    transform: scale(1);
+    position: relative;
+    right: 0px;
+    bottom: 0px;
+}
+
+#scroller * {
+    overflow-anchor: none;
+}
+
+#force-scroll {
+    height: 2.4em;
+}
+
+#anchor {
+    overflow-anchor: auto;
+    height: 1px;
+}
+

@@ -59,6 +59,7 @@ class BrokerClient extends Component {
     let session;
     //start Model transaction 
     const t = await Model.sequelize.transaction();
+    let enrolledTranscribers = [];
     try {
       // Create a new session with the specified session ID and status
       session = await Model.Session.create({
@@ -97,12 +98,17 @@ class BrokerClient extends Component {
           sessionId: session.id
         }, { transaction: t });
         createdChannels.push(createdChannel);
+        enrolledTranscribers.push(transcriber);
       }
       session = await session.update({ status: 'ready' }, { transaction: t });
       await t.commit();
       return session.id;
     } catch (error) {
       await t.rollback();
+      // free all enrolled transcribers
+      for (const transcriber of enrolledTranscribers) {
+        this.client.publish(`transcriber/in/${transcriber.uniqueId}/free`);
+      }
       throw error;
     }
   }

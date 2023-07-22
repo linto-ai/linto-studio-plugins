@@ -115,7 +115,7 @@ module.exports = (webserver) => {
                 if (!session) {
                     return res.status(404).send('Session not found');
                 }
-                await session.destroy();
+                webserver.app.components['BrokerClient'].forwardSessionDeletion(session.id)
                 res.json(session);
             } catch (err) {
                 next(err);

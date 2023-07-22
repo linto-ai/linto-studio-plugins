@@ -26,6 +26,9 @@ module.exports = async function () {
               this.client.publish(`session/in/${sessionId}/reject_creation`, payload, 2, false, true);
             }
             break;
+          case 'ask_deletion':
+              await this.deleteSession(sessionId);
+              break;
           default:
             break;
         }

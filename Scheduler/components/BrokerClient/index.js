@@ -113,6 +113,18 @@ class BrokerClient extends Component {
     }
   }
 
+  async deleteSession(sessionId) {
+    const session = await Model.Session.findByPk(sessionId, {
+      include: {
+        model: Model.Channel
+      }
+    });
+    for (const channel of session.channels) {
+      this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+    }
+    await session.destroy();
+  }
+
   async enrollTranscriber(transcriberProfile, session, channel) {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {

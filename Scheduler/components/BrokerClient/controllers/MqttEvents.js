@@ -1,4 +1,4 @@
-const debug = require('debug')('scheduler:BrokerClent:mqtt-events');
+const debug = require('debug')('scheduler:BrokerClient:mqtt-events');
 
 module.exports = async function () {
   this.client.on("message", async (topic, message) => {

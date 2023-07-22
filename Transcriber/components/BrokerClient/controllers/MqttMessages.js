@@ -1,4 +1,4 @@
-const debug = require('debug')('transcriber:BrokerClent:mqtt-messages');
+const debug = require('debug')('transcriber:BrokerClient:mqtt-messages');
 
 //Deals with MQTT messages
 //here, "this" is bound to the BrokerClient component

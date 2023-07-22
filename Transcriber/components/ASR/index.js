@@ -27,7 +27,6 @@ class ASR extends Component {
   // TODO: There's a bug here... don't know what it is yet, but it's causing the transcriber to be set three times upon reconfigure
   setTranscriber(transcriber, options=null) {
     const { CONNECTING, READY, ERROR, CLOSED, TRANSCRIBING } = this.constructor.states;
-    this.state = ASR.states.CLOSED;
     switch (transcriber) {
       case 'linto':
         this.transcriber = options ? new LintoTranscriber(options.channel, options.transcriberProfile) : new LintoTranscriber();

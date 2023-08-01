@@ -85,6 +85,12 @@ class StreamingServer extends Component {
             this.streamURI += `&passphrase=${this.passphrase}`;
           }
           this.pipelineString = `srtsrc uri="${this.streamURI}" ${transcodePipelineString}`;
+          // change streamURI to get client version of the stream endpoint, if caller is used in pipeline, sets mode to listener, if listener is used in pipeline, sets mode to caller, if mode is rendezvous, keeps mode as rendezvous
+          if (this.srtMode === "caller") {
+            this.streamURI = this.streamURI.replace("caller", "listener")
+          } else if (this.srtMode === "listener") {
+            this.streamURI = this.streamURI.replace("listener", "caller")
+          }
           break;
         case "RTMP":
           this.appName = "live";
@@ -118,23 +124,24 @@ class StreamingServer extends Component {
       });
 
       // Find the appsink element in the pipeline
-      const appsink = this.pipeline.findChild('sink');
+      this.appsink = this.pipeline.findChild('sink');
 
       // Define a callback function to handle new audio samples
-      function onData(buf, caps) {
-        if ((this.state === StreamingServer.states.READY && buf)) {
+      const onData = (buf, caps) => {
+        if ((this.state === READY && buf)) {
           this.state = STREAMING;
         }
         if (buf) {
           this.emit('audio', buf);
+          // Continue pulling audio samples from the appsink element, if no buffer, the pipeline pollbus will emit an eos event
+          this.appsink.pull(onData); // recurses
         }
-        // Start pulling audio samples from the appsink element
-        appsink.pull(onData.bind(this)); // recurses
       }
 
       this.pipeline.play();
-      appsink.pull(onData.bind(this));
+      this.appsink.pull(onData);
       this.state = READY;
+      debug(`Streaming Server is reachable on ${this.streamURI}`)
     } catch (error) {
       console.log(error)
       this.state = ERROR;
@@ -145,8 +152,9 @@ class StreamingServer extends Component {
 
   stop() {
     this.pipeline.stop();
-    this.state = StreamingServer.states.CLOSED;
+    delete this.appsink;
     delete this.pipeline
+    this.state = StreamingServer.states.CLOSED;
   }
 }
 

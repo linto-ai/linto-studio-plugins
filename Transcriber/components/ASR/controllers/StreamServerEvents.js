@@ -24,10 +24,17 @@ module.exports = async function () {
     });
 
     this.app.components['StreamingServer'].on('ready', () => {
+        circularAudioBuffer.flush();
+        this.stopTranscription();
+    });
+
+    this.app.components['StreamingServer'].on('eos', () => {
+        circularAudioBuffer.flush();
         this.stopTranscription();
     });
 
     this.app.components['StreamingServer'].on('error', () => {
+        circularAudioBuffer.flush();
         this.stopTranscription();
     });
 }

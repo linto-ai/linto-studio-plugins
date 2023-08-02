@@ -1,4 +1,4 @@
-const debug = require('debug')('transcriber:socketio')
+const debug = require('debug')('delivery:socketio')
 const path = require('path')
 const { Component } = require("live-srt-lib");
 const socketIO = require('socket.io');
@@ -8,21 +8,41 @@ class IoHandler extends Component {
         super(app, "WebServer") // Relies on a WebServer component to be registrated
         this.id = this.constructor.name
         this.app = app
-        //Adds socket.io
-        this.io = socketIO(this.app.components["WebServer"].httpServer)
 
-        //http AND io uses same session middleware
-        this.io.use((socket, next) => {
-            if (socket) {
-                this.app.components["WebServer"].session(socket.request, socket.request.res, next)
+        // TODO: cors should be updated to be configurable with an envvar
+        this.io = socketIO(this.app.components["WebServer"].httpServer, {
+            cors: {
+              origin: "http://localhost:8003",
+              methods: ["GET", "POST"]
             }
         })
+
+        this.io.on("connection", (socket) => {
+            debug(`New client connected : ${socket.id}`)
+
+            socket.on('join_room', function(channel) {
+                debug(`Client ${socket.id} joins room ${channel}`)
+                socket.join(channel);
+            });
+
+            socket.on('leave_room', function(channel) {
+                debug(`Client ${socket.id} leaves room ${channel}`)
+                socket.leave(channel);
+            });
+
+            socket.on("disconnect", () => {
+                debug(`Client ${socket.id} disconnected`)
+            })
+        })
+
         return this.init()
     }
 
     //broadcasts to connected sockets
-    notify(msgType, payload) {
-        this.io.emit(msgType, payload)
+    notify(transcriberId, action, transcription) {
+        if (this.io.sockets.adapter.rooms.has(transcriberId)) {
+            this.io.to(transcriberId).emit(action, transcription)
+        }
     }
 }
 

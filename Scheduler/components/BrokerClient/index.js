@@ -1,5 +1,6 @@
 const debug = require('debug')(`scheduler:BrokerClient`);
 const { MqttClient, Component, Model, Op } = require('live-srt-lib')
+const { v4: uuidv4 } = require('uuid');
 
 class BrokerClient extends Component {
 
@@ -118,7 +119,7 @@ class BrokerClient extends Component {
           stream_status: 'inactive',
           transcriber_status: transcriber.streamingServerStatus,
           closed_captions: null,
-          closed_caption_live_delivery: null,
+          closed_caption_live_delivery: uuidv4(),
           closed_captions_file_delivery: null,
           sessionId: session.id
         }, { transaction: t });

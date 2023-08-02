@@ -1,0 +1,15 @@
+{
+  "name": "delivery",
+  "version": "1.0.0",
+  "description": "Deliver transcription",
+  "main": "delivery.js",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cookie-parser": "^1.4.6",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "live-srt-lib": "file:../lib",
+    "socket.io": "^4.7.1"
+  }
+}

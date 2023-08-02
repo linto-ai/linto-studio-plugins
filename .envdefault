@@ -5,8 +5,10 @@
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,ASR # Comma separated list of components to run, they load in this order
 SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, they load in this order
 SESSION_API_COMPONENTS=BrokerClient,WebServer,IoHandler
+DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
 SESSION_API_HOST=http://localhost
 SESSION_API_WEBSERVER_HTTP_PORT=8000
+DELIVERY_WEBSERVER_HTTP_PORT=8001
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
 MIN_AUDIO_BUFFER=50 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
 BYTES_PER_SAMPLE=2 # 1 for 8-bit, 2 for 16-bit, 4 for 32-bit

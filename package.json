@@ -4,10 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "npm run start:transcriber & npm run start:session-api & npm run start:scheduler",
+    "start": "npm run start:transcriber & npm run start:session-api & npm run start:scheduler & npm run start:delivery",
     "start:session-api": "DEBUG=session-api:* ./node_modules/.bin/nodemon Session-API/Session-API.js",
     "start:transcriber": "DEBUG=transcriber:* ./node_modules/.bin/nodemon Transcriber/transcriber.js",
-    "start:scheduler": "DEBUG=scheduler:* ./node_modules/.bin/nodemon Scheduler/scheduler.js"
+    "start:scheduler": "DEBUG=scheduler:* ./node_modules/.bin/nodemon Scheduler/scheduler.js",
+    "start:delivery": "DEBUG=delivery:* ./node_modules/.bin/nodemon Delivery/delivery.js"
   },
   "author": "Damien Laine damien.laine@gmail.com",
   "email": "damien.laine@gmail.com",

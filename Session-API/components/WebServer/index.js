@@ -1,6 +1,7 @@
 const debug = require('debug')(`session-api:webserver`)
 const { Component } = require("live-srt-lib")
 const path = require('path')
+const cors = require('cors');
 const express = require('express')
 const Session = require('express-session')
 const bodyParser = require('body-parser')
@@ -21,6 +22,7 @@ class WebServer extends Component {
             extended: false
         }))
         this.express.use(cookieParser())
+        this.express.use(cors());
         // HTTP session, nothing to do with subtitling sessions
         let sessionConfig = {
             resave: false,

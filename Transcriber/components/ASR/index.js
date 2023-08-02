@@ -17,16 +17,20 @@ class ASR extends Component {
     super(app);
     this.id = this.constructor.name;
     this.setTranscriber(process.env.ASR_PROVIDER);
+    this.init(); //attaches event controllers
   }
 
   configure(channel, transcriberProfile) {
     this.setTranscriber(transcriberProfile.config.type, { channel, transcriberProfile })
-    this.emit('reconfigure');
+    this.emit('reconfigure'); // Handled by Brokerclient ASRevents controller to forward reconfigured transcriber info to the scheduler through mqtt
   }
 
-  // TODO: There's a bug here... don't know what it is yet, but it's causing the transcriber to be set three times upon reconfigure
   setTranscriber(transcriber, options=null) {
     const { CONNECTING, READY, ERROR, CLOSED, TRANSCRIBING } = this.constructor.states;
+    // Free previous listeners
+    if (this.transcriber) {
+      this.transcriber.removeAllListeners();
+    }
     switch (transcriber) {
       case 'linto':
         this.transcriber = options ? new LintoTranscriber(options.channel, options.transcriberProfile) : new LintoTranscriber();
@@ -39,6 +43,7 @@ class ASR extends Component {
         break;
     }
     this.state = ASR.states.CLOSED;
+    // Set new listeners
     this.transcriber.on('connecting', () => {
       debug('connecting');
       this.state = CONNECTING;
@@ -59,7 +64,6 @@ class ASR extends Component {
     this.transcriber.on('transcribed', (transcription) => {
       this.emit('final', transcription);
     });
-    this.init(); //attaches event controllers
   }
 
 

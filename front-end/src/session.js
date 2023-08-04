@@ -68,6 +68,10 @@ export default class Session {
     const sessionHtmlElementStatus = document.createElement('div')
     sessionHtmlElementStatus.classList.add('session-status')
 
+    const sessionHtmlElementName = document.createElement('div')
+    sessionHtmlElementName.classList.add('session-name')
+    sessionHtmlElementName.innerText = this.name
+
     const sessionHtmlElementStart = document.createElement('div')
     sessionHtmlElementStart.classList.add('session-start')
     sessionHtmlElementStart.innerText = this.start
@@ -77,6 +81,7 @@ export default class Session {
     sessionHtmlElementEnd.innerText = this.end
 
     sessionHtmlElement.appendChild(sessionHtmlElementStatus)
+    sessionHtmlElement.appendChild(sessionHtmlElementName)
     sessionHtmlElement.appendChild(sessionHtmlElementStart)
     sessionHtmlElement.appendChild(sessionHtmlElementEnd)
 

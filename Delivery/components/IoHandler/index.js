@@ -8,6 +8,7 @@ class IoHandler extends Component {
         super(app, "WebServer") // Relies on a WebServer component to be registrated
         this.id = this.constructor.name
         this.app = app
+        this.rooms = {}
 
         // TODO: cors should be updated to be configurable with an envvar
         this.io = socketIO(this.app.components["WebServer"].httpServer, {
@@ -20,28 +21,63 @@ class IoHandler extends Component {
         this.io.on("connection", (socket) => {
             debug(`New client connected : ${socket.id}`)
 
-            socket.on('join_room', function(channel) {
-                debug(`Client ${socket.id} joins room ${channel}`)
-                socket.join(channel);
+            socket.on('join_room', (roomId) => {
+                debug(`Client ${socket.id} joins room ${roomId}`)
+                this.addSocketInRoom(roomId, socket)
             });
 
-            socket.on('leave_room', function(channel) {
-                debug(`Client ${socket.id} leaves room ${channel}`)
-                socket.leave(channel);
+            socket.on('leave_room', (roomId) => {
+                debug(`Client ${socket.id} leaves room ${roomId}`)
+                this.removeSocketFromRoom(roomId, socket)
             });
 
             socket.on("disconnect", () => {
                 debug(`Client ${socket.id} disconnected`)
+                this.searchAndRemoveSocketFromRooms(socket)
             })
         })
 
         return this.init()
     }
 
+    addSocketInRoom(roomId, socket) {
+        socket.join(roomId)
+        if (this.rooms.hasOwnProperty(roomId)) {
+            this.rooms[roomId].add(socket.id)
+            this.app.components['BrokerClient'].emit('join_room', roomId)
+        }
+        else {
+            this.rooms[roomId] = new Set().add(socket.id)
+            this.app.components['BrokerClient'].emit('join_room', roomId)
+        }
+    }
+
+    searchAndRemoveSocketFromRooms(socket) {
+        for (const [roomId, socketIds] of Object.entries(this.rooms)) {
+            if (socketIds.has(socket.id)) {
+                this.removeSocketFromRoom(roomId, socket)
+            }
+        }
+    }
+
+    removeSocketFromRoom(roomId, socket) {
+        socket.leave(roomId);
+
+        if (!this.rooms.hasOwnProperty(roomId)) {
+            this.app.components['BrokerClient'].emit('leave_room', roomId)
+        }
+
+        this.rooms[roomId].delete(socket.id)
+        if (this.rooms[roomId].size == 0) {
+            delete this.rooms.room
+            this.app.components['BrokerClient'].emit('leave_room', roomId)
+        }
+    }
+
     //broadcasts to connected sockets
-    notify(transcriberId, action, transcription) {
-        if (this.io.sockets.adapter.rooms.has(transcriberId)) {
-            this.io.to(transcriberId).emit(action, transcription)
+    notify(roomId, action, transcription) {
+        if (this.io.sockets.adapter.rooms.has(roomId)) {
+            this.io.to(roomId).emit(action, transcription)
         }
     }
 }

@@ -17,8 +17,12 @@ class BrokerClient extends Component {
     this.id = this.constructor.name;
     this.state = CONNECTING;
     this.pub = "delivery"
+    this.sub_templates = [
+      transcriberId => `transcriber/out/${transcriberId}/partial`,
+      transcriberId => `transcriber/out/${transcriberId}/final`
+    ]
     this.subs = [`transcriber/out/+/partial`, `transcriber/out/+/final`]
-    this.client = new MqttClient({ pub: this.pub, subs: this.subs, retain: false, uniqueId: "delivery" });
+    this.client = new MqttClient({ pub: this.pub, retain: false, uniqueId: "delivery" });
     this.client.on("ready", () => {
       this.state = READY
     });
@@ -26,6 +30,20 @@ class BrokerClient extends Component {
       this.state = ERROR;
     });
     this.init();
+  }
+
+  subscribe(transcriberId) {
+    debug(`Subscribe to transcriber ${transcriberId}`)
+    for (const sub_template of this.sub_templates) {
+      this.client.subscribe(sub_template(transcriberId))
+    }
+  }
+
+  unsubscribe(transcriberId) {
+    debug(`Unsubscribe from transcriber ${transcriberId}`)
+    for (const sub_template of this.sub_templates) {
+      this.client.unsubscribe(sub_template(transcriberId))
+    }
   }
 }
 

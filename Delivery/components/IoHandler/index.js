@@ -80,6 +80,14 @@ class IoHandler extends Component {
             this.io.to(roomId).emit(action, transcription)
         }
     }
+
+    brokerOk() {
+        this.io.emit("broker_ok")
+    }
+
+    brokerKo() {
+        this.io.emit("broker_ko")
+    }
 }
 
 module.exports = (app) => new IoHandler(app)

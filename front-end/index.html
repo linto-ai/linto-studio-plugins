@@ -14,9 +14,8 @@
         <meta http-equiv="Expires" content="0"/>
     </head>
     <body>
-        <h1>Live transcriber</h1>
+        <h1>Live transcriber <span id="app-state"></span></h1>
 
-        
         <main>
             <aside class="session-list" id="session-list-started">
                 <label>Running Session</label>
@@ -24,7 +23,6 @@
                 </ul>
             </aside>
             <div id="reader">
-                
                 <div id="reader-action">
                     <div class="flex1">
                         <select id="channel-selector">
@@ -46,7 +44,7 @@
                     <span id="reader-content-text">
                         <!-- placeholder -->
                     </span>
-                    <span id="reader-content-partial"></span>           
+                    <span id="reader-content-partial"></span>
                 </article>
             </div>
             <aside class="session-list"  id="session-list-stopped">

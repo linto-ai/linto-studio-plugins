@@ -32,16 +32,30 @@ export default class SessionController {
     this.socket = io("ws://localhost:8001")
     this.socket.on('connect', () => {
       console.log('connected to socket.io server')
+
       this.socket.on('partial', (msg) => {
         if (this.currentSession && this.currentChannel) {
           this.currentSession.resetPartialText(this.currentChannel)
           this.currentSession.addPartialText(this.currentChannel, msg)
         }
       })
+
       this.socket.on('final', (msg) => {
         if (this.currentSession && this.currentChannel) {
           this.currentSession.addText(this.currentChannel, msg)
         }
+      })
+
+      this.socket.on('broker_ko', () => {
+        const appState = document.querySelector('#app-state')
+        appState.classList.remove('app-state-ok')
+        appState.classList.add('app-state-ko')
+      })
+
+      this.socket.on('broker_ok', () => {
+        const appState = document.getElementById('app-state')
+        appState.classList.remove('app-state-ko')
+        appState.classList.add('app-state-ok')
       })
     })
     this.lastChannelId = 0

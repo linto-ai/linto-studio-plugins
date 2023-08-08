@@ -18,7 +18,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `session/out/+/#`]
+    this.subs = [`transcriber/out/+/status`, `session/out/+/#`, `transcriber/out/+/final`]
     this.state = CONNECTING;
     this.emit("connecting");
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
@@ -37,6 +37,27 @@ class BrokerClient extends Component {
     this.registerActiveSessions();
   }
 
+  async saveTranscription(transcription, uniqueId) {
+    console.log(transcription)
+    try {
+      const sessionIndex = this.sessions.findIndex(s => s.channels.some(c => c.transcriber_id === uniqueId));
+      if (sessionIndex === -1) {
+        throw new Error(`Session with channel transcriber_id ${uniqueId} not found`);
+      }
+      const channelIndex = this.sessions[sessionIndex].channels.findIndex(c => c.transcriber_id === uniqueId);
+      if (channelIndex === -1) {
+        throw new Error(`Channel with transcriber_id ${uniqueId} not found in session ${this.sessions[sessionIndex].session.id}`);
+      }
+      const channel = this.sessions[sessionIndex].channels[channelIndex];
+      const closedCaptions = Array.isArray(channel.closed_captions) ? channel.closed_captions : [];
+      await channel.update({
+        closed_captions: [...closedCaptions, transcription]
+      });
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`, JSON.stringify(transcription));
+    }
+  }
+
   // Called on startup to fetch active sessions from database
   async registerActiveSessions() {
     const sessions = await Model.Session.findAll({
@@ -48,7 +69,11 @@ class BrokerClient extends Component {
       }
     });
     for (const session of sessions) {
-      this.sessions.push(session);
+      const channels = await session.getChannels();
+      this.sessions.push({
+        session,
+        channels
+      });
     }
   }
 
@@ -102,6 +127,11 @@ class BrokerClient extends Component {
       }
       session = await session.update({ status: 'ready' }, { transaction: t });
       await t.commit();
+      // Add the new session and its channels to the local sessions array
+      this.sessions.push({
+        session,
+        channels: createdChannels
+      });
       return session.id;
     } catch (error) {
       await t.rollback();
@@ -113,16 +143,18 @@ class BrokerClient extends Component {
     }
   }
 
+  //TODO: implement unactive session handling to free transcriber and clean this.sessions for unactive sessions
   async deleteSession(sessionId) {
-    const session = await Model.Session.findByPk(sessionId, {
-      include: {
-        model: Model.Channel
+    const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
+    if (sessionIndex !== -1) {
+      const session = this.sessions[sessionIndex];
+      for (const channel of session.channels) {
+        this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
       }
-    });
-    for (const channel of session.channels) {
-      this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+      await session.session.destroy();
+      // Remove the session and its channels from the local sessions array
+      this.sessions.splice(sessionIndex, 1);
     }
-    await session.destroy();
   }
 
   async enrollTranscriber(transcriberProfile, session, channel) {
@@ -166,7 +198,7 @@ class BrokerClient extends Component {
         return acc;
       }, {});
       // TODO : check if transcriber status is wrong, if so, enroll new transcriber into session (replace) and update session status for channels
-      debug(`updating transcriber ${transcriber.uniqueId} --> ${JSON.stringify(changedProperties)}`);
+      debug(`updating transcriber ${transcriber.uniqueId} --> ${JSON.stringify(transcriber)}`);
       // emit event to notify local listeners in method enrollTranscriber. 
       this.emit('transcriber_updated', mergedTranscriber);
     } else {

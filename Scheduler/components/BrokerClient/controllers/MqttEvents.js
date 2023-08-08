@@ -6,11 +6,17 @@ module.exports = async function () {
     const [type, direction, uniqueId, action] = topic.split('/');
     switch (type) {
       case 'transcriber':
-        const transcriber = JSON.parse(message.toString());
-        if (transcriber.online) {
-          this.registerTranscriber(transcriber);
-        } else {
-          this.unregisterTranscriber(transcriber);
+        if (action === 'status') {
+          const transcriber = JSON.parse(message.toString());
+          if (transcriber.online) {
+            this.registerTranscriber(transcriber);
+          } else {
+            this.unregisterTranscriber(transcriber);
+          }
+        }
+        if (action === 'final') {
+          const transcription = JSON.parse(message.toString());
+          this.saveTranscription(transcription, uniqueId); //save transcription to db using transcriber uniqueId
         }
         break;
       case 'session':
@@ -27,8 +33,8 @@ module.exports = async function () {
             }
             break;
           case 'ask_deletion':
-              await this.deleteSession(sessionId);
-              break;
+            await this.deleteSession(sessionId);
+            break;
           default:
             break;
         }

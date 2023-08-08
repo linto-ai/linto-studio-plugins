@@ -68,7 +68,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                          exclude: ['id', 'sessionId']
+                          exclude: ['id', 'sessionId', 'closed_captions']
                         }
                       }
                   });

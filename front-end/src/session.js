@@ -2,9 +2,10 @@ import scroller from './scroller.js'
 import reader from './reader.js'
 
 export default class Session {
-  constructor ({ id, status, start, end, channels, onSelected, onSelectedChannel }) {
+  constructor ({ id, status, name, start, end, channels, onSelected, onSelectedChannel }) {
     this.id = id
     this.status = status // "on" or "off"
+    this.name = name
     this.start = start
     this.end = end
     this.channels = channels
@@ -14,7 +15,7 @@ export default class Session {
 
     this.channelsText = {}
     for (const channel of this.channels) {
-      this.channelsText[channel] = { text: '', partialText: '' }
+      this.channelsText[channel.name] = { text: '', partialText: '' }
     }
 
     this.currentChannel = this.channels[0]
@@ -29,9 +30,9 @@ export default class Session {
     }
   }
 
-  onSelectedChannelCallback (sessionId, channelId) {
-    this.selectChannel(channelId)
-    this._onSelectedChannelCallback(sessionId, channelId)
+  onSelectedChannelCallback (sessionId, channelName, channelId) {
+    this.selectChannel(channelName)
+    this._onSelectedChannelCallback(sessionId, channelName, channelId)
   }
 
   unSelect () {
@@ -43,7 +44,7 @@ export default class Session {
     this.selected = true
     document.getElementById(`session-${this.id}`).setAttribute('selected', 'true')
     this.displayChannels()
-    this.onSelectedChannelCallback(this.id, this.channels[0])
+    this.onSelectedChannelCallback(this.id, this.channels[0].name, this.channels[0].room_uuid)
 
     if (this.onSelectedCallback) { this.onSelectedCallback(this.id) }
   }
@@ -52,7 +53,7 @@ export default class Session {
     const self = this
 
     let listDom
-    if (this.status === 'on') {
+    if (this.status === 'active') {
       listDom = document.querySelector('#session-list-started > ul')
     } else {
       listDom = document.querySelector('#session-list-stopped > ul')
@@ -67,6 +68,10 @@ export default class Session {
     const sessionHtmlElementStatus = document.createElement('div')
     sessionHtmlElementStatus.classList.add('session-status')
 
+    const sessionHtmlElementName = document.createElement('div')
+    sessionHtmlElementName.classList.add('session-name')
+    sessionHtmlElementName.innerText = this.name
+
     const sessionHtmlElementStart = document.createElement('div')
     sessionHtmlElementStart.classList.add('session-start')
     sessionHtmlElementStart.innerText = this.start
@@ -76,6 +81,7 @@ export default class Session {
     sessionHtmlElementEnd.innerText = this.end
 
     sessionHtmlElement.appendChild(sessionHtmlElementStatus)
+    sessionHtmlElement.appendChild(sessionHtmlElementName)
     sessionHtmlElement.appendChild(sessionHtmlElementStart)
     sessionHtmlElement.appendChild(sessionHtmlElementEnd)
 
@@ -86,14 +92,20 @@ export default class Session {
     const channelList = document.getElementById('channel-selector')
     channelList.onchange = null
     channelList.onchange = (e) => {
-      this.onSelectedChannelCallback(this.id, e.target.value)
+      for (const option of e.target) {
+        if (option.value == e.target.value) {
+          this.onSelectedChannelCallback(this.id, option.value, option.dataset.room_uuid)
+          break
+        }
+      }
     }
 
     channelList.innerHTML = ''
     for (const channel of this.channels) {
       const channelHtmlElement = document.createElement('option')
-      channelHtmlElement.value = channel
-      channelHtmlElement.innerText = `Session ${this.id} channel ${channel}`
+      channelHtmlElement.dataset.room_uuid = channel.room_uuid
+      channelHtmlElement.value = channel.name
+      channelHtmlElement.innerText = `Session ${this.id} channel ${channel.name}`
       channelList.appendChild(channelHtmlElement)
     }
   }
@@ -101,7 +113,7 @@ export default class Session {
   updateChannels (channels) {
     this.channels = channels
     this.displayChannels()
-    this.onSelectedChannelCallback(this.id, this.channels[0])
+    this.onSelectedChannelCallback(this.id, this.channels[0].name, this.channels[0].room_uuid)
   }
 
   updateSessionStatus (status) {
@@ -119,12 +131,17 @@ export default class Session {
     listDom.prepend(domElement)
   }
 
-  addText (channel, text, partialText) {
+  addText (channel, text) {
     this.channelsText[channel].text += text
-    this.channelsText[channel].partialText += partialText
     if (channel === this.currentChannel && this.selected) {
       scroller.appendText(text)
       reader.appendText(text)
+    }
+  }
+
+  addPartialText (channel, partialText) {
+    this.channelsText[channel].partialText += partialText
+    if (channel === this.currentChannel && this.selected) {
       scroller.appendPartial(partialText)
       reader.appendPartial(partialText)
     }
@@ -132,12 +149,16 @@ export default class Session {
 
   selectChannel (channel) {
     this.currentChannel = channel
-    scroller.resetText()
-    scroller.appendText(this.channelsText[channel].text)
-    scroller.appendPartial(this.channelsText[channel].partialText)
+    scroller.reset()
     reader.reset()
-    reader.appendText(this.channelsText[channel].text)
-    reader.appendPartial(this.channelsText[channel].partialText)
+  }
+
+  resetText (channel) {
+    this.channelsText[channel].text = ''
+    if (channel === this.currentChannel && this.selected) {
+      scroller.resetText()
+      reader.resetPartial()
+    }
   }
 
   resetPartialText (channel) {

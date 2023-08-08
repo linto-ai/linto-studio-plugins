@@ -1,4 +1,4 @@
-const debug = require('debug')('transcriber:socketio')
+const debug = require('debug')('delivery:socketio')
 const path = require('path')
 const { Component } = require("live-srt-lib");
 const socketIO = require('socket.io');
@@ -8,21 +8,85 @@ class IoHandler extends Component {
         super(app, "WebServer") // Relies on a WebServer component to be registrated
         this.id = this.constructor.name
         this.app = app
-        //Adds socket.io
-        this.io = socketIO(this.app.components["WebServer"].httpServer)
+        this.rooms = {}
 
-        //http AND io uses same session middleware
-        this.io.use((socket, next) => {
-            if (socket) {
-                this.app.components["WebServer"].session(socket.request, socket.request.res, next)
+        // TODO: cors should be updated to be configurable with an envvar
+        this.io = socketIO(this.app.components["WebServer"].httpServer, {
+            cors: {
+              origin: "http://localhost:8003",
+              methods: ["GET", "POST"]
             }
         })
+
+        this.io.on("connection", (socket) => {
+            debug(`New client connected : ${socket.id}`)
+
+            socket.on('join_room', (roomId) => {
+                debug(`Client ${socket.id} joins room ${roomId}`)
+                this.addSocketInRoom(roomId, socket)
+            });
+
+            socket.on('leave_room', (roomId) => {
+                debug(`Client ${socket.id} leaves room ${roomId}`)
+                this.removeSocketFromRoom(roomId, socket)
+            });
+
+            socket.on("disconnect", () => {
+                debug(`Client ${socket.id} disconnected`)
+                this.searchAndRemoveSocketFromRooms(socket)
+            })
+        })
+
         return this.init()
     }
 
+    addSocketInRoom(roomId, socket) {
+        socket.join(roomId)
+        if (this.rooms.hasOwnProperty(roomId)) {
+            this.rooms[roomId].add(socket.id)
+            this.app.components['BrokerClient'].emit('join_room', roomId)
+        }
+        else {
+            this.rooms[roomId] = new Set().add(socket.id)
+            this.app.components['BrokerClient'].emit('join_room', roomId)
+        }
+    }
+
+    searchAndRemoveSocketFromRooms(socket) {
+        for (const [roomId, socketIds] of Object.entries(this.rooms)) {
+            if (socketIds.has(socket.id)) {
+                this.removeSocketFromRoom(roomId, socket)
+            }
+        }
+    }
+
+    removeSocketFromRoom(roomId, socket) {
+        socket.leave(roomId);
+
+        if (!this.rooms.hasOwnProperty(roomId)) {
+            this.app.components['BrokerClient'].emit('leave_room', roomId)
+        }
+
+        this.rooms[roomId].delete(socket.id)
+        if (this.rooms[roomId].size == 0) {
+            delete this.rooms.room
+            this.app.components['BrokerClient'].emit('leave_room', roomId)
+        }
+    }
+
     //broadcasts to connected sockets
-    notify(msgType, payload) {
-        this.io.emit(msgType, payload)
+    notify(roomId, action, transcription) {
+        if (this.io.sockets.adapter.rooms.has(roomId)) {
+            this.io.to(roomId).emit(action, transcription)
+        }
+    }
+
+    brokerOk() {
+        this.io.emit("broker_ok")
+    }
+
+    brokerKo() {
+        this.io.emit("broker_ko")
     }
 }
 

@@ -31,6 +31,11 @@ export class Scroller {
     document.getElementById('transcription-text').innerHTML = ''
     document.getElementById('transcription-partial').innerHTML = ''
   }
+
+  reset () {
+    this.resetPartial()
+    this.resetText()
+  }
 }
 
 const scroller = new Scroller()

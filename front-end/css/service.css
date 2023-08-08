@@ -71,3 +71,41 @@
     overflow: auto;
     flex: 1;
 }
+
+.app-state-ok {
+    background-color:#44c767;
+    border-radius:28px;
+    border:1px solid #18ab29;
+    display:inline-block;
+    cursor:pointer;
+    color:#ffffff;
+    font-family:Arial;
+    font-size:17px;
+    font-weight:bold;
+    padding:12px 10px;
+    text-decoration:none;
+    text-shadow:0px 1px 0px #2f6627;
+}
+
+.app-state-ok:after {
+    content: "online";
+}
+
+.app-state-ko {
+    background-color:#d0451b;
+    border-radius:28px;
+    border:1px solid #942911;
+    display:inline-block;
+    cursor:pointer;
+    color:#ffffff;
+    font-family:Arial;
+    font-size:17px;
+    font-weight:bold;
+    padding:12px 10px;
+    text-decoration:none;
+    text-shadow:0px 1px 0px #854629;
+}
+
+.app-state-ko:after {
+    content: "offline";
+}

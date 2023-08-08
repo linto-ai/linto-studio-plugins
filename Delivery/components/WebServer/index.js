@@ -1,8 +1,8 @@
-const debug = require('debug')(`transcriber:webserver`)
+const debug = require('debug')(`delivery:webserver`)
 const { Component } = require("live-srt-lib")
 const path = require('path')
 const express = require('express')
-const Session = require('express-session')
+const session = require('express-session');
 const bodyParser = require('body-parser')
 const cookieParser = require('cookie-parser')
 
@@ -10,7 +10,6 @@ class WebServer extends Component {
     constructor(app) {
         super(app)
         this.id = this.constructor.name
-        this.express = app
         this.express = express()
         this.express.set('etag', false)
         this.express.set('trust proxy', true)
@@ -19,19 +18,17 @@ class WebServer extends Component {
             extended: false
         }))
         this.express.use(cookieParser())
-        let sessionConfig = {
+        const sessionMiddleware = session({
+            secret: "supersecret",
             resave: false,
             saveUninitialized: true,
-            secret: 'supersecret',
             cookie: {
                 secure: false,
                 maxAge: 604800 // 7 days
             }
-        }
-        this.session = Session(sessionConfig)
-        this.express.use(this.session)
-        this.httpServer = this.express.listen(process.env.WEBSERVER_HTTP_PORT, "0.0.0.0", (err) => {
-            debug(`Listening on : ${process.env.WEBSERVER_HTTP_PORT}`)
+        });
+        this.httpServer = this.express.listen(process.env.DELIVERY_WEBSERVER_HTTP_PORT, "0.0.0.0", (err) => {
+            debug(`Listening on: ${process.env.DELIVERY_WEBSERVER_HTTP_PORT}`)
             if (err) throw (err)
         })
 

@@ -40,9 +40,9 @@ export default class SessionController {
         }
       })
 
-      this.socket.on('final', (msg) => {
+      this.socket.on('final', (final) => {
         if (this.currentSession && this.currentChannel) {
-          this.currentSession.addText(this.currentChannel, msg)
+          this.currentSession.addText(this.currentChannel, final.text)
         }
       })
 

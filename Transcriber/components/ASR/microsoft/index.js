@@ -26,7 +26,6 @@ class MicrosoftTranscriber extends EventEmitter {
             this.ASR_ENDPOINT = process.env.ASR_ENDPOINT;
         }
         const speechConfig = SpeechConfig.fromSubscription(this.ASR_API_KEY, this.ASR_REGION);
-        speechConfig.speechRecognitionLanguage = this.ASR_LANGUAGE;
         // Uses custom endpoint if provided
         if (this.ASR_ENDPOINT) speechConfig.endpointId = this.ASR_ENDPOINT;
         const audioConfig = AudioConfig.fromStreamInput(this.pushStream);
@@ -39,7 +38,14 @@ class MicrosoftTranscriber extends EventEmitter {
         this.recognizer.recognized = (s, e) => {
             if (e.result.reason === ResultReason.RecognizedSpeech) {
                 debug(`Microsoft ASR final transcription: ${e.result.text}`);
-                this.emit('transcribed', e.result.text);
+                const result = {
+                    "text": e.result.text,
+                    "start": e.result.offset / 10000000, // Convert from 100-nanosecond units to seconds
+                    "end":  (e.result.offset + e.result.duration) / 10000000, // Convert from 100-nanosecond units to seconds
+                    "lang": e.result.language || this.ASR_LANGUAGE, //TODO : might use language detection
+                    "locutor": null //TODO : might use speaker diarization
+                }
+                this.emit('transcribed', result);
             }
         };
         this.recognizer.canceled = (s, e) => {

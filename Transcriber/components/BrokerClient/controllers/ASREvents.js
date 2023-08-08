@@ -12,9 +12,8 @@ module.exports = async function () {
 
     // When the streaming server is reconfigured
     this.app.components['ASR'].on('reconfigure', () => {
-        const language = this.app.components['ASR'].language;
         const stream_endpoint = this.app.components['StreamingServer'].streamURI;
-        this.app.components['BrokerClient'].client.registerDomainSpecificValues({ language, stream_endpoint })
+        this.app.components['BrokerClient'].client.registerDomainSpecificValues({ stream_endpoint })
         this.app.components['BrokerClient'].client.publishStatus();
       })
 }

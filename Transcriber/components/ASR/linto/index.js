@@ -12,6 +12,9 @@ class LintoTranscriber extends EventEmitter {
     }
 
     start() {
+        //reset time counters
+        this.startTime = null;
+        this.lastEndTime = 0;
         this.emit('connecting');
         if (this.transcriberProfile && this.channel){
             this.ASR_LANGUAGE = this.channel.language;
@@ -30,10 +33,21 @@ class LintoTranscriber extends EventEmitter {
 
         this.ws.on('message', message => {
             const data = JSON.parse(message);
-            if (data.final) {
-                this.emit('transcribed', data);
-                debug(`ASR transcription: ${data.transcription}`);
-            } else {
+            if (data.text) {
+                const result = {
+                    "text": data.text,
+                    "start": this.lastEndTime,
+                    "end": (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER/1000)) / 1000,
+                    "lang": this.ASR_LANGUAGE,
+                    "locutor": null
+                }
+                this.lastEndTime = result.end;
+                this.emit('transcribed', result);
+                debug(`ASR transcription: ${data.text}`);
+            } else if (data.partial){
+                if (!this.startTime) {
+                    this.startTime = Date.now();
+                }
                 this.emit('transcribing', data);
                 debug(`ASR partial transcription: ${data.partial}`);
             }

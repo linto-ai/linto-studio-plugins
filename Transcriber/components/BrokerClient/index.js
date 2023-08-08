@@ -17,16 +17,11 @@ class BrokerClient extends Component {
     this._state = BrokerClient.states.DISCONNECTED;
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.uniqueId = uuidv4(); //unique ID for this instance / path for MQTT
-    this.lang = null
-    this.provider = null
     this.streaming_protocol = process.env.STREAMING_PROTOCOL
-    this.udp_port = null; // not set yet
     this.srt_mode = process.env.SRT_MODE || null;
     this.bound_session = null; // will bind to a session when used
 
     this.domainSpecificValues = {
-      lang: this.lang,
-      provider: this.provider,
       streaming_protocol: this.streaming_protocol,
       srt_mode: this.srt_mode,
       uniqueId: this.uniqueId

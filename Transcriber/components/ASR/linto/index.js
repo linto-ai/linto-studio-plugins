@@ -3,34 +3,36 @@ const debug = require('debug')(`transcriber:linto`);
 const EventEmitter = require('events');
 
 class LintoTranscriber extends EventEmitter {
-    constructor(channel=null, transcriberProfile=null) {
+    constructor(transcriberProfile=null) {
         super();
-        this.channel = channel;
         this.transcriberProfile = transcriberProfile;
         this.ws = null;
         this.emit('closed')
     }
 
     start() {
+        // Create dummy transcriber profile from environment variables (when transcriber used as standalone, without enrollment)
+        if (!this.transcriberProfile) {
+            this.transcriberProfile = {
+                config: {
+                    type: 'linto',
+                    languages: [{ "candidate": process.env.ASR_LANGUAGE, "endpoint": process.env.ASR_ENDPOINT || null }]
+                }
+            };
+        }
         //reset time counters
         this.startTime = null;
         this.lastEndTime = 0;
         this.emit('connecting');
-        if (this.transcriberProfile && this.channel){
-            this.ASR_LANGUAGE = this.channel.language;
-            this.ASR_ENDPOINT = this.transcriberProfile.config.endpoint
-        } else {
-            this.ASR_LANGUAGE = process.env.ASR_LANGUAGE;
-            this.ASR_ENDPOINT = process.env.ASR_ENDPOINT;
-        }
-        this.ws = new WebSocket(this.ASR_ENDPOINT);
+        // LinTO only supports one language, frist language in the transcriber profile is used
+        this.ws = new WebSocket(this.transcriberProfile.config.languages[0].endpoint);
  
         this.ws.on('open', () => {
             debug("WebSocket connection established");
             this.ws.send(JSON.stringify({ config: { sample_rate: 16000 } }));
             this.emit('ready');
         });
-
+        
         this.ws.on('message', message => {
             const data = JSON.parse(message);
             if (data.text) {

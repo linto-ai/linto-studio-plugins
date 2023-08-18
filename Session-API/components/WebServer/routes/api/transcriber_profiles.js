@@ -12,17 +12,17 @@ const validateTranscriberProfile = (body) => {
     if (config.type !== 'linto' && config.type !== 'microsoft') {
         return { error: `Invalid TranscriberProfile type: ${config.type}`, status: 400 };
     }
-    if (config.type === 'linto' && (!config.endpoint || typeof config.endpoint !== 'string')) {
-        return { error: 'Invalid Linto TranscriberProfile endpoint', status: 400 };
+    if (config.type === 'linto' && (!config.languages.every(lang => lang.candidate && lang.endpoint))) {
+        return { error: 'Invalid Linto TranscriberProfile endpoint or languages', status: 400 };
     }
-    if (config.type === 'microsoft' && (!config.key || typeof config.key !== 'string' || !config.region || typeof config.region !== 'string')) {
-        return { error: 'Invalid Microsoft TranscriberProfile key or region', status: 400 };
+    if (config.type === 'microsoft' && (!config.languages.every(lang => lang.candidate && lang.endpoint) || !config.region || !config.key)) {
+        return { error: 'Invalid Microsoft TranscriberProfile languages, region, or key', status: 400 };
     }
-    if (config.languages.some(lang => typeof lang !== 'string')) {
+    if (config.languages.some(lang => typeof lang !== 'object')) {
         return { error: 'Invalid TranscriberProfile languages', status: 400 };
     }
-    if (config.languages.includes('*') && config.languages.length > 1) {
-        return { error: 'Invalid TranscriberProfile languages: wildcard cannot be combined with other languages', status: 400 };
+    if (config.languages.some(lang => typeof lang.candidate !== 'string' || typeof lang.endpoint !== 'string')) {
+        return { error: 'Invalid TranscriberProfile language properties', status: 400 };
     }
 };
 

@@ -63,10 +63,6 @@
             "transcriber_profile_id": {
                 "type": "integer",
                 "description": "The id of the channel config"
-            },
-            "language": {
-                "type": "string",
-                "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...)"
             }
         }
     },
@@ -81,9 +77,9 @@
                 "type": "string",
                 "description": "The name of the channel"
             },
-            "language": {
-                "type": "string",
-                "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...)"
+            "languages": {
+                "type": "array",
+                "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...) and endpoints"
             },
             "transcriber_profile_id": {
                 "type": "integer",
@@ -113,7 +109,12 @@
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "example": {"start": 0.0, "end": 3.12, "text": "string"}
+                    "example": {
+                        "astart": "date-time",
+                        "start": 0.0,
+                        "end": 3.12,
+                        "text": "string"
+                    }
                 }
             },
             "closed_captions_live_delivery": {

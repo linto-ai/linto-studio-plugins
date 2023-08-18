@@ -11,6 +11,8 @@ class LintoTranscriber extends EventEmitter {
     }
 
     start() {
+        //UTC date and time in ISO format, e.g. 2020-12-31T23:59:59Z
+        this.startedAt = new Date().toISOString();
         // Create dummy transcriber profile from environment variables (when transcriber used as standalone, without enrollment)
         if (!this.transcriberProfile) {
             this.transcriberProfile = {
@@ -37,6 +39,7 @@ class LintoTranscriber extends EventEmitter {
             const data = JSON.parse(message);
             if (data.text) {
                 const result = {
+                    "astart": this.startedAt,
                     "text": data.text,
                     "start": this.lastEndTime,
                     "end": (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER/1000)) / 1000,

@@ -1,6 +1,7 @@
-const debug = require('debug')('session-api:router:api-docs:transcriber_profiles');
-const { Model } = require("live-srt-lib");
-const { v4: uuidv4 } = require('uuid');
+const debug = require('debug')('session-api:router:api:transcriber_profiles')
+const { Model, Op } = require("live-srt-lib")
+const { v4: uuidv4 } = require('uuid')
+
 
 module.exports = (webserver) => {
     return [{
@@ -63,19 +64,37 @@ module.exports = (webserver) => {
         method: 'get',
         requireAuth: false,
         controller: async (req, res, next) => {
-            try {
-                const sessions = await Model.Session.findAll({
-                    include: {
-                        model: Model.Channel,
-                        attributes: {
-                          exclude: ['id', 'sessionId', 'closed_captions']
-                        }
-                      }
-                  });
-                res.json(sessions);
-            } catch (err) {
-                next(err);
+            const limit = req.query.limit ?? 10
+            const offset = req.query.offset ?? 0
+            const searchName = req.query.searchName
+            let where = {}
+            if (req.query.isActive == 'yes') {
+                where.status = 'active'
             }
+            else if (req.query.isActive == 'no') {
+                where.status = {[Op.not]: 'active'}
+            }
+            if (searchName) {
+                where.name = {[Op.startsWith]: searchName}
+            }
+
+            Model.Session.findAndCountAll({
+                limit: limit,
+                offset: offset,
+                include: {
+                    model: Model.Channel,
+                    attributes: {
+                      exclude: ['id', 'sessionId', 'closed_captions']
+                    }
+                },
+                where: where
+            }).then(results => {
+                    const itemCount = results.count
+                    res.json({
+                        sessions: results.rows,
+                        totalItems: results.count
+                    })
+            }).catch(err => next(err))
         }
     }, {
         path: '/sessions',

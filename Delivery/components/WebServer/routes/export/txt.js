@@ -1,6 +1,6 @@
 const txtGenerator = (session, channel) => {
     return new Promise((resolve, reject) => {
-        let content = `${session.name} - ${channel.name} (${channel.language})\n\n`
+        let content = `${session.name} - ${channel.name} (${channel.languages.join('_')})\n\n`
         content += channel.closed_captions.map(caption => `${caption.start} - ${caption.end}: ${caption.text}`).join('\n')
         resolve(new Blob([content], { type: 'text/plain' }))
     })

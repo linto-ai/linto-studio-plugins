@@ -61,7 +61,7 @@ const subtitleGenerator = (type, session, channel) => {
 
         sourceStream.push({
             type: 'header',
-            data: `${session.name} - ${channel.name} (${channel.language})`
+            data: `${session.name} - ${channel.name} (${channel.languages.join('_')})`
         })
 
         channel.closed_captions.map(caption => {

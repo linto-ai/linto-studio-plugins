@@ -32,7 +32,7 @@ const docGenerator = (session, channel) => {
         alignment: AlignmentType.CENTER
     }))
     paragraphs.push(new Paragraph({
-        text: `${channel.name} (${channel.language})`,
+        text: `${channel.name} (${channel.languages.join('_')})`,
         heading: HeadingLevel.HEADING_3,
         alignment: AlignmentType.CENTER
     }))

@@ -2,7 +2,9 @@ class Reader {
   constructor (text = '') {
     document.getElementById('reader-content-finals').innerText = text
     document.getElementById('clipboard-button').addEventListener('click', (e) => { this.copy() })
-    document.getElementById('export-button').addEventListener('click', (e) => { this.toggleExportMenu() })
+    document.getElementById('export-button').addEventListener('click', (e) => {
+      this.toggleExportMenu()
+    })
     this.resetCopyButton()
   }
 

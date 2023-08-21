@@ -128,7 +128,7 @@ export default class Session {
       const channelHtmlElement = document.createElement('option')
       channelHtmlElement.dataset.id = channel.id
       channelHtmlElement.value = channel.name
-      channelHtmlElement.innerHTML = `${channel.name} (${channel.language})`
+      channelHtmlElement.innerHTML = `${channel.name} (${channel.languages.join()})`
       channelList.appendChild(channelHtmlElement)
     }
   }

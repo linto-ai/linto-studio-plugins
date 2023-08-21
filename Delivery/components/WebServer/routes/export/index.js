@@ -54,7 +54,7 @@ module.exports = (webserver) => {
             .then(([session, channel]) => {
                 debug(type)
                 fileGeneratorMapping[type](session, channel).then(content => {
-                    const filename = `${session.name} - ${channel.name} (${channel.language}).${type}`
+                    const filename = `${session.name} - ${channel.name} (${channel.languages.join('_')}).${type}`
                     res.set('Content-Disposition', `attachment; filename=${filename}`)
                     res.type(content.type)
                     content.arrayBuffer().then(buf => {

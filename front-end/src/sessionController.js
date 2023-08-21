@@ -98,7 +98,7 @@ export default class SessionController {
         start: session.start_time,
         end: session.end_time,
         channels: session.channels.map(channel => {
-          return { "name": channel.name, "language": channel.language, "id": channel.transcriber_id }
+          return { "name": channel.name, "languages": channel.languages, "id": channel.transcriber_id }
         })
       })
     }

@@ -4,7 +4,7 @@ import reader from './reader.js'
 export default class Session {
   constructor ({ id, status, name, start, end, channels, onSelected, onSelectedChannel }) {
     this.id = id
-    this.status = status // "on" or "off"
+    this.status = status
     this.name = name
     this.start = start
     this.end = end
@@ -12,7 +12,6 @@ export default class Session {
     this.selected = false
     this.onSelectedCallback = onSelected
     this._onSelectedChannelCallback = onSelectedChannel
-
     this.channelsText = {}
     for (const channel of this.channels) {
       this.channelsText[channel.name] = { text: '', partialText: '' }
@@ -21,7 +20,6 @@ export default class Session {
     this.currentChannel = this.channels[0]
 
     this.appendSessionToList()
-    // this.updateSessionStatus('off')
   }
 
   displaySessionList (sessionList) {
@@ -30,9 +28,17 @@ export default class Session {
     }
   }
 
+  getChannelFromId (channelId) {
+    for (const channel of this.channels) {
+      if (channel.id == channelId) {
+        return channel
+      }
+    }
+  }
+
   onSelectedChannelCallback (sessionId, channelName, channelId) {
     this.selectChannel(channelName)
-    this._onSelectedChannelCallback(sessionId, channelName, channelId)
+    this._onSelectedChannelCallback(sessionId, this.getChannelFromId(channelId), this.status == 'active')
   }
 
   unSelect () {
@@ -44,9 +50,26 @@ export default class Session {
     this.selected = true
     document.getElementById(`session-${this.id}`).setAttribute('selected', 'true')
     this.displayChannels()
-    this.onSelectedChannelCallback(this.id, this.channels[0].name, this.channels[0].room_uuid)
 
-    if (this.onSelectedCallback) { this.onSelectedCallback(this.id) }
+    if (this.status == 'active') {
+      scroller.show()
+    }
+    else {
+      scroller.hide()
+    }
+
+    if (this.onSelectedCallback) {
+      this.onSelectedCallback(this.id)
+    }
+
+    this.onSelectedChannelCallback(this.id, this.channels[0].name, this.channels[0].id)
+  }
+
+  removeSessionFromList () {
+    const sessionHtmlElement = document.querySelector(`#session-${this.id}`)
+    if (sessionHtmlElement) {
+      sessionHtmlElement.remove()
+    }
   }
 
   appendSessionToList () {
@@ -94,7 +117,7 @@ export default class Session {
     channelList.onchange = (e) => {
       for (const option of e.target) {
         if (option.value == e.target.value) {
-          this.onSelectedChannelCallback(this.id, option.value, option.dataset.room_uuid)
+          this.onSelectedChannelCallback(this.id, option.value, option.dataset.id)
           break
         }
       }
@@ -103,9 +126,9 @@ export default class Session {
     channelList.innerHTML = ''
     for (const channel of this.channels) {
       const channelHtmlElement = document.createElement('option')
-      channelHtmlElement.dataset.room_uuid = channel.room_uuid
+      channelHtmlElement.dataset.id = channel.id
       channelHtmlElement.value = channel.name
-      channelHtmlElement.innerText = `Session ${this.id} channel ${channel.name}`
+      channelHtmlElement.innerHTML = `${channel.name} (${channel.language})`
       channelList.appendChild(channelHtmlElement)
     }
   }
@@ -113,7 +136,7 @@ export default class Session {
   updateChannels (channels) {
     this.channels = channels
     this.displayChannels()
-    this.onSelectedChannelCallback(this.id, this.channels[0].name, this.channels[0].room_uuid)
+    this.onSelectedChannelCallback(this.id, this.channels[0].name, this.channels[0].id)
   }
 
   updateSessionStatus (status) {
@@ -131,11 +154,11 @@ export default class Session {
     listDom.prepend(domElement)
   }
 
-  addText (channel, text) {
-    this.channelsText[channel].text += text
+  addFinal (channel, final) {
+    this.channelsText[channel].text += final.text
     if (channel === this.currentChannel && this.selected) {
-      scroller.appendText(text)
-      reader.appendText(text)
+      scroller.appendText(final.text)
+      reader.addFinal(final.text, final.start, final.end)
     }
   }
 

@@ -1,15 +1,21 @@
 class Reader {
   constructor (text = '') {
-    document.getElementById('reader-content-text').innerText = text
+    document.getElementById('reader-content-finals').innerText = text
     document.getElementById('clipboard-button').addEventListener('click', (e) => { this.copy() })
     document.getElementById('export-button').addEventListener('click', (e) => { this.toggleExportMenu() })
     this.resetCopyButton()
   }
 
-  appendText (text) {
-    const currentText = document.getElementById('reader-content-text').textContent
-    const newText = currentText + text
-    document.getElementById('reader-content-text').textContent = newText
+  addFinal (text, start, end) {
+    const finals = document.getElementById('reader-content-finals')
+    finals.innerHTML += `
+    <div class="reader-content-final row">
+      <div class="reader-content-timestamp column column-10">
+          <div class="timestamp-start">${start}</div>
+          <div class="timestamp-end">${end}</div>
+      </div>
+      <div class="reader-content-text column column-90">${text}</div>
+    </div>`
   }
 
   resetPartial () {
@@ -23,12 +29,12 @@ class Reader {
   }
 
   reset () {
-    document.getElementById('reader-content-text').innerText = ''
+    document.getElementById('reader-content-finals').innerText = ''
     document.getElementById('reader-content-partial').innerText = ''
   }
 
   copy () {
-    const currentText = document.getElementById('reader-content-text').textContent + document.getElementById('reader-content-partial').textContent
+    const currentText = document.getElementById('reader-content-finals').textContent + document.getElementById('reader-content-partial').textContent
     navigator.clipboard.writeText(currentText).then(
       () => {
         document.querySelector('#clipboard-button > img').src = '/static/check-lg.svg'

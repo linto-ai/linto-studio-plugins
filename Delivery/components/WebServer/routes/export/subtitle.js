@@ -34,8 +34,8 @@ function splitSubtitles(subtitle) {
             }
         }
     }
-    if (segment.length > 0) {
-        segments.push(segment.trim());
+    if (segment.trim().length > 0) {
+        segments.push(segment.trim())
     }
 
     const totalDuration = Math.round(subtitle['end']*1000 - subtitle['start']*1000)

@@ -65,11 +65,12 @@ class IoHandler extends Component {
 
         if (!this.rooms.hasOwnProperty(roomId)) {
             this.app.components['BrokerClient'].emit('leave_room', roomId)
+            return
         }
 
         this.rooms[roomId].delete(socket.id)
         if (this.rooms[roomId].size == 0) {
-            delete this.rooms.room
+            delete this.rooms[roomId]
             this.app.components['BrokerClient'].emit('leave_room', roomId)
         }
     }

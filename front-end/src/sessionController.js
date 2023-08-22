@@ -106,7 +106,7 @@ export default class SessionController {
   }
 
   loadSessions (isActive, searchName) {
-    const pageSize = 2
+    const pageSize = 10
     this.fetchSessions(isActive, searchName, pageSize, 0).then(totalItems => {
       const tuiId = isActive == 'active' ? 'tui-pagination-container-started' : 'tui-pagination-container-stopped'
       const pagination = new tui.Pagination(tuiId, {

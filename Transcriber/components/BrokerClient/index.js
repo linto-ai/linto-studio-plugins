@@ -65,14 +65,14 @@ class BrokerClient extends Component {
   }
 
   async setSession(sessionInfo) {
-    const { sessionId, channel, transcriberProfile } = sessionInfo;
+    const { sessionId, transcriberProfile } = sessionInfo;
     this.bound_session = sessionId;
     // MQTT status payload update
     this.client.registerDomainSpecificValues({ bound_session: this.bound_session })
     this.state = BrokerClient.states.SESSION_BOUND;
     debug(`${this.uniqueId} Bound to session ${this.bound_session}`)
     // publish will occur when streaming server component will change state upon configure method call, see Transcriber/components/StreamingServer/controllers/StreamingServer.js
-    this.app.components['ASR'].configure(channel, transcriberProfile)
+    this.app.components['ASR'].configure(transcriberProfile)
   }
 
   async free() {

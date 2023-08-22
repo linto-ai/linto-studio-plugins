@@ -20,12 +20,12 @@ class ASR extends Component {
     this.init(); //attaches event controllers
   }
 
-  configure(channel, transcriberProfile) {
-    this.setTranscriber(transcriberProfile.config.type, { channel, transcriberProfile })
+  configure(transcriberProfile) {
+    this.setTranscriber(transcriberProfile.config.type, transcriberProfile);
     this.emit('reconfigure'); // Handled by Brokerclient ASRevents controller to forward reconfigured transcriber info to the scheduler through mqtt
   }
 
-  setTranscriber(transcriber, options=null) {
+  setTranscriber(transcriber, transcriberProfile=null) {
     const { CONNECTING, READY, ERROR, CLOSED, TRANSCRIBING } = this.constructor.states;
     // Free previous listeners
     if (this.transcriber) {
@@ -33,10 +33,10 @@ class ASR extends Component {
     }
     switch (transcriber) {
       case 'linto':
-        this.transcriber = options ? new LintoTranscriber(options.channel, options.transcriberProfile) : new LintoTranscriber();
+        this.transcriber = transcriberProfile ? new LintoTranscriber(transcriberProfile) : new LintoTranscriber();
         break;
       case 'microsoft':
-        this.transcriber = options ? new MicrosoftTranscriber(options.channel, options.transcriberProfile) : new MicrosoftTranscriber();
+        this.transcriber = transcriberProfile ? new MicrosoftTranscriber(transcriberProfile) : new MicrosoftTranscriber();
         break;
       default:
         // handle default case

@@ -39,7 +39,6 @@ class BrokerClient extends Component {
   }
 
   async saveTranscription(transcription, uniqueId) {
-    console.log(transcription)
     try {
       const sessionIndex = this.sessions.findIndex(s => s.channels.some(c => c.transcriber_id === uniqueId));
       if (sessionIndex === -1) {
@@ -104,16 +103,12 @@ class BrokerClient extends Component {
         if (!transcriberProfile) {
           throw new Error(`Transcriber profile with id ${channel.transcriber_profile_id} not found`);
         }
-        //if channel.language is not specified, or not supported by transcriber profile, throw error
-        if (!channel.language || !transcriberProfile.config.languages.includes(channel.language)) {
-          throw new Error(`Unsupported language ${channel.language}, check transcriber profile config`);
-        }
         // Enroll a running transcriber into the session channel
-        let transcriber = await this.enrollTranscriber(transcriberProfile, session, channel);
+        let transcriber = await this.enrollTranscriber(transcriberProfile, session);
         let createdChannel = await Model.Channel.create({
           transcriber_id: transcriber.uniqueId,
           transcriber_profile_id: transcriberProfile.id,
-          language: channel.language,
+          languages: transcriberProfile.config.languages.map(language => language.candidate), //array of BCP47 language tags from transcriber profile
           name: channel.name,
           stream_endpoint: transcriber.stream_endpoint,
           stream_status: 'inactive',
@@ -158,7 +153,7 @@ class BrokerClient extends Component {
     }
   }
 
-  async enrollTranscriber(transcriberProfile, session, channel) {
+  async enrollTranscriber(transcriberProfile, session) {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error(`Transcriber enrollment timeout`));
@@ -179,7 +174,7 @@ class BrokerClient extends Component {
       }
       const transcriber = availableTranscribers[0];
       // Enroll the first available transcriber into the session
-      this.client.publish(`transcriber/in/${transcriber.uniqueId}/enroll`, { sessionId: session.id, channel, transcriberProfile });
+      this.client.publish(`transcriber/in/${transcriber.uniqueId}/enroll`, { sessionId: session.id, transcriberProfile });
     });
   }
 

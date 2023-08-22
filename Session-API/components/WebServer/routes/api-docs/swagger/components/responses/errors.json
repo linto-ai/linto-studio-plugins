@@ -8,7 +8,7 @@
                     "properties": {
                         "message": {
                             "type": "string",
-                            "example": "Transcriber config not found"
+                            "example": "Ressource not found"
                         }
                     }
                 }

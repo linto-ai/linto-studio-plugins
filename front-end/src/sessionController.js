@@ -1,48 +1,37 @@
 import Session from './session.js'
+import io from 'socket.io-client'
+import Pagination from 'tui-pagination'
+
 export default class SessionController {
   constructor () {
     this.sessionDict = {}
-    document.getElementById('export-txt').addEventListener('click', (e) => { this.exportTxt() })
-    document.getElementById('export-doc').addEventListener('click', (e) => { this.exportDoc() })
-    document.getElementById('export-vtt').addEventListener('click', (e) => { this.exportVtt() })
-    document.getElementById('export-srt').addEventListener('click', (e) => { this.exportSrt() })
 
-    fetch('http://localhost:8000/v1/sessions', {
-      headers: {
-          'Accept': 'application/json'
-      }})
-    .then(response => response.json())
-    .then(sessions => {
-      for (const session of sessions) {
-        this.addSession({
-          id: session.id,
-          status: session.status,
-          name: session.name,
-          start: session.start_time,
-          end: session.end_time,
-          channels: session.channels.map(channel => {
-            return { "name": channel.name, "room_uuid": channel.transcriber_id }
-          })
-        })
-      }
-    })
+    this.loadSessions('active', null)
+    this.loadSessions(null, null)
+    this.listenInput(true)
+    this.listenInput(false)
 
     this.currentSession = null
+    this.currentChannelName = null
+    this.currentChannelId = 0
     this.currentChannel = null
-    this.socket = io("ws://localhost:8001")
+    this.lastSessionActive = false
+
+    this.socket = io(process.env.DELIVERY_WS_PUBLIC_URL)
     this.socket.on('connect', () => {
       console.log('connected to socket.io server')
 
       this.socket.on('partial', (msg) => {
         if (this.currentSession && this.currentChannel) {
-          this.currentSession.resetPartialText(this.currentChannel)
-          this.currentSession.addPartialText(this.currentChannel, msg)
+          this.currentSession.resetPartialText(this.currentChannel.name)
+          this.currentSession.addPartialText(this.currentChannel.name, msg)
         }
       })
 
       this.socket.on('final', (final) => {
-        if (this.currentSession && this.currentChannel) {
-          this.currentSession.addText(this.currentChannel, final.text)
+        if (this.currentSession && this.currentChannel.name) {
+          this.currentSession.resetPartialText(this.currentChannel.name)
+          this.currentSession.addFinal(this.currentChannel.name, final)
         }
       })
 
@@ -58,15 +47,103 @@ export default class SessionController {
         appState.classList.add('app-state-ok')
       })
     })
-    this.lastChannelId = 0
+  }
+
+  listenInput(isActive) {
+    const wait = 200
+    let timer;
+    const inputId = isActive ? 'session-list-started-search' : 'session-list-stopped-search'
+    const inputElement = document.getElementById(inputId)
+
+    inputElement.addEventListener("keyup", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        this.loadSessions(isActive, inputElement.value)
+      }, wait)
+    })
+  }
+
+  async fetchSessions (isActive, searchName, limit, offset) {
+    var filters = []
+    if (isActive) {
+      filters.push(`isActive=yes`)
+    }
+    else {
+      filters.push(`isActive=no`)
+    }
+    if (searchName) {
+      filters.push(`searchName=${searchName}`)
+    }
+    if (limit) {
+      filters.push(`limit=${limit}`)
+    }
+    if (offset) {
+      filters.push(`offset=${offset}`)
+    }
+
+    var appendFilter = ''
+    if (filters.length > 0) {
+      appendFilter = '?' + filters.join('&')
+    }
+
+    const response = await fetch(`${process.env.SESSION_API_PUBLIC_URL}/v1/sessions${appendFilter}`, {
+      headers: {
+        'Accept': 'application/json'
+      }
+    })
+    const {sessions, totalItems} = await response.json()
+    this.removeSessions(isActive)
+    for (const session of sessions) {
+      this.addSession({
+        id: session.id,
+        status: session.status,
+        name: session.name,
+        start: session.start_time,
+        end: session.end_time,
+        channels: session.channels.map(channel => {
+          return { "name": channel.name, "languages": channel.languages, "id": channel.transcriber_id }
+        })
+      })
+    }
+    return totalItems
+  }
+
+  loadSessions (isActive, searchName) {
+    const pageSize = 10
+    this.fetchSessions(isActive, searchName, pageSize, 0).then(totalItems => {
+      const tuiId = isActive == 'active' ? 'tui-pagination-container-started' : 'tui-pagination-container-stopped'
+      const pagination = new Pagination(tuiId, {
+        usageStatistics: false,
+        totalItems: totalItems,
+        itemsPerPage: pageSize,
+        visiblePages: 3,
+        centerAlign: true
+      })
+
+      pagination.on('afterMove', (event) => {
+        const currentPage = event.page
+        this.fetchSessions(isActive, searchName, pageSize, (currentPage-1) * pageSize)
+      })
+    })
+  }
+
+  removeSessions (isActive) {
+    for (const sessionId in this.sessionDict) {
+      if (isActive && this.sessionDict[sessionId].status == 'active' || !isActive && this.sessionDict[sessionId].status != 'active') {
+        this.sessionDict[sessionId].removeSessionFromList()
+        delete this.sessionDict[sessionId]
+      }
+    }
   }
 
   addSession ({ id, status, name, start, end, channels }) {
-    this.sessionDict[id] = new Session({
+    let session = new Session({
       id, status, name, start, end, channels,
       onSelected: this.onSelectSession.bind(this),
       onSelectedChannel: this.onSelectChannel.bind(this)
     })
+    this.sessionDict[id] = session
+    return session
   }
 
   onSelectSession (sessionId) {
@@ -75,53 +152,52 @@ export default class SessionController {
         session.unSelect()
       }
       else {
+        if (this.currentSession) {
+          this.lastSessionActive = this.currentSession.status == 'active'
+        }
         this.currentSession = session
       }
     }
   }
 
-  onSelectChannel (sessionId, channelName, channelId) {
-    if (this.lastChannelId) {
-      this.socket.emit('leave_room', this.lastChannelId)
-    }
-    this.socket.emit('join_room', channelId)
-    this.lastChannelId = channelId
-    this.currentChannel = channelName
+  onSelectChannel (sessionId, channel, sessionActive) {
+    console.log(`Session ${sessionId} channel ${channel.id} selected`)
     this.preFillChannel(sessionId)
-    console.log(`Session ${sessionId} channel ${channelId} selected`)
+
+    if (this.currentChannel && this.lastSessionActive) {
+      this.socket.emit('leave_room', this.currentChannel.id)
+    }
+
+    this.currentChannel = channel
+    if (sessionActive) {
+      this.socket.emit('join_room', this.currentChannel.id)
+    }
+
+    this.configureExports(sessionId, this.currentChannel.id)
   }
 
   preFillChannel (sessionId) {
-    fetch(`http://localhost:8000/v1/sessions/${sessionId}`, {
+    fetch(`${process.env.SESSION_API_PUBLIC_URL}/v1/sessions/${sessionId}`, {
       headers: {
           'Accept': 'application/json'
       }})
     .then(response => response.json())
     .then(session => {
       for (const channel of session.channels) {
-        if (channel.name != this.currentChannel || !channel.closed_captions) {
+        if (channel.name != this.currentChannel.name || !channel.closed_captions) {
           continue
         }
         for (const closed_caption of channel.closed_captions) {
-          this.currentSession.addText(this.currentChannel, closed_caption.text)
+          this.currentSession.addFinal(this.currentChannel.name, closed_caption)
         }
       }
     })
   }
 
-  exportTxt () {
-    console.log('Export TXT')
-  }
-
-  exportDoc () {
-    console.log('Export DOC')
-  }
-
-  exportVtt () {
-    console.log('Export VTT')
-  }
-
-  exportSrt () {
-    console.log('Export SRT')
+  configureExports (sessionId, channelId) {
+    for (const type of ['txt', 'doc', 'vtt', 'srt']) {
+      const url = `${process.env.DELIVERY_PUBLIC_URL}/export/${type}?sessionId=${sessionId}&transcriberId=${channelId}`
+      document.getElementById(`export-${type}`).href = url
+    }
   }
 }

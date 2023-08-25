@@ -13,6 +13,21 @@
             }
         }
     },
+    "SessionPaginationAnswer": {
+        "type": "object",
+        "properties": {
+            "sessions": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/components/schemas/SessionAnswer"
+                }
+            },
+            "totalItems": {
+                "type": "integer",
+                "description": "Total number of sessions matching the filters"
+            }
+        }
+    },
     "SessionAnswer": {
         "type": "object",
         "properties": {

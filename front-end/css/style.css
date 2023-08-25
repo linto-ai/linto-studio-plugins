@@ -1,5 +1,5 @@
-@import url('scroller.css');
-@import url('service.css');
+@import url('./scroller.css');
+@import url('./service.css');
 
 :root {
     --highlight-color: #9b4dca;

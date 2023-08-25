@@ -39,8 +39,6 @@
     background-color: #04b604;
 }
 
-
-
 #reader {
     width: 800px;
     display: flex;
@@ -70,6 +68,25 @@
 #reader-content {
     overflow: auto;
     flex: 1;
+}
+
+#reader-content-partial {
+    margin-top: 20px;
+}
+
+.reader-content-final {
+    margin-top: 20px;
+}
+
+.reader-content-final .reader-content-timestamp {
+    position: relative;
+    border-right: 1px solid lightgray;
+    min-height: 50px;
+}
+
+.reader-content-final .reader-content-timestamp .timestamp-end {
+    position: absolute;
+    bottom: 0;
 }
 
 .app-state-ok {

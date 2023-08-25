@@ -36,6 +36,14 @@ export class Scroller {
     this.resetPartial()
     this.resetText()
   }
+
+  hide () {
+    document.getElementById('transcription').style.display = 'none'
+  }
+
+  show () {
+    document.getElementById('transcription').style.display = 'block'
+  }
 }
 
 const scroller = new Scroller()

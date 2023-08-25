@@ -1,6 +1,7 @@
 const debug = require('debug')(`delivery:webserver`)
 const { Component } = require("live-srt-lib")
 const path = require('path')
+const cors = require('cors');
 const express = require('express')
 const session = require('express-session');
 const bodyParser = require('body-parser')
@@ -18,6 +19,7 @@ class WebServer extends Component {
             extended: false
         }))
         this.express.use(cookieParser())
+        this.express.use(cors());
         const sessionMiddleware = session({
             secret: "supersecret",
             resave: false,

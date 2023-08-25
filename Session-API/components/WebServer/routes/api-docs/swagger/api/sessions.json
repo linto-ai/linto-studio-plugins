@@ -5,6 +5,35 @@
           "sessions"
         ],
         "summary": "Get all sessions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "description": "Maximum number of sessions in the answer",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "description": "Offset from the start the number of sessions",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "searchName",
+            "description": "Name of the session to search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "The list of sessions",
@@ -13,7 +42,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/SessionAnswer"
+                    "$ref": "#/components/schemas/SessionPaginationAnswer"
                   }
                 }
               }

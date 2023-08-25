@@ -13,7 +13,7 @@ class IoHandler extends Component {
         // TODO: cors should be updated to be configurable with an envvar
         this.io = socketIO(this.app.components["WebServer"].httpServer, {
             cors: {
-              origin: "http://localhost:8003",
+              origin: process.env.FRONT_END_PUBLIC_URL,
               methods: ["GET", "POST"]
             }
         })
@@ -65,11 +65,12 @@ class IoHandler extends Component {
 
         if (!this.rooms.hasOwnProperty(roomId)) {
             this.app.components['BrokerClient'].emit('leave_room', roomId)
+            return
         }
 
         this.rooms[roomId].delete(socket.id)
         if (this.rooms[roomId].size == 0) {
-            delete this.rooms.room
+            delete this.rooms[roomId]
             this.app.components['BrokerClient'].emit('leave_room', roomId)
         }
     }

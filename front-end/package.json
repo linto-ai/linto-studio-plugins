@@ -1,0 +1,20 @@
+{
+  "name": "front-end",
+  "version": "1.0.0",
+  "description": "Front end",
+  "scripts": {
+    "start": "node prepare-env.js & npx parcel serve index.html --log-level info",
+    "build": "node prepare-env.js & npx parcel build index.html"
+  },
+  "author": "",
+  "license": "",
+  "devDependencies": {
+    "buffer": "^6.0.3",
+    "parcel": "^2.9.3"
+  },
+  "dependencies": {
+    "milligram": "^1.4.1",
+    "socket.io-client": "^4.7.2",
+    "tui-pagination": "^3.4.1"
+  }
+}

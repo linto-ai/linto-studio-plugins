@@ -1,4 +1,7 @@
 import Session from './session.js'
+import io from 'socket.io-client'
+import Pagination from 'tui-pagination'
+
 export default class SessionController {
   constructor () {
     this.sessionDict = {}
@@ -14,7 +17,7 @@ export default class SessionController {
     this.currentChannel = null
     this.lastSessionActive = false
 
-    this.socket = io("ws://localhost:8001")
+    this.socket = io(process.env.DELIVERY_WS_PUBLIC_URL)
     this.socket.on('connect', () => {
       console.log('connected to socket.io server')
 
@@ -83,7 +86,7 @@ export default class SessionController {
       appendFilter = '?' + filters.join('&')
     }
 
-    const response = await fetch(`http://localhost:8000/v1/sessions${appendFilter}`, {
+    const response = await fetch(`${process.env.SESSION_API_PUBLIC_URL}/v1/sessions${appendFilter}`, {
       headers: {
         'Accept': 'application/json'
       }
@@ -109,7 +112,7 @@ export default class SessionController {
     const pageSize = 10
     this.fetchSessions(isActive, searchName, pageSize, 0).then(totalItems => {
       const tuiId = isActive == 'active' ? 'tui-pagination-container-started' : 'tui-pagination-container-stopped'
-      const pagination = new tui.Pagination(tuiId, {
+      const pagination = new Pagination(tuiId, {
         usageStatistics: false,
         totalItems: totalItems,
         itemsPerPage: pageSize,
@@ -174,7 +177,7 @@ export default class SessionController {
   }
 
   preFillChannel (sessionId) {
-    fetch(`http://localhost:8000/v1/sessions/${sessionId}`, {
+    fetch(`${process.env.SESSION_API_PUBLIC_URL}/v1/sessions/${sessionId}`, {
       headers: {
           'Accept': 'application/json'
       }})
@@ -193,7 +196,7 @@ export default class SessionController {
 
   configureExports (sessionId, channelId) {
     for (const type of ['txt', 'doc', 'vtt', 'srt']) {
-      const url = `http://localhost:8001/export/${type}?sessionId=${sessionId}&transcriberId=${channelId}`
+      const url = `${process.env.DELIVERY_PUBLIC_URL}/export/${type}?sessionId=${sessionId}&transcriberId=${channelId}`
       document.getElementById(`export-${type}`).href = url
     }
   }

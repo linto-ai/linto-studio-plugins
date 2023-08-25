@@ -5,11 +5,9 @@
     <head>
         <meta charset="utf-8" />
         <title>Live transcriber</title>
-        <link href="css/milligram 1.4.1/milligram.min.css" rel="stylesheet" />
-        <link rel="stylesheet" type="text/css" media="screen" href="css/tui-pagination.css" />
+        <link rel="stylesheet" type="text/css" media="screen" href="node_modules/milligram/dist/milligram.min.css" />
+        <link rel="stylesheet" type="text/css" media="screen" href="node_modules/tui-pagination/dist/tui-pagination.min.css" />
         <link rel="stylesheet" type="text/css" media="screen" href="css/style.css" />
-        <script src="src/socket.io-4.5.4.min.js"></script>
-        <script src="src/tui-pagination.js"></script>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
         <meta http-equiv="Pragma" content="no-cache"/>
@@ -32,7 +30,7 @@
                         <select id="channel-selector">
                         </select>
                     </div>
-                    <button class="button" id="clipboard-button"><img src="/static/clipboard-fill.svg"/><span>Copy content</span></button>
+                    <button class="button" id="clipboard-button"><img src="static/clipboard-fill.svg"/><span>Copy content</span></button>
                     <button class="button" id="export-button">
                         Export
                         <div class="dropdown" id="export-menu">
@@ -73,14 +71,6 @@
             </article>
         </section>
 
-
-        <script type="module">
-            import SessionController from './src/sessionController.js';
-            import reader from './src/reader.js'
-            import scroller from './src/scroller.js'
-            window.addEventListener('load', (event) => {
-                const sessionController = new SessionController()
-            });
-        </script>
+        <script type="module" src="./index.js"></script>
     </body>
 </html>

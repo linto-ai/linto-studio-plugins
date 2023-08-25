@@ -13,7 +13,7 @@ class IoHandler extends Component {
         // TODO: cors should be updated to be configurable with an envvar
         this.io = socketIO(this.app.components["WebServer"].httpServer, {
             cors: {
-              origin: "http://localhost:8003",
+              origin: process.env.FRONT_END_PUBLIC_URL,
               methods: ["GET", "POST"]
             }
         })

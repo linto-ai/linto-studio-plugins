@@ -34,8 +34,7 @@ module.exports = (webserver) => {
 
             debug(`Export ${type} file for sessionId: ${sessionId} transcriberId: ${transcriberId}`)
 
-            const sessionApiUrl = `${process.env.SESSION_API_HOST}:${process.env.SESSION_API_WEBSERVER_HTTP_PORT}`
-            const url = `${sessionApiUrl}/v1/sessions/${sessionId}`
+            const url = `${process.env.SESSION_API_PUBLIC_URL}/v1/sessions/${sessionId}`
 
             axios({
                 method: 'GET',

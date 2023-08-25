@@ -1,0 +1,14 @@
+{
+  "name": "front-end",
+  "version": "1.0.0",
+  "description": "- Display current sessions - Join session     - Manage session         - See session stream endpoints / WS endpoints         - Session status         - Start transcription         - Stop transcription     - Consume session         - Display live closed captions using WS connexion",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "parcel-bundler": "^1.12.5"
+  }
+}

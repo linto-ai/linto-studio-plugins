@@ -2,8 +2,11 @@ class Reader {
   constructor (text = '') {
     document.getElementById('reader-content-finals').innerText = text
     document.getElementById('clipboard-button').addEventListener('click', (e) => { this.copy() })
-    document.getElementById('export-button').addEventListener('click', (e) => {
-      this.toggleExportMenu()
+    document.getElementById('export-button').addEventListener('mouseover', (e) => {
+      this.showExportMenu()
+    })
+    document.getElementById('export-button').addEventListener('mouseout', (e) => {
+      this.hideExportMenu()
     })
     this.resetCopyButton()
   }
@@ -63,14 +66,6 @@ class Reader {
 
   hideExportMenu () {
     document.getElementById('export-menu').removeAttribute('show')
-  }
-
-  toggleExportMenu () {
-    if (document.getElementById('export-menu').hasAttribute('show')) {
-      this.hideExportMenu()
-    } else {
-      this.showExportMenu()
-    }
   }
 }
 

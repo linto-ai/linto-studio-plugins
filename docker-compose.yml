@@ -1,0 +1,121 @@
+services:
+  #---------- optional services
+  # Convenient rapid mosquitto and posgres startup configuration
+  # Obviously you will need to configure it depending on your need
+  broker:
+    image: eclipse-mosquitto:latest
+    expose:
+      - "${BROKER_PORT}"
+    ports:
+      - "${BROKER_PORT}:${BROKER_PORT}"
+    restart: always
+    command: mosquitto -c /mosquitto-no-auth.conf
+
+  database:
+    image: postgres:latest
+    expose:
+      - "${DB_PORT}"
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
+    command: -p ${DB_PORT}
+    restart: always
+  #----------
+
+  migration:
+    build:
+      context: .
+      dockerfile: migration/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - DB_HOST=database
+      - NODE_ENV=production
+    depends_on:
+      - database
+
+  delivery:
+    build:
+      context: .
+      dockerfile: Delivery/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=broker
+      - DEBUG=delivery:*
+    ports:
+      - "${DELIVERY_WEBSERVER_HTTP_PORT}:${DELIVERY_WEBSERVER_HTTP_PORT}"
+    depends_on:
+      - broker
+    restart: always
+
+  transcriber:
+    build:
+      context: .
+      dockerfile: Transcriber/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=localhost
+      - DEBUG=transcriber:*
+    depends_on:
+      - broker
+    restart: always
+    deploy:
+      replicas: 3
+    network_mode: host
+
+  sessionapi:
+    build:
+      context: .
+      dockerfile: Session-API/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=broker
+      - DB_HOST=database
+      - DEBUG=session-api:*
+    expose:
+      - "${SESSION_API_WEBSERVER_HTTP_PORT}"
+    ports:
+      - "${SESSION_API_WEBSERVER_HTTP_PORT}:${SESSION_API_WEBSERVER_HTTP_PORT}"
+    depends_on:
+      broker:
+        condition: service_started
+      migration:
+        condition: service_completed_successfully
+    restart: always
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Scheduler/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=broker
+      - DB_HOST=database
+      - DEBUG=scheduler:*
+    depends_on:
+      broker:
+        condition: service_started
+      migration:
+        condition: service_completed_successfully
+    restart: always
+
+  frontend:
+    build:
+      context: .
+      dockerfile: front-end/Dockerfile
+    ports:
+      - "${FRONT_END_PORT}:${FRONT_END_PORT}"
+    env_file:
+      - .envdefault
+      - .env
+    restart: always

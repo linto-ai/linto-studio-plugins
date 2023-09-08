@@ -4,7 +4,8 @@
   "description": "Front end",
   "scripts": {
     "start": "node prepare-env.js & npx parcel serve index.html --log-level info",
-    "build": "node prepare-env.js & npx parcel build index.html"
+    "build-with-env": "node prepare-env.js & npx parcel build index.html",
+    "build": "npx parcel build index.html"
   },
   "author": "",
   "license": "",

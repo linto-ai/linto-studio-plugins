@@ -10,6 +10,7 @@
   "email": "damien.laine@gmail.com",
   "license": "ISC",
   "dependencies": {
+    "debug": "^4.3.4",
     "dotenv": "^16.1.4",
     "eventemitter3": "^5.0.1",
     "mqtt": "^4.3.7",

@@ -1,5 +1,5 @@
 const debug = require('debug')('session-api:router:api:transcriber_profiles')
-const { Model, Op } = require("live-srt-lib")
+const { Model } = require("live-srt-lib")
 const { v4: uuidv4 } = require('uuid')
 
 
@@ -72,10 +72,10 @@ module.exports = (webserver) => {
                 where.status = 'active'
             }
             else if (req.query.isActive == 'no') {
-                where.status = {[Op.not]: 'active'}
+                where.status = {[Model.Op.not]: 'active'}
             }
             if (searchName) {
-                where.name = {[Op.startsWith]: searchName}
+                where.name = {[Model.Op.startsWith]: searchName}
             }
 
             Model.Session.findAndCountAll({

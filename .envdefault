@@ -53,7 +53,9 @@ BROKER_PROTOCOL=mqtt
 ##### Delivery #####
 DELIVERY_PUBLIC_URL=http://localhost:8001
 DELIVERY_WS_PUBLIC_URL=ws://localhost:8001
+DELIVERY_SESSION_URL=http://localhost:8000
 
 
 ##### Front end #####
 FRONT_END_PUBLIC_URL=http://localhost:1234
+FRONT_END_PORT=8000

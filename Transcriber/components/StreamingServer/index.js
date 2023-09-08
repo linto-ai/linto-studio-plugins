@@ -50,6 +50,7 @@ class StreamingServer extends Component {
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.state = StreamingServer.states.CLOSED;
     this.streamURI = null;
+    this.error_repetition = 0
     if (process.env.STREAMING_PASSPHRASE === "true") {
       this.passphrase = generatePassphrase();
     } else if (process.env.STREAMING_PASSPHRASE === "false") {
@@ -60,10 +61,18 @@ class StreamingServer extends Component {
       }
       this.passphrase = process.env.STREAMING_PASSPHRASE;
     }
-    this.init().then(async () => { const port = await findFreeUDPPortInRange(); this.port = port; this.start(); })
+    this.init().then(
+      setTimeout(
+        async () => { this.start(); },
+        Math.floor(Math.random() * 2001)
+      )
+    )
   }
 
   async start() {
+    const port = await findFreeUDPPortInRange();
+    this.port = port;
+
     const { READY, ERROR, STREAMING, CLOSED } = this.constructor.states;
     let transcodePipelineString = `! queue
     ! decodebin
@@ -115,13 +124,27 @@ class StreamingServer extends Component {
           case 'state-changed':
             if (msg._src_element_name === 'sink') {
               // Here we might do something when the appsink state changes
-              // like console.log(`Sink state changed from ${msg['old-state']} to ${msg['new-state']}`);
+              //debug(`Sink state changed from ${msg['old-state']} to ${msg['new-state']}`);
             }
             break;
+          case 'error':
+            // When the application receives an error message it should stop playback of the pipeline
+            // and not assume that more data will be played.
+            // It can be caused by a port conflict so we try to reload the pipeline only 5 times
+            if (this.error_repetition > 5) {
+              debug("Too many errors when trying to start GStreamer pipeline")
+              break;
+            }
+            debug("Error when trying to create GStreamer pipeline, retrying...")
+            this.error_repetition += 1
+            this.stop()
+            this.start()
           default:
             break;
         }
       });
+
+
 
       // Find the appsink element in the pipeline
       this.appsink = this.pipeline.findChild('sink');

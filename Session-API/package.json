@@ -4,13 +4,15 @@
   "description": "- Create session     - Params include which transcribers to use, or any using LANGAGE         - Returns RTMP, SRT.. mount points         - Return WS endpoints infos on transcriber - List session - Start transcription - Stop transcription",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node Session-API.js",
+    "create_db": "node create_db.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
+    "debug": "^4.3.4",
     "express": "^4.18.2",
     "express-session": "^1.17.3",
     "json-server": "^0.17.3",

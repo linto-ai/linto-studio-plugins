@@ -1,0 +1,17 @@
+{
+  "name": "migration",
+  "version": "1.0.0",
+  "description": "Migrate database schema",
+  "author": "",
+  "license": "ISC",
+  "scripts": {
+    "migrate": "npx sequelize-cli db:migrate"
+  },
+  "devDependencies": {
+    "sequelize-cli": "^6.6.1"
+  },
+  "dependencies": {
+    "pg": "^8.11.3",
+    "sequelize": "^6.32.1"
+  }
+}

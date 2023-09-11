@@ -75,7 +75,7 @@
                 "type": "string",
                 "description": "The name of the channel"
             },
-            "transcriber_profile_id": {
+            "transcriberProfileId": {
                 "type": "integer",
                 "description": "The id of the channel config"
             }
@@ -96,7 +96,7 @@
                 "type": "array",
                 "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...) and endpoints"
             },
-            "transcriber_profile_id": {
+            "transcriberProfileId": {
                 "type": "integer",
                 "description": "The id of the channel config"
             },

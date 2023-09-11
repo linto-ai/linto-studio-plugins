@@ -1,5 +1,5 @@
 const debug = require('debug')(`scheduler:BrokerClient`);
-const { MqttClient, Component, Model, Op } = require('live-srt-lib')
+const { MqttClient, Component, Model } = require('live-srt-lib')
 const { v4: uuidv4 } = require('uuid');
 
 class BrokerClient extends Component {
@@ -62,7 +62,7 @@ class BrokerClient extends Component {
   async registerActiveSessions() {
     const sessions = await Model.Session.findAll({
       where: {
-        [Op.or]: [
+        [Model.Op.or]: [
           { status: 'active' },
           { status: 'ready' },
         ],
@@ -82,7 +82,7 @@ class BrokerClient extends Component {
     requestBody = JSON.parse(requestBody);
     const channels = requestBody.channels;
     let session;
-    //start Model transaction 
+    //start Model transaction
     const t = await Model.sequelize.transaction();
     let enrolledTranscribers = [];
     try {
@@ -99,15 +99,15 @@ class BrokerClient extends Component {
       let createdChannels = [];
       for (const channel of channels) {
         // Find the transcriber profile for the channel
-        let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriber_profile_id, { transaction: t });
+        let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction: t });
         if (!transcriberProfile) {
-          throw new Error(`Transcriber profile with id ${channel.transcriber_profile_id} not found`);
+          throw new Error(`Transcriber profile with id ${channel.transcriberProfileId} not found`);
         }
         // Enroll a running transcriber into the session channel
         let transcriber = await this.enrollTranscriber(transcriberProfile, session);
         let createdChannel = await Model.Channel.create({
           transcriber_id: transcriber.uniqueId,
-          transcriber_profile_id: transcriberProfile.id,
+          transcriberProfileId: transcriberProfile.id,
           languages: transcriberProfile.config.languages.map(language => language.candidate), //array of BCP47 language tags from transcriber profile
           name: channel.name,
           stream_endpoint: transcriber.stream_endpoint,

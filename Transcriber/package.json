@@ -5,11 +5,12 @@
   "main": "transcriber.js",
   "scripts": {
     "test": "./node_modules/.bin/mocha --require esm tests.js",
-    "start": "node server.js"
+    "start": "node transcriber.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "debug": "^4.3.4",
     "gstreamer-superficial": "^1.7.4",
     "live-srt-lib": "file:../lib",
     "microsoft-cognitiveservices-speech-sdk": "^1.29.0",

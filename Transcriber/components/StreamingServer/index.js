@@ -3,6 +3,17 @@ const gstreamer = require('gstreamer-superficial');
 const { Component, CustomErrors } = require("live-srt-lib");
 const dgram = require('dgram');
 const { exec } = require('child_process');
+const fs = require('fs')
+
+const HEALTCHECK_FILE_PATH = '/usr/src/app/healthcheck.status'
+
+function createHealthcheckFile() {
+  fs.writeFileSync(HEALTCHECK_FILE_PATH, 'ok')
+}
+
+function deleteHealthcheckFile() {
+  fs.unlinkSync(HEALTCHECK_FILE_PATH)
+}
 
 async function findFreeUDPPortInRange() {
   const [startPort, endPort] = process.env.UDP_RANGE.split('-');
@@ -61,6 +72,7 @@ class StreamingServer extends Component {
       }
       this.passphrase = process.env.STREAMING_PASSPHRASE;
     }
+    createHealthcheckFile()
     this.init().then(
       setTimeout(
         async () => { this.start(); },
@@ -131,6 +143,7 @@ class StreamingServer extends Component {
             // When the application receives an error message it should stop playback of the pipeline
             // and not assume that more data will be played.
             // It can be caused by a port conflict so we try to reload the pipeline only 5 times
+            createHealthcheckFile()
             if (this.error_repetition > 5) {
               debug("Too many errors when trying to start GStreamer pipeline")
               break;
@@ -143,8 +156,6 @@ class StreamingServer extends Component {
             break;
         }
       });
-
-
 
       // Find the appsink element in the pipeline
       this.appsink = this.pipeline.findChild('sink');
@@ -164,6 +175,7 @@ class StreamingServer extends Component {
       this.pipeline.play();
       this.appsink.pull(onData);
       this.state = READY;
+      deleteHealthcheckFile()
       debug(`Streaming Server is reachable on ${this.streamURI}`)
     } catch (error) {
       console.log(error)

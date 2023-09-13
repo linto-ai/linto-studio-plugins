@@ -1,10 +1,12 @@
 FROM node:20
 
-WORKDIR /usr/src/app/migration
 COPY migration/ /usr/src/app/migration
-RUN npm install
+RUN cd /usr/src/app/migration && npm install
 
 COPY wait-for-it.sh /
 COPY migration/docker-entrypoint.sh /
+
 ENTRYPOINT ["/docker-entrypoint.sh"]
+WORKDIR /usr/src/app/migration
+
 CMD ["npm run migrate"]

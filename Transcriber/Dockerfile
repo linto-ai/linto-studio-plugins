@@ -20,13 +20,14 @@ COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/
 COPY Transcriber/ /usr/src/app/transcriber
 
-WORKDIR /usr/src/app/lib
-RUN npm install
-
-WORKDIR /usr/src/app/transcriber
-RUN npm install
+RUN cd /usr/src/app/lib && npm install
+RUN cd /usr/src/app/transcriber && npm install
 
 COPY wait-for-it.sh /
 COPY Transcriber/docker-entrypoint.sh /
+
+WORKDIR /usr/src/app/transcriber
+HEALTHCHECK --interval=60s --timeout=3s --start-period=30s CMD ./healthcheck.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
+
 CMD ["npm start"]

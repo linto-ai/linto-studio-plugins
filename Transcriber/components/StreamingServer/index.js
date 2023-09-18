@@ -5,16 +5,6 @@ const dgram = require('dgram');
 const { exec } = require('child_process');
 const fs = require('fs')
 
-const HEALTCHECK_FILE_PATH = '/usr/src/app/healthcheck.status'
-
-function createHealthcheckFile() {
-  fs.writeFileSync(HEALTCHECK_FILE_PATH, 'ok')
-}
-
-function deleteHealthcheckFile() {
-  fs.unlinkSync(HEALTCHECK_FILE_PATH)
-}
-
 async function findFreeUDPPortInRange() {
   const [startPort, endPort] = process.env.UDP_RANGE.split('-');
   for (let port = startPort; port <= endPort; port++) {
@@ -28,12 +18,14 @@ async function findFreeUDPPortInRange() {
 function isUDPPortInUse(port) {
   return new Promise((resolve, reject) => {
     const socket = dgram.createSocket('udp4');
-    socket.bind(port, () => {
-      socket.once('close', () => {
-        resolve(false);
+    setTimeout(() => {
+      socket.bind(port, () => {
+        socket.once('close', () => {
+          resolve(false);
+        });
+        socket.close();
       });
-      socket.close();
-    });
+    }, Math.floor(Math.random() * 4500) + 500); // Wait for a random time between 500 and 5000 milliseconds
     socket.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
         resolve(true);
@@ -72,18 +64,13 @@ class StreamingServer extends Component {
       }
       this.passphrase = process.env.STREAMING_PASSPHRASE;
     }
-    createHealthcheckFile()
-    this.init().then(
-      setTimeout(
-        async () => { this.start(); },
-        Math.floor(Math.random() * 2001)
-      )
-    )
+    this.init().then(async () => {
+      this.port = await findFreeUDPPortInRange();
+      this.start() 
+    })
   }
 
   async start() {
-    const port = await findFreeUDPPortInRange();
-    this.port = port;
 
     const { READY, ERROR, STREAMING, CLOSED } = this.constructor.states;
     let transcodePipelineString = `! queue
@@ -126,10 +113,10 @@ class StreamingServer extends Component {
 
       this.pipeline = new gstreamer.Pipeline(this.pipelineString);
 
-      this.pipeline.pollBus((msg) => {
+      this.pipeline.pollBus(async (msg) => {
         switch (msg.type) {
           case 'eos':
-            this.emit('eos');
+            this.emit('eos'); // ASR/Controller will handle this to flush buffer and stop transcription
             this.stop();
             this.start(); //reloads the pipeline
             break;
@@ -142,15 +129,15 @@ class StreamingServer extends Component {
           case 'error':
             // When the application receives an error message it should stop playback of the pipeline
             // and not assume that more data will be played.
-            // It can be caused by a port conflict so we try to reload the pipeline only 5 times
-            createHealthcheckFile()
+            // It can be caused by a port conflict so we try to reload the pipeline only 5 times to mitigate this port conflict occuring with other transcriber instances
             if (this.error_repetition > 5) {
               debug("Too many errors when trying to start GStreamer pipeline")
-              break;
+              process.exit(1) // exits the process with an error code. This will trigger a restart of the container by docker-compose or orchestrator
             }
-            debug("Error when trying to create GStreamer pipeline, retrying...")
+            debug("Error when trying to create GStreamer streaming server, retrying...")
             this.error_repetition += 1
             this.stop()
+            this.port = await findFreeUDPPortInRange();
             this.start()
           default:
             break;
@@ -175,7 +162,6 @@ class StreamingServer extends Component {
       this.pipeline.play();
       this.appsink.pull(onData);
       this.state = READY;
-      deleteHealthcheckFile()
       debug(`Streaming Server is reachable on ${this.streamURI}`)
     } catch (error) {
       console.log(error)

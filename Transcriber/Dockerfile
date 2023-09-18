@@ -27,7 +27,6 @@ COPY wait-for-it.sh /
 COPY Transcriber/docker-entrypoint.sh /
 
 WORKDIR /usr/src/app/transcriber
-HEALTHCHECK --interval=60s --timeout=3s --start-period=30s CMD ./healthcheck.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
 CMD ["npm start"]

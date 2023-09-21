@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Front end",
   "scripts": {
-    "start": "node prepare-env.js & npx parcel serve index.html --log-level info",
-    "build-with-env": "node prepare-env.js & npx parcel build index.html",
-    "build": "npx parcel build index.html"
+    "start": "node prepare-env.js & npx parcel serve ./*.html --log-level info",
+    "build-with-env": "node prepare-env.js & npx parcel build ./*.html",
+    "build": "npx parcel build ./*.html"
   },
   "author": "",
   "license": "",
@@ -14,6 +14,7 @@
     "parcel": "^2.9.3"
   },
   "dependencies": {
+    "date-fns": "^2.30.0",
     "milligram": "^1.4.1",
     "socket.io-client": "^4.7.2",
     "tui-pagination": "^3.4.1"

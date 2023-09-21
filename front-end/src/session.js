@@ -1,5 +1,6 @@
 import scroller from './scroller.js'
 import reader from './reader.js'
+import { format, parseISO, addSeconds } from 'date-fns'
 
 export default class Session {
   constructor ({ id, status, name, start, end, channels, onSelected, onSelectedChannel }) {
@@ -48,7 +49,10 @@ export default class Session {
 
   select () {
     this.selected = true
-    document.getElementById(`session-${this.id}`).setAttribute('selected', 'true')
+    const sessionElement = document.getElementById(`session-${this.id}`)
+    if (sessionElement) {
+      sessionElement.setAttribute('selected', 'true')
+    }
     this.displayChannels()
 
     if (this.status == 'active') {
@@ -80,6 +84,10 @@ export default class Session {
       listDom = document.querySelector('#session-list-started > ul')
     } else {
       listDom = document.querySelector('#session-list-stopped > ul')
+    }
+
+    if (!listDom) {
+      return
     }
 
     const sessionHtmlElement = document.createElement('li')
@@ -158,7 +166,8 @@ export default class Session {
     this.channelsText[channel].text += final.text
     if (channel === this.currentChannel && this.selected) {
       scroller.appendText(final.text)
-      reader.addFinal(final.text, final.start, final.end)
+      const startTime = format(addSeconds(parseISO(final.astart), final.start), 'HH:mm')
+      reader.addFinal(final.text, startTime, '')
     }
   }
 

@@ -6,10 +6,7 @@ export default class SessionController {
   constructor () {
     this.sessionDict = {}
 
-    this.loadSessions('active', null)
-    this.loadSessions(null, null)
-    this.listenInput(true)
-    this.listenInput(false)
+    this.init()
 
     this.currentSession = null
     this.currentChannelName = null
@@ -47,6 +44,13 @@ export default class SessionController {
         appState.classList.add('app-state-ok')
       })
     })
+  }
+
+  init() {
+    this.loadSessions('active', null)
+    this.loadSessions(null, null)
+    this.listenInput(true)
+    this.listenInput(false)
   }
 
   listenInput(isActive) {
@@ -156,6 +160,10 @@ export default class SessionController {
           this.lastSessionActive = this.currentSession.status == 'active'
         }
         this.currentSession = session
+        const sessionLinkButton = document.getElementById('session-link-button')
+        if (sessionLinkButton) {
+          sessionLinkButton.dataset.sessionid = session.id
+        }
       }
     }
   }

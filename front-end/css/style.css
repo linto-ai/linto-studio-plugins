@@ -2,14 +2,15 @@
 @import url('./service.css');
 
 :root {
-    --highlight-color: #9b4dca;
+    --highlight-color: #FFD617;
     --highlight-color-text: white;
 }
 
 html, body {
     margin: 0;
     padding: 0;
-    background-color: #f5f6f8;
+    background-color: #f5f5f5;
+    font-family: Arial, sans-serif;
 }
 
 body {
@@ -32,6 +33,10 @@ h1 {
     font-variant-caps: small-caps;
 }
 
+a {
+    color: #004494;
+}
+
 button img {
     filter: invert(1);
     position: relative;
@@ -42,6 +47,12 @@ button img {
 
 #export-button {
     position: relative;
+}
+
+.button {
+    background-color: #FFD617;
+    border: .1rem solid #FFD617;
+    color: #004494;
 }
 
 button > .dropdown {
@@ -84,4 +95,20 @@ button > .dropdown[show] {
      
 .flex.row {
     flex-direction: row;
+}
+
+header {
+    width: 1150px;
+    margin: auto;
+}
+
+header .logo {
+    display: inline-block;
+    margin-right: 200px;
+}
+
+header h1 {
+    display: inline-block;
+    font-weight: 700;
+    font-size: 32px;
 }

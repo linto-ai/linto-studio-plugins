@@ -17,20 +17,12 @@
         </header>
 
         <main>
-            <aside class="session-list" id="session-list-started">
-                <label>Running Session</label>
-                <form><input type="text" id="session-list-started-search" /></form>
-                <ul>
-                </ul>
-                <div id="tui-pagination-container-started" class="tui-pagination"></div>
-            </aside>
             <div id="reader">
                 <div id="reader-action">
                     <div class="flex1">
                         <select id="channel-selector">
                         </select>
                     </div>
-                    <button class="button" id="session-link-button"><span>Copy session link</span></button>
                     <button class="button" id="clipboard-button"><span>Copy content</span></button>
                     <button class="button" id="export-button">
                         Export
@@ -50,13 +42,6 @@
                     <div id="reader-content-partial"></div>
                 </article>
             </div>
-            <aside class="session-list"  id="session-list-stopped">
-                <label>Stopped Session</label>
-                <form><input type="text" id="session-list-stopped-search" /></form>
-                <ul>
-                </ul>
-                <div id="tui-pagination-container-stopped" class="tui-pagination"></div>
-            </aside>
         </main>
 
         <section>
@@ -72,6 +57,6 @@
             </article>
         </section>
 
-        <script type="module" src="./index.js"></script>
+        <script type="module" src="./user.js"></script>
     </body>
 </html>

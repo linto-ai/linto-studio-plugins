@@ -9,6 +9,12 @@ class Reader {
       this.hideExportMenu()
     })
     this.resetCopyButton()
+
+    const sessionLinkButton = document.getElementById('session-link-button')
+    if (sessionLinkButton) {
+      sessionLinkButton.addEventListener('click', (e) => { this.copySessionLink() })
+      this.resetCopySessionLinkButton()
+    }
   }
 
   addFinal (text, start, end) {
@@ -38,17 +44,32 @@ class Reader {
     document.getElementById('reader-content-partial').innerText = ''
   }
 
+  copySessionLink () {
+    const sessionLinkButton = document.getElementById('session-link-button')
+    const sessionId = sessionLinkButton.dataset.sessionid
+    const sessionLink = `${window.location.href}user.html?sessionId=${sessionId}`
+    navigator.clipboard.writeText(sessionLink).then(
+      () => {
+        document.querySelector('#session-link-button > span').innerText = 'Copied'
+        setTimeout(this.resetCopySessionLinkButton, 1500)
+        /* clipboard successfully set */
+      },
+      () => {
+        setTimeout(this.resetCopySessionLinkButton, 1500)
+        /* clipboard write failed */
+      }
+    )
+  }
+
   copy () {
     const currentText = document.getElementById('reader-content-finals').textContent + document.getElementById('reader-content-partial').textContent
     navigator.clipboard.writeText(currentText).then(
       () => {
-        document.querySelector('#clipboard-button > img').src = '/static/check-lg.svg'
         document.querySelector('#clipboard-button > span').innerText = 'Copied'
         setTimeout(this.resetCopyButton, 1500)
         /* clipboard successfully set */
       },
       () => {
-        document.querySelector('#clipboard-button > img').src = '/static/x-lg.svg'
         setTimeout(this.resetCopyButton, 1500)
         /* clipboard write failed */
       }
@@ -56,8 +77,11 @@ class Reader {
   }
 
   resetCopyButton () {
-    document.querySelector('#clipboard-button > img').src = '/static/clipboard-fill.svg'
     document.querySelector('#clipboard-button > span').innerText = 'Copy content'
+  }
+
+  resetCopySessionLinkButton () {
+    document.querySelector('#session-link-button > span').innerText = 'Copy session link'
   }
 
   showExportMenu () {

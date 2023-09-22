@@ -47,7 +47,7 @@ class Reader {
   copySessionLink () {
     const sessionLinkButton = document.getElementById('session-link-button')
     const sessionId = sessionLinkButton.dataset.sessionid
-    const sessionLink = `${window.location.href}user.html?sessionId=${sessionId}`
+    const sessionLink = `${window.location.protocol}//${window.location.host}/user.html?sessionId=${sessionId}`
     navigator.clipboard.writeText(sessionLink).then(
       () => {
         document.querySelector('#session-link-button > span').innerText = 'Copied'

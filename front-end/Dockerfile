@@ -1,7 +1,7 @@
 From node:20 as build
 
 RUN apt-get update && \
-    apt-get install -y gettext-base moreutils nginx && \
+    apt-get install -y gettext-base moreutils apache2-utils nginx && \
     rm /etc/nginx/sites-enabled/default
 
 COPY front-end/nginx.conf /etc/nginx/sites-enabled/frontend.nginx.conf

@@ -166,7 +166,7 @@ export default class Session {
     this.channelsText[channel].text += final.text
     if (channel === this.currentChannel && this.selected) {
       scroller.appendText(final.text)
-      const startTime = format(addSeconds(parseISO(final.astart), final.start), 'HH:mm')
+      const startTime = format(addSeconds(parseISO(final.astart), final.start), 'HH:mm:ss')
       reader.addFinal(final.text, startTime, '')
     }
   }

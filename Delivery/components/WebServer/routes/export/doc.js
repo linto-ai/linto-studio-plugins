@@ -23,7 +23,7 @@ const docGenerator = (session, channel) => {
         const parsedStartTime = parseISO(session.start_time)
         const formattedDate = format(parsedStartTime, 'dd MMMM yyyy HH:mm', { locale: en })
         const lines = []
-        for (caption of channel.closed_captions) {
+        for (const caption of channel.closed_captions) {
             const startDatetime = addSeconds(parseISO(caption.astart), caption.start)
             const languageName = new Intl.DisplayNames(['en'], { type: 'language' }).of(caption.lang)
             lines.push({

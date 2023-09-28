@@ -2,7 +2,7 @@
 @import url('./service.css');
 
 :root {
-    --highlight-color: #FFD617;
+    --highlight-color: #004494;
     --highlight-color-text: white;
 }
 
@@ -50,9 +50,9 @@ button img {
 }
 
 .button {
-    background-color: #FFD617;
-    border: .1rem solid #FFD617;
-    color: #004494;
+    background-color: #004494;
+    border: .1rem solid #004494;
+    color: #fff;
 }
 
 button > .dropdown {

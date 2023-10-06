@@ -14,7 +14,7 @@ export default class SessionController {
     this.currentChannel = null
     this.lastSessionActive = false
 
-    this.socket = io(process.env.DELIVERY_WS_PUBLIC_URL)
+    this.socket = io(process.env.DELIVERY_WS_PUBLIC_URL, {path: `${process.env.DELIVERY_WS_BASE_PATH}/socket.io`})
     this.socket.on('connect', () => {
       console.log('connected to socket.io server')
 

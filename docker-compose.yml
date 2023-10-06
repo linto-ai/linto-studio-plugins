@@ -1,7 +1,30 @@
 services:
   #---------- optional services
   # Convenient rapid mosquitto and posgres startup configuration
-  # Obviously you will need to configure it depending on your need
+  # You will need to configure it depending on your need for custom deployments
+  reverse-proxy:
+    image: traefik:v2.10
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${LETS_ENCRYPT_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./letsencrypt:/letsencrypt
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`)"
+
   broker:
     image: eclipse-mosquitto:latest
     expose:
@@ -51,6 +74,14 @@ services:
     depends_on:
       - broker
     restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.delivery.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/delivery`)"
+      - "traefik.http.routers.delivery.middlewares=delivery-strip"
+      - "traefik.http.routers.delivery.entrypoints=websecure"
+      - "traefik.http.routers.delivery.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.delivery-strip.stripprefix.prefixes=/delivery"
+      - "traefik.http.middlewares.delivery-strip.stripprefix.forceslash=false"
 
   transcriber:
     build:
@@ -66,8 +97,16 @@ services:
       - broker
     restart: always
     deploy:
-      replicas: 3
+      replicas: 2
     network_mode: host
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.transcriber.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/transcriber`)"
+      - "traefik.http.routers.transcriber.middlewares=transcriber-strip"
+      - "traefik.http.routers.transcriber.entrypoints=websecure"
+      - "traefik.http.routers.transcriber.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.transcriber-strip.stripprefix.prefixes=/transcriber"
+      - "traefik.http.middlewares.transcriber-strip.stripprefix.forceslash=false"
 
   sessionapi:
     build:
@@ -90,6 +129,14 @@ services:
       migration:
         condition: service_completed_successfully
     restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sessionapi.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/sessionapi`)"
+      - "traefik.http.routers.sessionapi.middlewares=sessionapi-strip"
+      - "traefik.http.routers.sessionapi.entrypoints=websecure"
+      - "traefik.http.routers.sessionapi.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.sessionapi-strip.stripprefix.prefixes=/sessionapi"
+      - "traefik.http.middlewares.sessionapi-strip.stripprefix.forceslash=false"
 
   scheduler:
     build:
@@ -119,3 +166,11 @@ services:
       - .envdefault
       - .env
     restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/frontend`)"
+      - "traefik.http.routers.frontend.middlewares=frontend-strip"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.frontend-strip.stripprefix.prefixes=/frontend"
+      - "traefik.http.middlewares.frontend-strip.stripprefix.forceslash=false"

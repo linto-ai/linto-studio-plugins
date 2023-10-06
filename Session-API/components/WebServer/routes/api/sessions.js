@@ -167,6 +167,7 @@ module.exports = (webserver) => {
                     });
                 }
                 res.json(session);
+                webserver.app.components['BrokerClient'].forwardSessionStart(session.id)
             } catch (err) {
                 next(err);
             }
@@ -198,6 +199,7 @@ module.exports = (webserver) => {
                     });
                 }
                 res.json(session);
+                webserver.app.components['BrokerClient'].forwardSessionStop(session.id)
             } catch (err) {
                 next(err);
             }

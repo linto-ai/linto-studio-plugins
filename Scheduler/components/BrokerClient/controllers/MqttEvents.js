@@ -9,7 +9,7 @@ module.exports = async function () {
         if (action === 'status') {
           const transcriber = JSON.parse(message.toString());
           if (transcriber.online) {
-            this.registerTranscriber(transcriber);
+            await this.registerTranscriber(transcriber);
           } else {
             this.unregisterTranscriber(transcriber);
           }
@@ -34,6 +34,12 @@ module.exports = async function () {
             break;
           case 'ask_deletion':
             await this.deleteSession(sessionId);
+            break;
+          case 'stop':
+            await this.stopSession(sessionId);
+            break;
+          case 'start':
+            await this.startSession(sessionId);
             break;
           default:
             break;

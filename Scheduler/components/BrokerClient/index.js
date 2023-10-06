@@ -139,7 +139,29 @@ class BrokerClient extends Component {
     }
   }
 
-  //TODO: implement unactive session handling to free transcriber and clean this.sessions for unactive sessions
+  async startSession(sessionId) {
+    const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
+    if (sessionIndex !== -1) {
+      const session = this.sessions[sessionIndex];
+      await session.session.reload()
+      for (const channel of session.channels) {
+        await channel.reload()
+      }
+    }
+  }
+
+  async stopSession(sessionId) {
+    const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
+    if (sessionIndex !== -1) {
+      const session = this.sessions[sessionIndex];
+      await session.session.reload()
+      for (const channel of session.channels) {
+        await channel.reload()
+        this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+      }
+    }
+  }
+
   async deleteSession(sessionId) {
     const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
     if (sessionIndex !== -1) {
@@ -180,7 +202,7 @@ class BrokerClient extends Component {
 
 
   // Called on message from broker
-  registerTranscriber(transcriber) {
+  async registerTranscriber(transcriber) {
     const existingTranscriberIndex = this.transcribers.findIndex(t => t.uniqueId === transcriber.uniqueId);
     if (existingTranscriberIndex !== -1) {
       // merge the new transcriber with the existing one
@@ -204,6 +226,21 @@ class BrokerClient extends Component {
     }
     // publishes to broker
     this.publishTranscribers();
+    // update channel associated to this transcriber
+    await this.updateChannel(transcriber)
+  }
+
+  async updateChannel(transcriber) {
+    for (const session of this.sessions) {
+      for (const channel of session.channels) {
+        if (channel.transcriber_id == transcriber.id) {
+          await channel.reload()
+          channel.stream_endpoint = transcriber.stream_endpoint
+          channel.transcriber_status = transcriber.streamingServerStatus
+          await channel.save()
+        }
+      }
+    }
   }
 
   unregisterTranscriber(transcriber) {

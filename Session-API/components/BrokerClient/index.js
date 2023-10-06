@@ -40,6 +40,13 @@ class BrokerClient extends Component {
     this.client.publish(`${this.pub}/${sessionId}/ask_deletion`);
   }
 
+  forwardSessionStop(sessionId) {
+    this.client.publish(`${this.pub}/${sessionId}/stop`);
+  }
+
+  forwardSessionStart(sessionId) {
+    this.client.publish(`${this.pub}/${sessionId}/start`);
+  }
 }
 
 module.exports = app => new BrokerClient(app);

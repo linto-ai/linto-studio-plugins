@@ -16,6 +16,7 @@ services:
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     ports:
       - "80:80"
+      - "443:443"
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -23,7 +24,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.traefik.rule=Host(`${DOMAIN_NAME}`)"
 
   broker:
     image: eclipse-mosquitto:latest
@@ -99,14 +100,6 @@ services:
     deploy:
       replicas: 2
     network_mode: host
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.transcriber.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/transcriber`)"
-      - "traefik.http.routers.transcriber.middlewares=transcriber-strip"
-      - "traefik.http.routers.transcriber.entrypoints=websecure"
-      - "traefik.http.routers.transcriber.tls.certresolver=letsencrypt"
-      - "traefik.http.middlewares.transcriber-strip.stripprefix.prefixes=/transcriber"
-      - "traefik.http.middlewares.transcriber-strip.stripprefix.forceslash=false"
 
   sessionapi:
     build:
@@ -162,6 +155,8 @@ services:
       dockerfile: front-end/Dockerfile
     ports:
       - "${FRONT_END_PORT}:${FRONT_END_PORT}"
+    expose:
+      - "${FRONT_END_PORT}"
     env_file:
       - .envdefault
       - .env

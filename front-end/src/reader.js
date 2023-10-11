@@ -47,7 +47,21 @@ class Reader {
   copySessionLink () {
     const sessionLinkButton = document.getElementById('session-link-button')
     const sessionId = sessionLinkButton.dataset.sessionid
-    const sessionLink = `${window.location.protocol}//${window.location.host}/user.html?sessionId=${sessionId}`
+
+    if (!sessionId) {
+      alert("Please select a session before copying the link.")
+      return
+    }
+
+    const userPath = window.location.href.substring(0, window.location.href.lastIndexOf('/'))
+    const sessionLink = `${userPath}/user.html?sessionId=${sessionId}`
+
+    console.log(`Generated link to session: ${sessionLink}`)
+    if (!window.isSecureContext) {
+      alert("Can't copy to clipboard in an unsecure context, please use HTTPS.")
+      return
+    }
+
     navigator.clipboard.writeText(sessionLink).then(
       () => {
         document.querySelector('#session-link-button > span').innerText = 'Copied'

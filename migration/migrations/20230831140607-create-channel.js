@@ -32,6 +32,7 @@ module.exports = {
       sessionId: {
         type: Sequelize.UUID,
         allowNull: true,
+        onDelete: 'CASCADE',
         references: {
             model: 'sessions',
             key: 'id',

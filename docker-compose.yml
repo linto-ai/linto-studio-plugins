@@ -98,7 +98,7 @@ services:
       - broker
     restart: always
     deploy:
-      replicas: 2
+      replicas: ${TRANSCRIBER_REPLICAS}
     network_mode: host
 
   sessionapi:

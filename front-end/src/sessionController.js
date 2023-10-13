@@ -14,8 +14,18 @@ export default class SessionController {
     this.currentChannel = null
     this.lastSessionActive = false
 
+    const socketioUrl = process.env.DELIVERY_WS_PUBLIC_URL
     const socketioBasePath = process.env.DELIVERY_WS_BASE_PATH || ''
-    this.socket = io(process.env.DELIVERY_WS_PUBLIC_URL, {path: `${socketioBasePath}/socket.io`})
+
+    const checkUrl = new URL(socketioUrl)
+    if (!checkUrl.protocol.startsWith('ws')) {
+      console.error(`socketio url should start with ws or wss. Current: ${socketioUrl}`)
+    }
+    if (checkUrl.pathname != '/') {
+      console.error(`socketio url should not have a path (it will be a socketio namespace). Current: ${socketioUrl}`)
+    }
+
+    this.socket = io(socketioUrl, {path: `${socketioBasePath}/socket.io`})
     this.socket.on('connect', () => {
       console.log('connected to socket.io server')
 
@@ -179,6 +189,7 @@ export default class SessionController {
 
     this.currentChannel = channel
     if (sessionActive) {
+      console.log(`Joining room ${this.currentChannel.id}`)
       this.socket.emit('join_room', this.currentChannel.id)
     }
 

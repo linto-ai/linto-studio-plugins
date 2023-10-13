@@ -243,9 +243,22 @@ class BrokerClient extends Component {
     }
   }
 
-  unregisterTranscriber(transcriber) {
+  async unregisterTranscriber(transcriber) {
     //remove transcriber from list of transcribers, using transcriber.uniqueId
     debug(`unregistering transcriber ${transcriber.uniqueId}`)
+
+    // remove transcriber from channel in db
+    const channel = await Model.Channel.findOne({
+      where: {
+        transcriber_id: transcriber.uniqueId
+      }
+    })
+
+    if (channel) {
+      channel.transcriber_id = null
+      await channel.save()
+    }
+
     this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId);
   }
 

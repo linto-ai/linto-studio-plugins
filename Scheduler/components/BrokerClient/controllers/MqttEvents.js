@@ -11,7 +11,7 @@ module.exports = async function () {
           if (transcriber.online) {
             await this.registerTranscriber(transcriber);
           } else {
-            this.unregisterTranscriber(transcriber);
+            await this.unregisterTranscriber(transcriber);
           }
         }
         if (action === 'final') {

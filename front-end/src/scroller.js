@@ -5,14 +5,14 @@ export class Scroller {
 
   appendText (text) {
     const currentText = document.getElementById('transcription-text').textContent
-    const newText = currentText + text
+    const newText = currentText + ' ' + text
     document.getElementById('transcription-text').textContent = newText
     this.forceScroll(0)
   }
 
   appendPartial (text) {
     const currentText = document.getElementById('transcription-partial').textContent
-    const newText = currentText + text
+    const newText = currentText + ' ' + text
     document.getElementById('transcription-partial').textContent = newText
     this.forceScroll(0)
   }

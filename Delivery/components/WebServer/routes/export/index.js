@@ -27,6 +27,7 @@ module.exports = (webserver) => {
 
             const sessionId = req.query.sessionId
             const transcriberId = req.query.transcriberId
+            const timezone = req.query.timezone
 
             if (!sessionId || !transcriberId) {
                 debug("sessionId or transcriberId empty")
@@ -51,7 +52,7 @@ module.exports = (webserver) => {
                 }
             })
             .then(([session, channel]) => {
-                fileGeneratorMapping[type](session, channel).then(content => {
+                fileGeneratorMapping[type](session, channel, timezone).then(content => {
                     const filename = `${session.name} - ${channel.name} (${channel.languages.join('_')}).${type}`
                     res.set('Content-Disposition', `attachment; filename=${filename}`)
                     res.type(content.type)

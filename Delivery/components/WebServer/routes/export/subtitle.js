@@ -89,11 +89,11 @@ const subtitleGenerator = (type, session, channel) => {
     })
 }
 
-const srtGenerator = (session, channel) => {
+const srtGenerator = (session, channel, _) => {
     return subtitleGenerator('srt', session, channel)
 }
 
-const vttGenerator = (session, channel) => {
+const vttGenerator = (session, channel, _) => {
     return subtitleGenerator('vtt', session, channel)
 }
 

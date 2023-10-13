@@ -15,16 +15,19 @@ const fs = require('fs')
 const path = require('path')
 const { format, parseISO, addSeconds } = require('date-fns')
 const { en } = require('date-fns/locale')
+const { DateTime } = require('luxon')
 
 
-const docGenerator = (session, channel) => {
+const docGenerator = (session, channel, timezone) => {
     const templatePath = path.join(__dirname, 'template-session-transcription.docx')
-    return new Promise((resolve, reject) => {
-        const parsedStartTime = parseISO(session.start_time)
+    return new Promise((resolve, _) => {
+        // we need to use DateTime.now to take into account summer/winter time
+        const offsetMinutes = DateTime.now().setZone(timezone).offset
+        const parsedStartTime = addSeconds(parseISO(session.start_time), offsetMinutes*60)
         const formattedDate = format(parsedStartTime, 'dd MMMM yyyy HH:mm', { locale: en })
         const lines = []
         for (const caption of channel.closed_captions) {
-            const startDatetime = addSeconds(parseISO(caption.astart), caption.start)
+            const startDatetime = addSeconds(parseISO(caption.astart), caption.start + offsetMinutes*60)
             const languageName = new Intl.DisplayNames(['en'], { type: 'language' }).of(caption.lang)
             lines.push({
                 datetime: format(startDatetime, 'HH:mm', { locale: en }),

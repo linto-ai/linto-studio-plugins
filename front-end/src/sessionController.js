@@ -215,8 +215,9 @@ export default class SessionController {
   }
 
   configureExports (sessionId, channelId) {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
     for (const type of ['txt', 'doc', 'vtt', 'srt']) {
-      const url = `${process.env.DELIVERY_PUBLIC_URL}/export/${type}?sessionId=${sessionId}&transcriberId=${channelId}`
+      const url = `${process.env.DELIVERY_PUBLIC_URL}/export/${type}?sessionId=${sessionId}&transcriberId=${channelId}&timezone=${encodeURIComponent(timezone)}`
       document.getElementById(`export-${type}`).href = url
     }
   }

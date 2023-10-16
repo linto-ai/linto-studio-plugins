@@ -158,8 +158,8 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.scheduler.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/scheduler`)"
       - "traefik.http.routers.scheduler.middlewares=scheduler-strip"
-      - "traefik.http.routers.sessionapi.entrypoints=websecure"
-      - "traefik.http.routers.sessionapi.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.scheduler.entrypoints=websecure"
+      - "traefik.http.routers.scheduler.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.scheduler-strip.stripprefix.prefixes=/scheduler"
       - "traefik.http.middlewares.scheduler-strip.stripprefix.forceslash=false"
 

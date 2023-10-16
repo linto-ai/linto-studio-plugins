@@ -144,12 +144,24 @@ services:
       - BROKER_HOST=broker
       - DB_HOST=database
       - DEBUG=scheduler:*
+    ports:
+      - "${SCHEDULER_WEBSERVER_HTTP_PORT}:${SCHEDULER_WEBSERVER_HTTP_PORT}"
+    expose:
+      - "${SCHEDULER_WEBSERVER_HTTP_PORT}"
     depends_on:
       broker:
         condition: service_started
       migration:
         condition: service_completed_successfully
     restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scheduler.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/scheduler`)"
+      - "traefik.http.routers.scheduler.middlewares=scheduler-strip"
+      - "traefik.http.routers.sessionapi.entrypoints=websecure"
+      - "traefik.http.routers.sessionapi.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.scheduler-strip.stripprefix.prefixes=/scheduler"
+      - "traefik.http.middlewares.scheduler-strip.stripprefix.forceslash=false"
 
   frontend:
     build:

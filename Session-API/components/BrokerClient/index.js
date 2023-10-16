@@ -31,22 +31,6 @@ class BrokerClient extends Component {
     });
     this.init(); // binds controllers, those will handle messages
   }
-
-  forwardSessionCreation(requestBody, sessionId) {
-    this.client.publish(`${this.pub}/${sessionId}/ask_creation`, requestBody);
-  }
-
-  forwardSessionDeletion(sessionId) {
-    this.client.publish(`${this.pub}/${sessionId}/ask_deletion`);
-  }
-
-  forwardSessionStop(sessionId) {
-    this.client.publish(`${this.pub}/${sessionId}/stop`);
-  }
-
-  forwardSessionStart(sessionId) {
-    this.client.publish(`${this.pub}/${sessionId}/start`);
-  }
 }
 
 module.exports = app => new BrokerClient(app);

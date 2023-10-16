@@ -77,9 +77,8 @@ class BrokerClient extends Component {
     }
   }
 
-  // Called on creation_ask from broker
-  async createSession(requestBody, sessionId) {
-    requestBody = JSON.parse(requestBody);
+  async createSession(requestBody) {
+    const sessionId = uuidv4()
     const channels = requestBody.channels;
     let session;
     //start Model transaction

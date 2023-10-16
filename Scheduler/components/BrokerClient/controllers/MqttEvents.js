@@ -19,32 +19,6 @@ module.exports = async function () {
           this.saveTranscription(transcription, uniqueId); //save transcription to db using transcriber uniqueId
         }
         break;
-      case 'session':
-        const sessionId = uniqueId;
-        switch (action) {
-          case 'ask_creation':
-            try {
-              await this.createSession(message, sessionId);
-              this.client.publish(`session/in/${sessionId}/ack_creation`, sessionId, 2, false, true);
-            } catch (err) {
-              debug(`Error creating session ${sessionId} : ${err.message}`);
-              const payload = { sessionId, error: err.message };
-              this.client.publish(`session/in/${sessionId}/reject_creation`, payload, 2, false, true);
-            }
-            break;
-          case 'ask_deletion':
-            await this.deleteSession(sessionId);
-            break;
-          case 'stop':
-            await this.stopSession(sessionId);
-            break;
-          case 'start':
-            await this.startSession(sessionId);
-            break;
-          default:
-            break;
-        }
-        break;
       default:
         debug(`Received message for unknown type ${type}`);
     }

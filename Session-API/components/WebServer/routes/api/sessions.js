@@ -1,6 +1,7 @@
 const debug = require('debug')('session-api:router:api:transcriber_profiles')
 const { Model } = require("live-srt-lib")
 const { v4: uuidv4 } = require('uuid')
+const axios = require('axios')
 
 
 module.exports = (webserver) => {
@@ -103,11 +104,9 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             try {
                 try {
-                    // generate session id immediately (outside of model) so we can identify the handled session on MQTT messages or topics
-                    const sessionId = uuidv4();
-                    // scheduler will drive the session creation and model updates
-                    webserver.app.components['BrokerClient'].forwardSessionCreation(req.body, sessionId)
-                    await webserver.waitAckSessionCreation(sessionId);
+                    const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions`
+                    const response = await axios.post(url, req.body)
+                    const sessionId = response.data.sessionId
                     const sessionWithChannels = await Model.Session.findByPk(sessionId, {
                         include: {
                             model: Model.Channel,
@@ -118,7 +117,11 @@ module.exports = (webserver) => {
                       });
                     res.json(sessionWithChannels);
                 } catch (err) {
-                    res.status(500).json({ "error": err.message });
+                    var msg = err.message
+                    if (err.response && err.response.data) {
+                        msg = err.response.data.error
+                    }
+                    res.status(500).json({ "error": msg })
                 }
             } catch (err) {
                 next(err);
@@ -134,8 +137,17 @@ module.exports = (webserver) => {
                 if (!session) {
                     return res.status(404).send('Session not found');
                 }
-                webserver.app.components['BrokerClient'].forwardSessionDeletion(session.id)
-                res.json(session);
+                const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions/${session.id}`
+                try {
+                    await axios.delete(url)
+                    res.json(session)
+                } catch (err) {
+                    var msg = err.message
+                    if (err.response && err.response.data) {
+                        msg = err.response.data.error
+                    }
+                    res.status(500).json({ "error": msg })
+                }
             } catch (err) {
                 next(err);
             }
@@ -167,7 +179,8 @@ module.exports = (webserver) => {
                     });
                 }
                 res.json(session);
-                webserver.app.components['BrokerClient'].forwardSessionStart(session.id)
+                const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions/${session.id}/start`
+                axios.put(url)
             } catch (err) {
                 next(err);
             }
@@ -199,7 +212,8 @@ module.exports = (webserver) => {
                     });
                 }
                 res.json(session);
-                webserver.app.components['BrokerClient'].forwardSessionStop(session.id)
+                const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions/${session.id}/stop`
+                axios.put(url)
             } catch (err) {
                 next(err);
             }

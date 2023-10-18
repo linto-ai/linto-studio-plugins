@@ -12,7 +12,6 @@ export default class SessionController {
     this.currentChannelName = null
     this.currentChannelId = 0
     this.currentChannel = null
-    this.lastSessionActive = false
 
     const socketioUrl = process.env.DELIVERY_WS_PUBLIC_URL
     const socketioBasePath = process.env.DELIVERY_WS_BASE_PATH || ''
@@ -167,9 +166,6 @@ export default class SessionController {
         session.unSelect()
       }
       else {
-        if (this.currentSession) {
-          this.lastSessionActive = this.currentSession.status == 'active'
-        }
         this.currentSession = session
         const sessionLinkButton = document.getElementById('session-link-button')
         if (sessionLinkButton) {
@@ -183,7 +179,8 @@ export default class SessionController {
     console.log(`Session ${sessionId} channel ${channel.id} selected`)
     this.preFillChannel(sessionId)
 
-    if (this.currentChannel && this.lastSessionActive) {
+    if (this.currentChannel) {
+      console.log(`Leaving room ${this.currentChannel.id}`)
       this.socket.emit('leave_room', this.currentChannel.id)
     }
 

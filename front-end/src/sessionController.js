@@ -204,9 +204,7 @@ export default class SessionController {
         if (channel.name != this.currentChannel.name || !channel.closed_captions) {
           continue
         }
-        for (const closed_caption of channel.closed_captions) {
-          this.currentSession.addFinal(this.currentChannel.name, closed_caption)
-        }
+        this.currentSession.addFinalBulk(channel)
       }
     })
   }

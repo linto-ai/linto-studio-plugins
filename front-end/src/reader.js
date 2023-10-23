@@ -17,16 +17,24 @@ class Reader {
     }
   }
 
-  addFinal (text, start, end) {
-    const finals = document.getElementById('reader-content-finals')
-    finals.innerHTML += `
-    <div class="reader-content-final row">
+  finalTemplate(text, start, end) {
+    return `<div class="reader-content-final row">
       <div class="reader-content-timestamp column column-10">
           <div class="timestamp-start">${start}</div>
           <div class="timestamp-end">${end}</div>
       </div>
       <div class="reader-content-text column column-90">${text}</div>
     </div>`
+  }
+
+  addFinal (text, start, end) {
+    const finals = document.getElementById('reader-content-finals')
+    finals.innerHTML += this.finalTemplate(text, start, end)
+  }
+
+  addFinalBulk (f) {
+    const finals = document.getElementById('reader-content-finals')
+    finals.innerHTML = f(this.finalTemplate)
   }
 
   resetPartial () {

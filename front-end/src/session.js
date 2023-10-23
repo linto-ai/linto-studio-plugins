@@ -165,10 +165,24 @@ export default class Session {
   addFinal (channel, final) {
     this.channelsText[channel].text += final.text
     if (channel === this.currentChannel && this.selected) {
-      scroller.appendText(final.text)
       const startTime = format(addSeconds(parseISO(final.astart), final.start), 'HH:mm:ss')
       reader.addFinal(final.text, startTime, '')
     }
+  }
+
+  addFinalBulk (channel) {
+    reader.addFinalBulk(finalTemplate => {
+      let allFinals = []
+      for (const closed_caption of channel.closed_captions) {
+        //this.channelsText[channel].text += closed_caption.text
+        const start = format(addSeconds(parseISO(closed_caption.astart), closed_caption.start), 'HH:mm:ss')
+        const text = closed_caption.text
+        const end = ''
+        allFinals.push(finalTemplate(text, start, end))
+      }
+
+      return allFinals.join('\n')
+    })
   }
 
   addPartialText (channel, partialText) {

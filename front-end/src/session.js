@@ -90,11 +90,22 @@ export default class Session {
       return
     }
 
+    var dateOptions = {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric"
+    }
+
     const sessionHtmlElement = document.createElement('li')
     sessionHtmlElement.classList.add('session-line')
     sessionHtmlElement.id = `session-${this.id}`
     sessionHtmlElement.setAttribute('status', this.status)
     sessionHtmlElement.addEventListener('click', (e) => { self.select() })
+
+    const sessionHtmlElementContent = document.createElement('div')
+    sessionHtmlElementContent.classList.add('session-content')
 
     const sessionHtmlElementStatus = document.createElement('div')
     sessionHtmlElementStatus.classList.add('session-status')
@@ -105,16 +116,20 @@ export default class Session {
 
     const sessionHtmlElementStart = document.createElement('div')
     sessionHtmlElementStart.classList.add('session-start')
-    sessionHtmlElementStart.innerText = this.start
+    const start = new Date(this.start)
+    sessionHtmlElementStart.innerText = start.toLocaleDateString(undefined, dateOptions)
 
     const sessionHtmlElementEnd = document.createElement('div')
     sessionHtmlElementEnd.classList.add('session-end')
-    sessionHtmlElementEnd.innerText = this.end
+    const end = new Date(this.end)
+    sessionHtmlElementEnd.innerText = end.toLocaleDateString(undefined, dateOptions)
 
     sessionHtmlElement.appendChild(sessionHtmlElementStatus)
-    sessionHtmlElement.appendChild(sessionHtmlElementName)
-    sessionHtmlElement.appendChild(sessionHtmlElementStart)
-    sessionHtmlElement.appendChild(sessionHtmlElementEnd)
+    sessionHtmlElementContent.appendChild(sessionHtmlElementName)
+    sessionHtmlElementContent.appendChild(sessionHtmlElementStart)
+    if(this.end)
+      sessionHtmlElementContent.appendChild(sessionHtmlElementEnd)
+    sessionHtmlElement.appendChild(sessionHtmlElementContent)
 
     listDom.prepend(sessionHtmlElement)
   }

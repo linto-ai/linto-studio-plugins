@@ -39,6 +39,14 @@
     background-color: #04b604;
 }
 
+.session-name {
+    font-weight: bold;
+}
+
+.session-start, .session-end {
+    font-size: 1.2rem;
+}
+
 #reader {
     width: 800px;
     display: flex;

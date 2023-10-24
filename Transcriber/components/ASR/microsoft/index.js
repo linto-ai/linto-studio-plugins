@@ -1,4 +1,4 @@
-const { AudioConfig, AudioInputStream, SpeechConfig, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult } = require('microsoft-cognitiveservices-speech-sdk');
+const { AudioConfig, PropertyId, AudioInputStream, SpeechConfig, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
 const debug = require('debug')(`transcriber:microsoft`);
 const stream = require('stream');
 const EventEmitter = require('events');
@@ -91,29 +91,40 @@ class MicrosoftTranscriber extends EventEmitter {
         // Language detection with a custom endpoint isn't supported by the Speech SDK for JavaScript.
         // https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-identification?pivots=programming-language-javascript&tabs=continuous#speech-to-text
         // TODO : /!\ Keep track of this future issue /!\
-        // For now, i explicitly skip using custom endpoint if multiple languages are provided
-        const candidates = this.transcriberProfile.config.languages.map(lang => lang.candidate);
-        const autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig.fromLanguages(candidates);
         const universalEndpoint = `wss://${this.transcriberProfile.config.region}.stt.speech.microsoft.com/speech/universal/v2`;
-        const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), this.transcriberProfile.key);
+        const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), this.transcriberProfile.config.key);
+        // Enable continuous language detection
+        // instead we might use the language detection result from the first chunk of audio
+        // const languageDetectionResult = AutoDetectSourceLanguageResult.fromResult(e.result);
+        // const detectedLanguage = languageDetectionResult.language;
+        // NOTE : Microsoft documentation is imcomplete, see /doc/lid.js that uses only speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true'); with no effect on continuous language detection
+        speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
+        speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
+        // Map candidate languages to AutoDetectSourceLanguageConfig
+        const candidates = this.transcriberProfile.config.languages.map((language) => {
+            // if no custom endpoint provided, uses default
+            // might raise an error if incorrect language code like "en" or "en-EN" instead of "en-US"
+            return language.endpoint ? SourceLanguageConfig.fromLanguage(language.candidate, language.endpoint): SourceLanguageConfig.fromLanguage(language.candidate);
+        });
+
+        const autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig.fromSourceLanguageConfigs(candidates);
+        
         // const speechConfig = SpeechConfig.fromSubscription(this.transcriberProfile.config.key, this.transcriberProfile.config.region);
         const audioConfig = AudioConfig.fromStreamInput(this.pushStream);
         this.recognizer = SpeechRecognizer.FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
         this.recognizer.recognizing = (s, e) => {
-            debug(`Microsoft ASR partial transcription: ${e.result.text}`);
+            debug(`Microsoft ASR partial transcription ${e.result.language}: ${e.result.text}`);
             this.emit('transcribing', e.result.text);
         };
         this.recognizer.recognized = (s, e) => {
             if (e.result.reason === ResultReason.RecognizedSpeech) {
-                debug(`Microsoft ASR final transcription: ${e.result.text}`);
-                const languageDetectionResult = AutoDetectSourceLanguageResult.fromResult(e.result);
-                const detectedLanguage = languageDetectionResult.language;
+                debug(`Microsoft ASR final transcription ${e.result.language}: ${e.result.text}`);
                 const result = {
                     "astart": this.startedAt,
                     "text": e.result.text,
                     "start": e.result.offset / 10000000, // Convert from 100-nanosecond units to seconds
                     "end": (e.result.offset + e.result.duration) / 10000000, // Convert from 100-nanosecond units to seconds
-                    "lang": detectedLanguage,
+                    "lang": e.result.language,
                     "locutor": null //TODO : might use speaker diarization
                 }
                 this.emit('transcribed', result);

@@ -15,13 +15,13 @@ const validateTranscriberProfile = (body) => {
     if (config.type === 'linto' && (!config.languages.every(lang => lang.candidate && lang.endpoint))) {
         return { error: 'Invalid Linto TranscriberProfile endpoint or languages', status: 400 };
     }
-    if (config.type === 'microsoft' && (!config.languages.every(lang => lang.candidate && lang.endpoint) || !config.region || !config.key)) {
+    if (config.type === 'microsoft' && (!config.languages.every(lang => lang.candidate) || !config.region || !config.key)) {
         return { error: 'Invalid Microsoft TranscriberProfile languages, region, or key', status: 400 };
     }
     if (config.languages.some(lang => typeof lang !== 'object')) {
         return { error: 'Invalid TranscriberProfile languages', status: 400 };
     }
-    if (config.languages.some(lang => typeof lang.candidate !== 'string' || typeof lang.endpoint !== 'string')) {
+    if (config.languages.some(lang => typeof lang.candidate !== 'string' || (lang.endpoint !== undefined && typeof lang.endpoint !== 'string'))) {
         return { error: 'Invalid TranscriberProfile language properties', status: 400 };
     }
 };

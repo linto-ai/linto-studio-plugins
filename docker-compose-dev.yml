@@ -9,11 +9,6 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-      - --certificatesresolvers.letsencrypt.acme.email=${LETS_ENCRYPT_EMAIL}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     ports:
       - "80:80"
       - "443:443"
@@ -23,8 +18,6 @@ services:
       - ./letsencrypt:/letsencrypt
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.traefik.rule=Host(`${DOMAIN_NAME}`)"
 
   broker:
     image: eclipse-mosquitto:latest
@@ -75,12 +68,12 @@ services:
     depends_on:
       - broker
     restart: always
+    healthcheck:
+      disable: true
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.delivery.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/delivery`)"
       - "traefik.http.routers.delivery.middlewares=delivery-strip"
-      - "traefik.http.routers.delivery.entrypoints=websecure"
-      - "traefik.http.routers.delivery.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.delivery-strip.stripprefix.prefixes=/delivery"
       - "traefik.http.middlewares.delivery-strip.stripprefix.forceslash=false"
 
@@ -124,12 +117,12 @@ services:
       migration:
         condition: service_completed_successfully
     restart: always
+    healthcheck:
+      disable: true
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.sessionapi.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/sessionapi`)"
       - "traefik.http.routers.sessionapi.middlewares=sessionapi-strip"
-      - "traefik.http.routers.sessionapi.entrypoints=websecure"
-      - "traefik.http.routers.sessionapi.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.sessionapi-strip.stripprefix.prefixes=/sessionapi"
       - "traefik.http.middlewares.sessionapi-strip.stripprefix.forceslash=false"
 
@@ -154,14 +147,8 @@ services:
       migration:
         condition: service_completed_successfully
     restart: always
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.scheduler.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/scheduler`)"
-      - "traefik.http.routers.scheduler.middlewares=scheduler-strip"
-      - "traefik.http.routers.scheduler.entrypoints=websecure"
-      - "traefik.http.routers.scheduler.tls.certresolver=letsencrypt"
-      - "traefik.http.middlewares.scheduler-strip.stripprefix.prefixes=/scheduler"
-      - "traefik.http.middlewares.scheduler-strip.stripprefix.forceslash=false"
+    healthcheck:
+      disable: true
 
   frontend:
     build:
@@ -175,11 +162,11 @@ services:
       - .envdefault
       - .env
     restart: always
+    healthcheck:
+      disable: true
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/frontend`)"
       - "traefik.http.routers.frontend.middlewares=frontend-strip"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.frontend-strip.stripprefix.prefixes=/frontend"
       - "traefik.http.middlewares.frontend-strip.stripprefix.forceslash=false"

@@ -84,11 +84,6 @@
     min-height: 50px;
 }
 
-.reader-content-final .reader-content-timestamp .timestamp-end {
-    position: absolute;
-    bottom: 0;
-}
-
 .app-state-ok {
     background-color:#44c767;
     border-radius:28px;

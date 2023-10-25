@@ -1,6 +1,7 @@
 class Reader {
   constructor (text = '') {
-    document.getElementById('reader-content-finals').innerText = text
+    const finals = document.getElementById('reader-content-finals')
+    finals.innerText = text
     document.getElementById('clipboard-button').addEventListener('click', (e) => { this.copy() })
     document.getElementById('export-button').addEventListener('mouseover', (e) => {
       this.showExportMenu()
@@ -17,24 +18,27 @@ class Reader {
     }
   }
 
-  finalTemplate(text, start, end) {
+  finalTemplate(text, start, lang, locutor) {
     return `<div class="reader-content-final row">
       <div class="reader-content-timestamp column column-10">
-          <div class="timestamp-start">${start}</div>
-          <div class="timestamp-end">${end}</div>
+          <div>${start}</div>
+          <div>${lang}</div>
+          <div>${locutor}</div>
       </div>
       <div class="reader-content-text column column-90">${text}</div>
     </div>`
   }
 
-  addFinal (text, start, end) {
+  addFinal (text, start, lang, locutor) {
     const finals = document.getElementById('reader-content-finals')
-    finals.innerHTML += this.finalTemplate(text, start, end)
+    finals.innerHTML += this.finalTemplate(text, start, lang, locutor)
+    finals.scrollTop = finals.scrollHeight
   }
 
   addFinalBulk (f) {
     const finals = document.getElementById('reader-content-finals')
     finals.innerHTML = f(this.finalTemplate)
+    finals.scrollTop = finals.scrollHeight // scroll to bottom
   }
 
   resetPartial () {

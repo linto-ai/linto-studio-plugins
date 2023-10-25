@@ -166,7 +166,8 @@ export default class Session {
     this.channelsText[channel].text += final.text
     if (channel === this.currentChannel && this.selected) {
       const startTime = format(addSeconds(parseISO(final.astart), final.start), 'HH:mm:ss')
-      reader.addFinal(final.text, startTime, '')
+      const languageName = new Intl.DisplayNames(['en'], { type: 'language' }).of(final.lang)
+      reader.addFinal(final.text, startTime, languageName, final.locutor ?? '')
     }
   }
 
@@ -174,11 +175,10 @@ export default class Session {
     reader.addFinalBulk(finalTemplate => {
       let allFinals = []
       for (const closed_caption of channel.closed_captions) {
-        //this.channelsText[channel].text += closed_caption.text
-        const start = format(addSeconds(parseISO(closed_caption.astart), closed_caption.start), 'HH:mm:ss')
+        const startTime = format(addSeconds(parseISO(closed_caption.astart), closed_caption.start), 'HH:mm:ss')
         const text = closed_caption.text
-        const end = ''
-        allFinals.push(finalTemplate(text, start, end))
+        const languageName = new Intl.DisplayNames(['fr'], { type: 'language' }).of(closed_caption.lang)
+        allFinals.push(finalTemplate(text, startTime, languageName, closed_caption.locutor ?? ''))
       }
 
       return allFinals.join('\n')

@@ -24,8 +24,8 @@ module.exports = {
         type: Sequelize.DATE,
         allowNull: true,
       },
-      errorred_on: {
-        type: Sequelize.DATE,
+      errored_on: {
+        type: Sequelize.ARRAY(Sequelize.JSON),
         allowNull: true,
       },
       createdAt: {

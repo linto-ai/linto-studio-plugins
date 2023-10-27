@@ -21,6 +21,7 @@ class BrokerClient extends Component {
     this.pub = `scheduler`;
     this.subs = [`transcriber/out/+/status`, `session/out/+/#`, `transcriber/out/+/final`]
     this.state = CONNECTING;
+    this.timeoutId = null
     this.emit("connecting");
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
@@ -34,6 +35,112 @@ class BrokerClient extends Component {
       this.state = ERROR;
     });
     this.init(); // binds controllers, those will handle messages
+  }
+
+  async updateChannel(transcriber) {
+    if (!transcriber.uniqueId) {
+      return
+    }
+
+    await Model.Channel.update({
+      stream_endpoint: transcriber.stream_endpoint,
+      transcriber_status: transcriber.streamingServerStatus
+      }, {
+      where: {
+        transcriber_id: transcriber.uniqueId
+      }
+    })
+  }
+
+  async debounceSyncSystem() {
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId)
+    }
+
+    this.timeoutId = setTimeout(() => {
+      this.syncSystem()
+      this.timeoutId = null
+    }, 3000)
+  }
+
+  async syncSystem() {
+    this.detectErroredChannels()
+
+    // update channel in database
+    for (const transcriber of this.transcribers) {
+      await this.updateChannel(transcriber)
+    }
+
+    // try to bind transcriber to errored channel
+    this.bindErroredChannels()
+  }
+
+  async detectErroredChannels() {
+    // stop channel with unexisting transcriber and add an entry in the erroredOn Session
+    const existingTranscriberIds = this.transcribers.map(transcriber => transcriber.uniqueId)
+    const where = {
+      transcriber_id: {
+        [Model.Op.notIn]: existingTranscriberIds
+      },
+      transcriber_status: {
+        [Model.Op.in]: ['ready', 'streaming']
+      }
+    }
+
+    // Update erroredOn
+    const erroredChannels = await Model.Channel.findAll({
+      include: [{
+        model: Model.Session
+      }],
+      where: where
+    })
+    for (const channel of erroredChannels) {
+      const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
+      const newError = {
+        date: new Date(),
+        channel_id: channel.id,
+        error: { code: 1, msg: "Transcriber unavailable" } // currently, there is only 1 error
+      }
+      await channel.session.update({errored_on: [...erroredOn, newError]})
+    }
+
+    // Update the channels
+    await Model.Channel.update({
+      transcriber_id: null,
+      stream_endpoint: null,
+      transcriber_status: 'errored'
+    }, { where: where })
+  }
+
+  async bindErroredChannels() {
+    const erroredChannels = await Model.Channel.findAll({
+      where: {
+        transcriber_status: 'errored'
+      },
+      include: [
+        { model: Model.Session },
+        { model: Model.TranscriberProfile }
+      ]
+    })
+    for (const channel of erroredChannels) {
+      try {
+        const transcriber = await this.enrollTranscriber(channel.transcriber_profile, channel.session)
+        channel.transcriber_id = transcriber.uniqueId
+        channel.stream_endpoint = transcriber.stream_endpoint
+        channel.transcriber_status = transcriber.streamingServerStatus
+        await channel.save()
+
+        // if session is active, start the transcriber
+        if (channel.session.status == 'active') {
+          // let some time to the transcriber to init before starting it
+          setTimeout(() => {
+            this.client.publish(`transcriber/in/${channel.transcriber_id}/start`)
+          }, 3000)
+        }
+      } catch (error) {
+        debug(`No transcriber available for session ${channel.session.id}.`)
+      }
+    }
   }
 
   async saveTranscription(transcription, uniqueId) {
@@ -141,7 +248,6 @@ class BrokerClient extends Component {
       })
       await Model.Channel.update({
         stream_status: 'active',
-        transcriber_status: 'streaming'
       }, {
           where: {
             'sessionId': sessionId
@@ -172,6 +278,7 @@ class BrokerClient extends Component {
           }
       })
       await Model.Channel.update({
+        transcriber_id: null,
         stream_status: 'inactive',
         transcriber_status: 'closed'
       }, {
@@ -251,54 +358,15 @@ class BrokerClient extends Component {
       this.transcribers.push(transcriber);
       debug(`registering transcriber ${transcriber.uniqueId}`);
     }
-    // publishes to broker
-    this.publishTranscribers();
-    // update channel associated to this transcriber
-    await this.updateChannel(transcriber)
-  }
-
-  async updateChannel(transcriber) {
-    if (!transcriber.id) {
-      return
-    }
-
-    await Model.Channel.update({
-      stream_endpoint: transcriber.stream_endpoint,
-      transcriber_status: transcriber.streamingServerStatus
-      }, {
-      where: {
-        transcriber_id: transcriber.id
-      }
-    })
+    this.debounceSyncSystem()
   }
 
   async unregisterTranscriber(transcriber) {
     //remove transcriber from list of transcribers, using transcriber.uniqueId
     debug(`unregistering transcriber ${transcriber.uniqueId}`)
-
-    // remove transcriber from channel in db
-    const channel = await Model.Channel.findOne({
-      where: {
-        transcriber_id: transcriber.uniqueId
-      }
-    })
-
-    if (channel) {
-      channel.transcriber_id = null
-      await channel.save()
-    }
-
-    this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId);
+    this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId)
+    this.debounceSyncSystem()
   }
-
-
-  publishTranscribers() {
-    // publish transcribers to broker as a retained message on topic scheduler/transcribers
-    // this is VERY IMPORTANT as it keeps a state of running transcribers in the broker
-    // broker NEEDS to use persistent storage for retained messages !
-    this.client.publish(`transcribers`, this.transcribers, 2, true, true);
-  }
-
 }
 
 module.exports = app => new BrokerClient(app);

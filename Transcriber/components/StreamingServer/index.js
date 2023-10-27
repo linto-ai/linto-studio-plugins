@@ -135,16 +135,17 @@ class StreamingServer extends Component {
       this.state = INITIALIZED
       debug(`Streaming Server is started on ${this.streamURI}`)
     } catch (error) {
-      console.log(error)
+      console.error(`Error when initializing transcriber: ${error}`)
       this.state = ERROR;
     }
   }
 
   async start() {
-    const { READY, ERROR, STREAMING, CLOSED } = this.constructor.states;
+    const { INITIALIZED, READY, ERROR, STREAMING, CLOSED } = this.constructor.states;
 
-    // if the transcriber is already playing, we do nothing
-    if (this.state == READY) {
+    // if the transcriber is not initialized, we do nothing
+    if (this.state != INITIALIZED) {
+      debug("Trying to start an uninitialized transcriber")
       return
     }
 

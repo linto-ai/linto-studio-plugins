@@ -1,4 +1,4 @@
-From node:20 as build
+FROM node:20 as build
 
 RUN apt-get update && \
     apt-get install -y gettext-base moreutils apache2-utils nginx && \

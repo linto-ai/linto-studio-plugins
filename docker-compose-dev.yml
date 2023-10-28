@@ -76,8 +76,15 @@ services:
       - "traefik.http.routers.delivery.middlewares=delivery-strip"
       - "traefik.http.middlewares.delivery-strip.stripprefix.prefixes=/delivery"
       - "traefik.http.middlewares.delivery-strip.stripprefix.forceslash=false"
+    develop:
+      watch:
+        - action: sync
+          path: Delivery
+          target: /usr/src/app/delivery
+        - action: rebuild
+          path: package.json
 
-  transcriber:
+  transcriber-watched:
     build:
       context: .
       dockerfile: Transcriber/Dockerfile
@@ -85,14 +92,79 @@ services:
       - .envdefault
       - .env
     environment:
-      - BROKER_HOST=localhost
+      - BROKER_HOST=broker
       - DEBUG=transcriber:*
+      - STREAMING_PROXY_PORT=8889
     depends_on:
       - broker
     restart: always
-    deploy:
-      replicas: ${TRANSCRIBER_REPLICAS}
-    network_mode: host
+    ports:
+      - "8889:8889/udp"
+    healthcheck:
+      disable: true
+    develop:
+      watch:
+        - action: sync+restart
+          path: Transcriber
+          target: /usr/src/app/transcriber
+        - action: rebuild
+          path: package.json
+
+  transcriber2:
+    build:
+      context: .
+      dockerfile: Transcriber/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=broker
+      - DEBUG=transcriber:*
+      - STREAMING_PROXY_PORT=8890
+    depends_on:
+      - broker
+    restart: always
+    ports:
+      - "8890:8889/udp"
+    healthcheck:
+      disable: true
+
+  transcriber3:
+    build:
+      context: .
+      dockerfile: Transcriber/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=broker
+      - DEBUG=transcriber:*
+      - STREAMING_PROXY_PORT=8891
+    depends_on:
+      - broker
+    restart: always
+    ports:
+      - "8891:8889/udp"
+    healthcheck:
+      disable: true
+
+
+  transcriber4:
+    build:
+      context: .
+      dockerfile: Transcriber/Dockerfile
+    env_file:
+      - .envdefault
+      - .env
+    environment:
+      - BROKER_HOST=broker
+      - DEBUG=transcriber:*
+      - STREAMING_PROXY_PORT=8892
+    depends_on:
+      - broker
+    restart: always
+    ports:
+      - "8892:8889/udp"
     healthcheck:
       disable: true
 
@@ -125,6 +197,13 @@ services:
       - "traefik.http.routers.sessionapi.middlewares=sessionapi-strip"
       - "traefik.http.middlewares.sessionapi-strip.stripprefix.prefixes=/sessionapi"
       - "traefik.http.middlewares.sessionapi-strip.stripprefix.forceslash=false"
+    develop:
+      watch:
+        - action: sync+restart
+          path: Session-API
+          target: /usr/src/app/sessionapi
+        - action: rebuild
+          path: package.json
 
   scheduler:
     build:
@@ -149,6 +228,13 @@ services:
     restart: always
     healthcheck:
       disable: true
+    develop:
+      watch:
+        - action: sync+restart
+          path: Scheduler
+          target: /usr/src/app/scheduler
+        - action: rebuild
+          path: package.json
 
   frontend:
     build:
@@ -170,3 +256,9 @@ services:
       - "traefik.http.routers.frontend.middlewares=frontend-strip"
       - "traefik.http.middlewares.frontend-strip.stripprefix.prefixes=/frontend"
       - "traefik.http.middlewares.frontend-strip.stripprefix.forceslash=false"
+    develop:
+      watch:
+        - action: sync+restart
+          path: front-end
+          target: /usr/src/app/front-end
+

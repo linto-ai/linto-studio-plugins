@@ -12,14 +12,18 @@ SESSION_API_PUBLIC_URL=http://localhost:8000
 SCHEDULER_WEBSERVER_HTTP_PORT=8002
 DELIVERY_WEBSERVER_HTTP_PORT=8001
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
-MIN_AUDIO_BUFFER=50 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
+MIN_AUDIO_BUFFER=200 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
 BYTES_PER_SAMPLE=2 # 1 for 8-bit, 2 for 16-bit, 4 for 32-bit
 SAMPLE_RATE=16000 # 8000, 16000, 32000, 44100, 48000
 ##### Inbound / Pulled streaming #####
-STREAMING_USE_PROXY=false # true, false
-STREAMING_PROXY_HOST= # Only if STREAMING_USE_PROXY=true
+# transcriber might listen to an UDP port directly (like using network mode host in docker)
+# if transcriber is behind a proxy, use those configs to correctly reach the transcriber container. Also make sure to set UDP_RANGE to a fixed port like 8889-8889 so that the transcriber container is reachable.
+# i.e : using network_mode as host, keep this default values and every transcriber spawned will listen to a random port within the range on the host machine
+# i.e : deploying transcriber behind a proxy, you'll want to fix the UDP port of transcriber to some value (e.g. 8889), set the proxy address as STREAMING_PROXY_HOST (e.g. mystreamingdomain.com) and port accordingly to your needs.
+STREAMING_PROXY_HOST=false # Transcriber host for inbound streaming (false to disable)
+STREAMING_PROXY_PORT=false # Proxy port for inbound streaming (false to disable)
 STREAMING_PROTOCOL=SRT # SRT, RTMP, WEBRTC
-STREAMING_HOST=127.0.0.1 # 0.0.0.0 for all interfaces / listener, or a specific IP address in rendez-vous/caller mode
+STREAMING_HOST=0.0.0.0 # Listening address for transcriber. 0.0.0.0 for all interfaces (listener), you might use a specific IP address for SRT rendez-vous/caller mode
 UDP_RANGE=8889-8999
 STREAMING_PASSPHRASE=true # true, false or a passphrase (at least 10 chars). If true a random passphrase will be generated and published to the broker when registering
 #SRT

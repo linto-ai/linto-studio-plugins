@@ -66,7 +66,7 @@ class StreamingServer extends Component {
     }
     this.init().then(async () => {
       this.port = await findFreeUDPPortInRange();
-      this.start() 
+      this.start()
     })
   }
 
@@ -84,15 +84,16 @@ class StreamingServer extends Component {
     ! queue
     ! appsink name=sink`
     try {
-      this.streamingHost = process.env.STREAMING_HOST;
       this.srtMode = process.env.SRT_MODE
       switch (process.env.STREAMING_PROTOCOL) {
         case "SRT":
-          this.streamURI = `srt://${this.streamingHost}:${this.port}?mode=${this.srtMode}`;
+          this.internalStreamURI = `srt://${process.env.STREAMING_HOST}:${this.port}?mode=${this.srtMode}`;
+          this.streamURI = `srt://${process.env.STREAMING_PROXY_HOST || process.env.STREAMING_HOST}:${process.env.STREAMING_PROXY_PORT || this.port}?mode=${this.srtMode}`;
           if (this.passphrase) {
+            this.internalStreamURI += `&passphrase=${this.passphrase}`;
             this.streamURI += `&passphrase=${this.passphrase}`;
           }
-          this.pipelineString = `srtsrc uri="${this.streamURI}" ${transcodePipelineString}`;
+          this.pipelineString = `srtsrc uri="${this.internalStreamURI}" ${transcodePipelineString}`;
           // change streamURI to get client version of the stream endpoint, if caller is used in pipeline, sets mode to listener, if listener is used in pipeline, sets mode to caller, if mode is rendezvous, keeps mode as rendezvous
           if (this.srtMode === "caller") {
             this.streamURI = this.streamURI.replace("caller", "listener")
@@ -101,9 +102,10 @@ class StreamingServer extends Component {
           }
           break;
         case "RTMP":
+          // TODO: add support for RTMP, WebRTC and maybe others
           this.appName = "live";
           this.streamName = "stream";
-          this.streamURI = `rtmp://${this.streamingHost}:${this.port}/${this.appName}/${this.streamName}`;
+          this.streamURI = `rtmp://${process.env.STREAMING_HOST}:${this.port}/${this.appName}/${this.streamName}`;
           this.pipelineString = `flvmux name=mux ! rtmpsink location=${this.streamURI} ${transcodePipelineString}`;
           break;
         default:

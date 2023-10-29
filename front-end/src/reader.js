@@ -32,13 +32,17 @@ class Reader {
   addFinal (text, start, lang, locutor) {
     const finals = document.getElementById('reader-content-finals')
     finals.innerHTML += this.finalTemplate(text, start, lang, locutor)
-    finals.scrollTop = finals.scrollHeight
+    const readerContent = document.getElementById('reader-content')
+    // scroll to bottom
+    readerContent.scrollTop = readerContent.scrollHeight
   }
 
   addFinalBulk (f) {
     const finals = document.getElementById('reader-content-finals')
     finals.innerHTML = f(this.finalTemplate)
-    finals.scrollTop = finals.scrollHeight // scroll to bottom
+    const readerContent = document.getElementById('reader-content')
+    // scroll to bottom
+    readerContent.scrollTop = readerContent.scrollHeight
   }
 
   resetPartial () {
@@ -49,6 +53,9 @@ class Reader {
     const currentText = document.getElementById('reader-content-partial').textContent
     const newText = currentText + text
     document.getElementById('reader-content-partial').textContent = newText
+    const readerContent = document.getElementById('reader-content')
+    // scroll to bottom
+    readerContent.scrollTop = readerContent.scrollHeight
   }
 
   reset () {

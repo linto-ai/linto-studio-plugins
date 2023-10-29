@@ -64,6 +64,7 @@ class StreamingServer extends Component {
       }
       this.passphrase = process.env.STREAMING_PASSPHRASE;
     }
+    this.streamingHost = process.env.STREAMING_HOST || "0.0.0.0";
     this.init().then(async () => {
       this.port = await findFreeUDPPortInRange();
       this.start()
@@ -87,8 +88,10 @@ class StreamingServer extends Component {
       this.srtMode = process.env.SRT_MODE
       switch (process.env.STREAMING_PROTOCOL) {
         case "SRT":
-          this.internalStreamURI = `srt://${process.env.STREAMING_HOST}:${this.port}?mode=${this.srtMode}`;
-          this.streamURI = `srt://${process.env.STREAMING_PROXY_HOST || process.env.STREAMING_HOST}:${process.env.STREAMING_PROXY_PORT || this.port}?mode=${this.srtMode}`;
+          const streamingProxyHost = process.env.STREAMING_PROXY_HOST === "false" ? this.streamingHost : process.env.STREAMING_PROXY_HOST || this.streamingHost;
+          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? this.port : process.env.STREAMING_PROXY_PORT || this.port;
+          this.streamURI = `srt://${streamingProxyHost}:${streamingProxyPort}?mode=${this.srtMode}`;
+          this.internalStreamURI = `srt://${this.streamingHost}:${this.port}?mode=${this.srtMode}`;
           if (this.passphrase) {
             this.internalStreamURI += `&passphrase=${this.passphrase}`;
             this.streamURI += `&passphrase=${this.passphrase}`;
@@ -102,10 +105,10 @@ class StreamingServer extends Component {
           }
           break;
         case "RTMP":
-          // TODO: add support for RTMP, WebRTC and maybe others
+          // TODO: add support for RTMP, WebRTC and maybe others 
           this.appName = "live";
           this.streamName = "stream";
-          this.streamURI = `rtmp://${process.env.STREAMING_HOST}:${this.port}/${this.appName}/${this.streamName}`;
+          this.streamURI = `rtmp://${this.streamingHost}:${this.port}/${this.appName}/${this.streamName}`;
           this.pipelineString = `flvmux name=mux ! rtmpsink location=${this.streamURI} ${transcodePipelineString}`;
           break;
         default:

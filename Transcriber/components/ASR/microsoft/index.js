@@ -3,6 +3,12 @@ const debug = require('debug')(`transcriber:microsoft`);
 const stream = require('stream');
 const EventEmitter = require('events');
 
+
+//TODO: add support for speaker diarization
+//https://learn.microsoft.com/fr-fr/javascript/api/microsoft-cognitiveservices-speech-sdk/conversationtranscriber?view=azure-node-latest
+//should use ConversationTranscriber instead of SpeechRecognizer
+//but it is not supported in the Speech SDK for JavaScript, or there's a bug, tried with V1.32 (latest), it works well but not with custom endpoints
+
 class MicrosoftTranscriber extends EventEmitter {
     constructor(transcriberProfile = null) {
         super();

@@ -13,7 +13,7 @@
     "debug": "^4.3.4",
     "gstreamer-superficial": "^1.7.4",
     "live-srt-lib": "file:../lib",
-    "microsoft-cognitiveservices-speech-sdk": "^1.32.0",
+    "microsoft-cognitiveservices-speech-sdk": "1.32.0",
     "uuid": "^9.0.0",
     "ws": "^8.13.0"
   },

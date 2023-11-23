@@ -47,7 +47,7 @@ module.exports = {
         allowNull: true,
       },
       transcriber_status: {
-        type: Sequelize.ENUM('ready', 'streaming', 'closed', 'errored'),
+        type: Sequelize.ENUM('ready', 'streaming', 'closed', 'errored', 'initialized'),
         allowNull: true,
       },
       closed_captions: {

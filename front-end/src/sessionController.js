@@ -80,10 +80,10 @@ export default class SessionController {
   async fetchSessions (isActive, searchName, limit, offset) {
     var filters = []
     if (isActive) {
-      filters.push(`isActive=yes`)
+      filters.push(`status=active`)
     }
     else {
-      filters.push(`isActive=no`)
+      filters.push(`status=terminated`)
     }
     if (searchName) {
       filters.push(`searchName=${searchName}`)

@@ -27,8 +27,13 @@ module.exports = (webserver) => {
         requireAuth: false,
         controller: async (req, res, next) => {
             try {
-                await webserver.app.components['BrokerClient'].deleteSession(req.params.id)
-                res.json({'success': true})
+                const error = await webserver.app.components['BrokerClient'].deleteSession(req.params.id)
+                if (error) {
+                    res.status(500).json({ "error": error })
+                }
+                else {
+                    res.json({'success': true})
+                }
             } catch (err) {
                 res.status(500).json({ "error": err.message });
                 debug(err)
@@ -41,12 +46,17 @@ module.exports = (webserver) => {
         requireAuth: false,
         controller: async (req, res, next) => {
             try {
-                await webserver.app.components['BrokerClient'].startSession(req.params.id)
-                res.json({'success': true})
+                const error = await webserver.app.components['BrokerClient'].startSession(req.params.id)
+                if (error) {
+                    res.status(500).json({ "error": error })
+                }
+                else {
+                    res.json({'success': true})
+                }
             } catch (err) {
-                res.status(500).json({ "error": err.message });
+                res.status(500).json({ "error": err.message })
                 debug(err)
-                next(err);
+                next(err)
             }
         }
     }, {
@@ -55,8 +65,13 @@ module.exports = (webserver) => {
         requireAuth: false,
         controller: async (req, res, next) => {
             try {
-                await webserver.app.components['BrokerClient'].stopSession(req.params.id)
-                res.json({'success': true})
+                const error = await webserver.app.components['BrokerClient'].stopSession(req.params.id)
+                if (error) {
+                    res.status(500).json({ "error": error })
+                }
+                else {
+                    res.json({'success': true})
+                }
             } catch (err) {
                 res.status(500).json({ "error": err.message });
                 debug(err)

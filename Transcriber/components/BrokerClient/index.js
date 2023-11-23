@@ -75,16 +75,19 @@ class BrokerClient extends Component {
     this.app.components['ASR'].configure(transcriberProfile)
   }
 
+  async start() {
+    debug(`${this.uniqueId} started from session`)
+    this.app.components['StreamingServer'].start()
+  }
+
   async free() {
     this.bound_session = null;
     this.state = BrokerClient.states.READY;
     debug(`${this.uniqueId} Freed from session`)
+    this.app.components['StreamingServer'].initialize()
     this.client.registerDomainSpecificValues({ bound_session: null })
     this.client.publishStatus();
   }
-
-
-
 }
 
 module.exports = app => new BrokerClient(app);

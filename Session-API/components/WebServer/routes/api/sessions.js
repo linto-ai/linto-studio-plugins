@@ -69,12 +69,12 @@ module.exports = (webserver) => {
             const offset = req.query.offset ?? 0
             const searchName = req.query.searchName
             let where = {}
-            if (req.query.isActive == 'yes') {
-                where.status = 'active'
+
+            const statusList = req.query.status ? req.query.status.split(',') : null
+            if (statusList) {
+                where.status = {[Model.Op.in]: statusList}
             }
-            else if (req.query.isActive == 'no') {
-                where.status = {[Model.Op.not]: 'active'}
-            }
+
             if (searchName) {
                 where.name = {[Model.Op.startsWith]: searchName}
             }
@@ -90,7 +90,6 @@ module.exports = (webserver) => {
                 },
                 where: where
             }).then(results => {
-                    const itemCount = results.count
                     res.json({
                         sessions: results.rows,
                         totalItems: results.count
@@ -158,31 +157,29 @@ module.exports = (webserver) => {
         requireAuth: false,
         controller: async (req, res, next) => {
             try {
-                const session = await Model.Session.findByPk(req.params.id);
+                const sessionId = req.params.id
+                const session = await Model.Session.findByPk(sessionId)
                 if (!session) {
-                    return res.status(404).send('Session not found');
+                    return res.status(404).send('Session not found')
                 }
-                await session.update({
-                    status: 'active',
-                    start_time: new Date()
-                });
-                const channels = await Model.Channel.findAll({
-                    where: {
-                        sessionId: session.id
-                    }
-                });
-                for (let i = 0; i < channels.length; i++) {
-                    const channel = channels[i];
-                    await channel.update({
-                        stream_status: 'active',
-                        transcriber_status: 'streaming'
-                    });
+                if (session.status == 'active') {
+                    res.json(session)
+                    return
                 }
-                res.json(session);
+
                 const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions/${session.id}/start`
-                axios.put(url)
+                try {
+                    await axios.put(url)
+                    res.json(await Model.Session.findByPk(sessionId))
+                } catch (err) {
+                    var msg = err.message
+                    if (err.response && err.response.data) {
+                        msg = err.response.data.error
+                    }
+                    res.status(500).json({ "error": msg })
+                }
             } catch (err) {
-                next(err);
+                next(err)
             }
         }
     }, {
@@ -191,31 +188,29 @@ module.exports = (webserver) => {
         requireAuth: false,
         controller: async (req, res, next) => {
             try {
-                const session = await Model.Session.findByPk(req.params.id);
+                const sessionId = req.params.id
+                const session = await Model.Session.findByPk(sessionId)
                 if (!session) {
-                    return res.status(404).send('Session not found');
+                    return res.status(404).send('Session not found')
                 }
-                await session.update({
-                    status: 'terminated',
-                    end_time: new Date()
-                });
-                const channels = await Model.Channel.findAll({
-                    where: {
-                        sessionId: session.id
-                    }
-                });
-                for (let i = 0; i < channels.length; i++) {
-                    const channel = channels[i];
-                    await channel.update({
-                        stream_status: 'inactive',
-                        transcriber_status: 'closed'
-                    });
+                if (session.status == 'terminated') {
+                    res.json(session)
+                    return
                 }
-                res.json(session);
+
                 const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions/${session.id}/stop`
-                axios.put(url)
+                try {
+                    await axios.put(url)
+                    res.json(await Model.Session.findByPk(sessionId))
+                } catch (err) {
+                    var msg = err.message
+                    if (err.response && err.response.data) {
+                        msg = err.response.data.error
+                    }
+                    res.status(500).json({ "error": msg })
+                }
             } catch (err) {
-                next(err);
+                next(err)
             }
         }
     }];

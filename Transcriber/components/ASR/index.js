@@ -2,6 +2,7 @@ const debug = require('debug')(`transcriber:ASR`);
 const { Component } = require("live-srt-lib");
 const LintoTranscriber = require('./linto');
 const MicrosoftTranscriber = require('./microsoft');
+const ASR_ERROR = require('./error.js')
 
 
 class ASR extends Component {
@@ -16,6 +17,8 @@ class ASR extends Component {
   constructor(app) {
     super(app);
     this.id = this.constructor.name;
+    this.startedAt = null
+    this.startTimestamp = null
     this.setTranscriber(process.env.ASR_PROVIDER);
     this.init(); //attaches event controllers
   }
@@ -52,7 +55,20 @@ class ASR extends Component {
       debug('ready');
       this.state = READY;
     });
-    this.transcriber.on('error', error => { this.state = ERROR });
+    this.transcriber.on('error', error => {
+      const msg = ASR_ERROR[error]
+      const final = {
+          "astart": this.startedAt,
+          "text": msg,
+          "start": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
+          "end": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
+          "lang": 'EN-en',
+          "locutor": process.env.TRANSCRIBER_BOT_NAME
+      }
+      this.emit('final', final)
+      console.error(msg)
+      this.state = ERROR
+    })
     this.transcriber.on('close', (code, reason) => {
       debug(`ASR connexion closed with code ${code}`);
       this.state = CLOSED;
@@ -69,6 +85,8 @@ class ASR extends Component {
 
   async startTranscription() {
     this.transcriber.start();
+    this.startedAt = new Date().toISOString();
+    this.startTimestamp = Math.floor(new Date().getTime() / 1000)
   }
 
   async stopTranscription() {

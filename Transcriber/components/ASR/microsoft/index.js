@@ -10,6 +10,18 @@ const EventEmitter = require('events');
 //but it is not supported in the Speech SDK for JavaScript, or there's a bug, tried with V1.32 (latest), it works well but not with custom endpoints
 
 class MicrosoftTranscriber extends EventEmitter {
+    static ERROR_MAP = {
+        0: 'NO_ERROR',
+        1: 'AUTHENTICATION_FAILURE',
+        2: 'BAD_REQUEST_PARAMETERS',
+        3: 'TOO_MANY_REQUESTS',
+        4: 'CONNECTION_FAILURE',
+        5: 'SERVICE_TIMEOUT',
+        6: 'SERVICE_ERROR',
+        7: 'RUNTIME_ERROR',
+        8: 'FORBIDDEN',
+    }
+
     constructor(transcriberProfile = null) {
         super();
         this.transcriberProfile = transcriberProfile;
@@ -19,8 +31,6 @@ class MicrosoftTranscriber extends EventEmitter {
     }
 
     start() {
-        //UTC date and time in ISO format, e.g. 2020-12-31T23:59:59Z
-        this.startedAt = new Date().toISOString();
         if (this.transcriberProfile) {
             if (this.transcriberProfile.config.languages.length === 1) {
                 this.startMono();
@@ -49,8 +59,9 @@ class MicrosoftTranscriber extends EventEmitter {
         // TODO : mitigate this issue and verify if it is still relevant
         this.recognizer.canceled = (s, e) => {
             debug(`Microsoft ASR canceled: ${e.errorDetails}`);
+            const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode]
+            this.emit('error', error)
             this.stop()
-            this.emit('error', e.reason);
         };
         this.recognizer.sessionStopped = (s, e) => {
             debug(`Microsoft ASR session stopped: ${e.reason}`);

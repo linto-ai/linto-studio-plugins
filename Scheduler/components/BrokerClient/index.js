@@ -29,51 +29,25 @@ class BrokerClient extends Component {
       this.state = READY
       this.client.publishStatus();
       this.transcribers = new Array(); // internal scheduler representation of system transcribers. Gets published to broker on init as /transcribers/status
-      this.sessions = new Array(); // internal scheduler representation of system sessions
     });
     this.client.on("error", (err) => {
       this.state = ERROR;
     });
     this.init(); // binds controllers, those will handle messages
-    this.registerActiveSessions();
   }
 
   async saveTranscription(transcription, uniqueId) {
     try {
-      const sessionIndex = this.sessions.findIndex(s => s.channels.some(c => c.transcriber_id === uniqueId));
-      if (sessionIndex === -1) {
-        throw new Error(`Session with channel transcriber_id ${uniqueId} not found`);
+      const channel = await Model.Channel.findOne({where: {transcriber_id: uniqueId}})
+      if (!channel) {
+        throw new Error(`Channel with transcriber_id ${uniqueId} not found`)
       }
-      const channelIndex = this.sessions[sessionIndex].channels.findIndex(c => c.transcriber_id === uniqueId);
-      if (channelIndex === -1) {
-        throw new Error(`Channel with transcriber_id ${uniqueId} not found in session ${this.sessions[sessionIndex].session.id}`);
-      }
-      const channel = this.sessions[sessionIndex].channels[channelIndex];
       const closedCaptions = Array.isArray(channel.closed_captions) ? channel.closed_captions : [];
       await channel.update({
         closed_captions: [...closedCaptions, transcription]
       });
     } catch (err) {
       console.error(`${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`, JSON.stringify(transcription));
-    }
-  }
-
-  // Called on startup to fetch active sessions from database
-  async registerActiveSessions() {
-    const sessions = await Model.Session.findAll({
-      where: {
-        [Model.Op.or]: [
-          { status: 'active' },
-          { status: 'ready' },
-        ],
-      }
-    });
-    for (const session of sessions) {
-      const channels = await session.getChannels();
-      this.sessions.push({
-        session,
-        channels
-      });
     }
   }
 
@@ -122,11 +96,6 @@ class BrokerClient extends Component {
       }
       session = await session.update({ status: 'ready' }, { transaction: t });
       await t.commit();
-      // Add the new session and its channels to the local sessions array
-      this.sessions.push({
-        session,
-        channels: createdChannels
-      });
       return session.id;
     } catch (error) {
       await t.rollback();
@@ -138,39 +107,98 @@ class BrokerClient extends Component {
     }
   }
 
-  async startSession(sessionId) {
-    const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
-    if (sessionIndex !== -1) {
-      const session = this.sessions[sessionIndex];
-      await session.session.reload()
-      for (const channel of session.channels) {
-        await channel.reload()
+  async execOnChannels(sessionId, callback) {
+    try {
+      const channels = await Model.Channel.findAll({where: { sessionId: sessionId }})
+      for (const channel of channels) {
+        callback(channel)
+        this.client.publish(`transcriber/in/${channel.transcriber_id}/start`);
       }
+    }
+    catch (error) {
+      const msg = `Error when retrieving channels: ${error}`
+      console.error(msg)
+      return msg
+    }
+  }
+
+  async startSession(sessionId) {
+    const error = await this.execOnChannels(sessionId, channel => {
+        this.client.publish(`transcriber/in/${channel.transcriber_id}/start`)
+    })
+    if (error) {
+      return error
+    }
+
+    try {
+      await Model.Session.update({
+        status: 'active',
+        start_time: new Date()
+      }, {
+          where: {
+            'id': sessionId
+          }
+      })
+      await Model.Channel.update({
+        stream_status: 'active',
+        transcriber_status: 'streaming'
+      }, {
+          where: {
+            'sessionId': sessionId
+          }
+      })
+    } catch (err) {
+      const msg = `Error when updating sessions and channels: ${err}`
+      console.error(msg)
+      return msg
     }
   }
 
   async stopSession(sessionId) {
-    const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
-    if (sessionIndex !== -1) {
-      const session = this.sessions[sessionIndex];
-      await session.session.reload()
-      for (const channel of session.channels) {
-        await channel.reload()
+    const error = await this.execOnChannels(sessionId, channel => {
         this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
-      }
+    })
+    if (error) {
+      return error
+    }
+
+    try {
+      await Model.Session.update({
+        status: 'terminated',
+        end_time: new Date()
+      }, {
+          where: {
+            'id': sessionId
+          }
+      })
+      await Model.Channel.update({
+        stream_status: 'inactive',
+        transcriber_status: 'closed'
+      }, {
+          where: {
+            'sessionId': sessionId
+          }
+      })
+    } catch (err) {
+      const msg = `Error when updating sessions and channels: ${err}`
+      console.error(msg)
+      return msg
     }
   }
 
   async deleteSession(sessionId) {
-    const sessionIndex = this.sessions.findIndex(s => s.session.id === sessionId);
-    if (sessionIndex !== -1) {
-      const session = this.sessions[sessionIndex];
-      for (const channel of session.channels) {
-        this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
-      }
-      await session.session.destroy();
-      // Remove the session and its channels from the local sessions array
-      this.sessions.splice(sessionIndex, 1);
+    const error = await this.stopSession(sessionId)
+    if (error) {
+      return error
+    }
+
+    try {
+      await Model.Session.destroy({where: {id: sessionId}})
+    }
+    catch (error) {
+      const msg = `Error when deleting session: ${error}`
+      console.error(msg)
+      return msg
     }
   }
 
@@ -230,16 +258,18 @@ class BrokerClient extends Component {
   }
 
   async updateChannel(transcriber) {
-    for (const session of this.sessions) {
-      for (const channel of session.channels) {
-        if (channel.transcriber_id == transcriber.id) {
-          await channel.reload()
-          channel.stream_endpoint = transcriber.stream_endpoint
-          channel.transcriber_status = transcriber.streamingServerStatus
-          await channel.save()
-        }
-      }
+    if (!transcriber.id) {
+      return
     }
+
+    await Model.Channel.update({
+      stream_endpoint: transcriber.stream_endpoint,
+      transcriber_status: transcriber.streamingServerStatus
+      }, {
+      where: {
+        transcriber_id: transcriber.id
+      }
+    })
   }
 
   async unregisterTranscriber(transcriber) {

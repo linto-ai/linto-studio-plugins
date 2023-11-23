@@ -32,6 +32,11 @@ module.exports = function () {
               this.free();
               debug(`${this.uniqueId} received free message`);
               break;
+            case 'start':
+              // Handle start message
+              this.start();
+              debug(`${this.uniqueId} received start message`);
+              break;
             default:
               debug(`${this.uniqueId} received unknown action ${action}`);
           }

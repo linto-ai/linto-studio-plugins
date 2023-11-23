@@ -14,7 +14,7 @@ module.exports = function () {
     }, 3000);
   };
 
-  for (const eventName of ['ready', 'connecting', 'closed', 'error', 'eos', 'streaming']) {
+  for (const eventName of ['ready', 'connecting', 'closed', 'errored', 'eos', 'streaming', 'initialized']) {
     this.on(eventName, (...args) => {
       const streamingServerInfo = {
         streamingServerStatus: eventName + args.join(' ')

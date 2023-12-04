@@ -1,6 +1,6 @@
-# Open Source Live Subtitling
+# Live Transcription Open Source Toolbox
 
-The Open Source Live Subtitling project is a tool designed to operate transcription sessions at scale, particularly in enterprises or structures managing multiple meeting rooms, whether physical or virtual. A transcription session is essentially a meeting where multiple speakers may speak different languages. 
+The Live Transcription Open Source Toolbox is a set of tools designed to operate and manage, at scale, transcription sessions from inbound audiovisual streams. Particularly in enterprises or structures managing multiple meeting rooms, whether physical or virtual. A transcription session is essentially a meeting where multiple speakers may speak different languages. 
 
 The project connects multiple automatic speech recognition (ASR) providers to enable transcription of multilingual meetings. Its primary objective is to provide users with live closed captions and the ability to download transcripts of past sessions. In other words, the project bridges audio streams, with SRT streams as a first-class citizen, to ASR providers and manages transcripts, including real-time delivery and downloadable artifacts.
 
@@ -19,7 +19,7 @@ The project structure includes the following modules:
 - `session-manager`: an API to manage transcription sessions, also serves a front-end using Swagger client (Open API spec)
 - `transcriber`: a transcription service (streaming endpoint & relay to ASR services)
 - `scheduler`: a scheduling service that bridges the transcribers & subtitle-delivery with session manager, database, and message broker
-- `subtitle-delivery`: linguistic components used to generate and serve subtitles or downloadble transcripts (multiple formats including VTT, SRT, TXT, Doc)
+- `subtitle-delivery`: linguistic components used to generate and serve subtitles (Websocket API) or downloadble transcripts (HTTP API for multiple formats including VTT, SRT, TXT, Docx)
 - The `lib` folder contains generic tooling for the project as a whole and is treated as another Node.js package. It is required from the modules using the package.json local file API. This allows the modules to access the tools provided by the `lib` package and use them in their implementation.
 
 See `doc` folder (developer informations) or specific READMEs within modules folders for more infos.
@@ -27,7 +27,7 @@ See `doc` folder (developer informations) or specific READMEs within modules fol
  
 ## System prerequisites
 
-The modules are mainly writen in Node.JS. You might use NVM for installing it (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash)
+The modules are mainly writen in Node.JS 20+. You might use NVM for installing it (curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash)
 
 To run, modules requires following system dependency.
 

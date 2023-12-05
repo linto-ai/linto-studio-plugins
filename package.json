@@ -1,7 +1,33 @@
 {
-  "name": "linto-session",
+  "name": "live-transcription-open-source-toolbox",
   "version": "1.0.0",
-  "description": "",
+  "description": "The Live Transcription Open Source Toolbox is a set of tools designed to operate and manage, at scale, transcription sessions from inbound audiovisual streams. Particularly in enterprises or structures managing multiple meeting rooms, whether physical or virtual.",
+  "keywords": [
+    "ASR",
+    "STT",
+    "Streaming",
+    "SRT",
+    "multilingual",
+    "closed-captions",
+    "transcription",
+    "speech-to-text",
+    "audio-processing",
+    "real-time",
+    "speech-recognition",
+    "natural-language-processing",
+    "machine-learning",
+    "AI",
+    "NLP",
+    "audio-streaming",
+    "open-source",
+    "speech-analysis",
+    "gstreamer",
+    "ffmpeg",
+    "aac",
+    "opus",
+    "mp3",
+    "ogg"
+  ],
   "main": "index.js",
   "scripts": {
     "start": "npm run start:transcriber & npm run start:session-api & npm run start:scheduler & npm run start:delivery",
@@ -10,9 +36,22 @@
     "start:scheduler": "DEBUG=scheduler:* ./node_modules/.bin/nodemon Scheduler/scheduler.js",
     "start:delivery": "DEBUG=delivery:* ./node_modules/.bin/nodemon Delivery/delivery.js"
   },
-  "author": "Damien Laine damien.laine@gmail.com",
-  "email": "damien.laine@gmail.com",
-  "license": "ISC",
+  "author": "European Commission - DGSCIC",
+  "contributors": [
+    {
+      "name": "Damien Laine",
+      "email": "damien.laine@gmail.com",
+      "organization": "LINAGORA",
+      "role": "contractor"
+    },
+    {
+      "name": "Jean-Sébastien Bevilacqua",
+      "email": "jsbevilacqua@linagora.com",
+      "organization": "LINAGORA",
+      "role": "contractor"
+    }
+  ],
+  "license": "EUPL",
   "devDependencies": {
     "nodemon": "^2.0.22"
   }

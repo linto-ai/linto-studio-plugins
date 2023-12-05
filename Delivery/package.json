@@ -1,10 +1,24 @@
 {
-  "name": "delivery",
+  "name": "live-transcription-open-source-toolbox-delivery",
   "version": "1.0.0",
-  "description": "Deliver transcription",
+  "description": "Live Transcription Open Source Toolbox - Delivery component",
   "main": "delivery.js",
-  "author": "",
-  "license": "ISC",
+  "author": "European Commission - DGSCIC",
+  "contributors": [
+    {
+      "name": "Damien Laine",
+      "email": "damien.laine@gmail.com",
+      "organization": "LINAGORA",
+      "role": "contractor"
+    },
+    {
+      "name": "Jean-Sébastien Bevilacqua",
+      "email": "jsbevilacqua@linagora.com",
+      "organization": "LINAGORA",
+      "role": "contractor"
+    }
+  ],
+  "license": "EUPL",
   "scripts": {
     "start": "node delivery.js"
   },

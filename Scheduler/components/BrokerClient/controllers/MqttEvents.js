@@ -22,6 +22,5 @@ module.exports = async function () {
       default:
         debug(`Received message for unknown type ${type}`);
     }
-
   });
 }

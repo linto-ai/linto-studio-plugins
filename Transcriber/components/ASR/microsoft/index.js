@@ -31,6 +31,8 @@ class MicrosoftTranscriber extends EventEmitter {
     }
 
     start() {
+        //UTC date and time in ISO format, e.g. 2020-12-31T23:59:59Z
+        this.startedAt = new Date().toISOString();
         if (this.transcriberProfile) {
             if (this.transcriberProfile.config.languages.length === 1) {
                 this.startMono();

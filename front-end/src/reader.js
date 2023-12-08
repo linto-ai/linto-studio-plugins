@@ -96,6 +96,10 @@ class Reader {
 
   copy () {
     const currentText = document.getElementById('reader-content-finals').textContent + document.getElementById('reader-content-partial').textContent
+    if (!window.isSecureContext) {
+      alert("Can't copy to clipboard in an unsecure context, please use HTTPS.")
+      return
+    }
     navigator.clipboard.writeText(currentText).then(
       () => {
         document.querySelector('#clipboard-button > span').innerText = 'Copied'

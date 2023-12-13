@@ -72,7 +72,14 @@ class BrokerClient extends Component {
     this.state = BrokerClient.states.SESSION_BOUND;
     debug(`${this.uniqueId} Bound to session ${this.bound_session}`)
     // publish will occur when streaming server component will change state upon configure method call, see Transcriber/components/StreamingServer/controllers/StreamingServer.js
-    this.app.components['ASR'].configure(transcriberProfile)
+    if (this.app.components['StreamingServer'].state == 'initialized') {
+      this.app.components['ASR'].configure(transcriberProfile)
+    }
+    else {
+      this.app.components['StreamingServer'].on('initialized', () => {
+        this.app.components['ASR'].configure(transcriberProfile)
+      })
+    }
   }
 
   async start() {

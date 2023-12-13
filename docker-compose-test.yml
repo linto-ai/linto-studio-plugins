@@ -1,0 +1,171 @@
+services:
+  #---------- optional services
+  # Convenient rapid mosquitto and posgres startup configuration
+  # You will need to configure it depending on your need for custom deployments
+  reverse-proxy:
+    image: traefik:v2.10
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./letsencrypt:/letsencrypt
+    labels:
+      - "traefik.enable=true"
+
+  broker:
+    image: eclipse-mosquitto:latest
+    expose:
+      - "${BROKER_PORT}"
+    ports:
+      - "${BROKER_PORT}:${BROKER_PORT}"
+    restart: always
+    command: mosquitto -c /mosquitto-no-auth.conf
+
+  database:
+    image: postgres:latest
+    expose:
+      - "${DB_PORT}"
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
+    command: -p ${DB_PORT}
+    restart: always
+  #----------
+
+  migration:
+    build:
+      context: .
+      dockerfile: migration/Dockerfile
+    env_file:
+      - .envdefault
+      - .envtest
+    environment:
+      - DB_HOST=database
+      - NODE_ENV=production
+    depends_on:
+      - database
+
+  delivery:
+    build:
+      context: .
+      dockerfile: Delivery/Dockerfile
+    env_file:
+      - .envdefault
+      - .envtest
+    environment:
+      - BROKER_HOST=broker
+      - DEBUG=delivery:*
+    ports:
+      - "${DELIVERY_WEBSERVER_HTTP_PORT}:${DELIVERY_WEBSERVER_HTTP_PORT}"
+    depends_on:
+      - broker
+    restart: always
+    healthcheck:
+      disable: true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.delivery.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/delivery`)"
+      - "traefik.http.routers.delivery.middlewares=delivery-strip"
+      - "traefik.http.middlewares.delivery-strip.stripprefix.prefixes=/delivery"
+      - "traefik.http.middlewares.delivery-strip.stripprefix.forceslash=false"
+
+  transcriber:
+    container_name: transcriber-integration-test
+    build:
+      context: .
+      dockerfile: Transcriber/Dockerfile
+    env_file:
+      - .envdefault
+      - .envtest
+    environment:
+      - BROKER_HOST=localhost
+      - DEBUG=transcriber:*
+    depends_on:
+      - broker
+    restart: always
+    healthcheck:
+      disable: true
+    network_mode: host
+
+  sessionapi:
+    build:
+      context: .
+      dockerfile: Session-API/Dockerfile
+    env_file:
+      - .envdefault
+      - .envtest
+    environment:
+      - BROKER_HOST=broker
+      - DB_HOST=database
+      - DEBUG=session-api:*
+    expose:
+      - "${SESSION_API_WEBSERVER_HTTP_PORT}"
+    ports:
+      - "${SESSION_API_WEBSERVER_HTTP_PORT}:${SESSION_API_WEBSERVER_HTTP_PORT}"
+    depends_on:
+      broker:
+        condition: service_started
+      migration:
+        condition: service_completed_successfully
+    restart: always
+    healthcheck:
+      disable: true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sessionapi.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/sessionapi`)"
+      - "traefik.http.routers.sessionapi.middlewares=sessionapi-strip"
+      - "traefik.http.middlewares.sessionapi-strip.stripprefix.prefixes=/sessionapi"
+      - "traefik.http.middlewares.sessionapi-strip.stripprefix.forceslash=false"
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Scheduler/Dockerfile
+    env_file:
+      - .envdefault
+      - .envtest
+    environment:
+      - BROKER_HOST=broker
+      - DB_HOST=database
+      - DEBUG=scheduler:*
+    ports:
+      - "${SCHEDULER_WEBSERVER_HTTP_PORT}:${SCHEDULER_WEBSERVER_HTTP_PORT}"
+    expose:
+      - "${SCHEDULER_WEBSERVER_HTTP_PORT}"
+    depends_on:
+      broker:
+        condition: service_started
+      migration:
+        condition: service_completed_successfully
+    restart: always
+    healthcheck:
+      disable: true
+
+  frontend:
+    build:
+      context: .
+      dockerfile: front-end/Dockerfile
+    ports:
+      - "${FRONT_END_PORT}:${FRONT_END_PORT}"
+    expose:
+      - "${FRONT_END_PORT}"
+    env_file:
+      - .envdefault
+      - .envtest
+    restart: always
+    healthcheck:
+      disable: true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/frontend`)"
+      - "traefik.http.routers.frontend.middlewares=frontend-strip"
+      - "traefik.http.middlewares.frontend-strip.stripprefix.prefixes=/frontend"
+      - "traefik.http.middlewares.frontend-strip.stripprefix.forceslash=false"

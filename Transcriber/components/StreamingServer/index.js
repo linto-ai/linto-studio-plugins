@@ -140,11 +140,11 @@ class StreamingServer extends Component {
     }
   }
 
-  async start() {
-    const { INITIALIZED, READY, ERROR, STREAMING, CLOSED } = this.constructor.states;
+  async start(force = false) {
+    const { INITIALIZED, READY, ERROR, STREAMING } = this.constructor.states;
 
     // if the transcriber is not initialized, we do nothing
-    if (this.state != INITIALIZED) {
+    if (this.state != INITIALIZED && !force) {
       debug("Trying to start an uninitialized transcriber")
       return
     }
@@ -189,7 +189,7 @@ class StreamingServer extends Component {
         switch (msg.type) {
           case 'eos':
             this.emit('eos'); // ASR/Controller will handle this to flush buffer and stop transcription
-            this.start()
+            this.start(true)
             break;
           case 'state-changed':
             if (msg._src_element_name === 'sink') {

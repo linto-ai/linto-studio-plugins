@@ -2,6 +2,7 @@
 # Ignore node_modules directory
 node_modules/
 .env
+.envtest
 
 # Ignore log files
 *.log

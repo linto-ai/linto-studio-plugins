@@ -1,0 +1,28 @@
+nodemon 2.0.22 is licensed under the MIT license. © Remy Sharp. See more at https://github.com/remy/nodemon
+axios 1.5.0 is licensed under the MIT license. © Matt Zabriskie. See more at https://github.com/axios/axios
+cookie-parser 1.4.6 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/expressjs/cookie-parser
+cors 2.8.5 is licensed under the MIT license. © Troy Goode. See more at https://github.com/expressjs/cors
+debug 4.3.4 is licensed under the MIT license. © Josh Junon. See more at https://github.com/debug-js/debug
+docx 8.2.2 is licensed under the MIT license. © Dolan Miu. See more at https://github.com/dolanmiu/docx
+express-session 1.17.3 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/expressjs/session
+express 4.18.2 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/expressjs/express
+luxon 3.4.3 is licensed under the MIT license. © Isaac Cambron. See more at https://github.com/moment/luxon
+subtitle 4.2.1 is licensed under the MIT license. © Guilherme Santiago. See more at https://github.com/gsantiago/subtitle.js
+buffer 6.0.3 is licensed under the MIT license. © Feross Aboukhadijeh. See more at https://github.com/feross/buffer
+milligram 1.4.1 is licensed under the MIT license. © CJ Patoilo. See more at https://github.com/milligram/milligram
+tui-pagination 3.4.1 is licensed under the MIT license. © NHN FE Development Team. See more at https://github.com/nhn/tui.pagination
+debug 4.3.4 is licensed under the MIT license. © Josh Junon. See more at https://github.com/debug-js/debug
+eventemitter3 5.0.1 is licensed under the MIT license. © Arnout Kazemier. See more at https://github.com/primus/eventemitter3
+pg 8.11.3 is licensed under the MIT license. © Brian Carlson. See more at https://github.com/brianc/node-postgres
+pg 8.11.3 is licensed under the MIT license. © Brian Carlson. See more at https://github.com/brianc/node-postgres
+cookie-parser 1.4.6 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/expressjs/cookie-parser
+cors 2.8.5 is licensed under the MIT license. © Troy Goode. See more at https://github.com/expressjs/cors
+debug 4.3.4 is licensed under the MIT license. © Josh Junon. See more at https://github.com/debug-js/debug
+express-session 1.17.3 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/expressjs/session
+express 4.18.2 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/expressjs/express
+debug 4.3.4 is licensed under the MIT license. © Josh Junon. See more at https://github.com/debug-js/debug
+esm 3.2.25 is licensed under the MIT license. © John-David Dalton. See more at https://github.com/standard-things/esm
+gstreamer-superficial 1.7.4 is licensed under the MIT license. © Daniel Turing. See more at https://github.com/dturing/node-gstreamer-superficial
+microsoft-cognitiveservices-speech-sdk 1.32.0 is licensed under the MIT license. © Microsoft Corporation. See more at https://github.com/Microsoft/cognitive-services-speech-sdk-js
+mocha 10.2.0 is licensed under the MIT license. © TJ Holowaychuk. See more at https://github.com/mochajs/mocha
+ws 8.14.1 is licensed under the MIT license. © Einar Otto Stangvik. See more at https://github.com/websockets/ws

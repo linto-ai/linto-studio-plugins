@@ -13,6 +13,10 @@ extract_info() {
     local copyright=$(echo $info | jq -r .publisher)
     local repo=$(echo $info | jq -r .repository)
     echo "$name,$version,$licenses,$copyright,$repo" >> LICENCE-REPORT.csv
+    if [ "$copyright" != "null" ]; then
+        # Write the copyright notice to the file
+        echo "$name $version is licensed under the $licenses license. © $copyright. See more at $repo" >> notice.txt
+    fi
 }
 
 # Run the license-checker command in the current directory
@@ -38,3 +42,4 @@ for dir in Delivery front-end lib migration Scheduler Session-API Transcriber; d
         extract_info $dep "$info"
     done
 done
+

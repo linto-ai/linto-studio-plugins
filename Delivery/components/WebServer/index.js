@@ -19,9 +19,21 @@ class WebServer extends Component {
             extended: false
         }))
         this.express.use(cookieParser())
-        this.express.use(cors());
+
+        // Handle CORS for multiple domains
+        const allowedDomains = process.env.ALLOWED_DOMAINS ? process.env.ALLOWED_DOMAINS.split(',') : [];
+        this.express.use(cors({
+            origin: function (origin, callback) {
+                if (!origin || allowedDomains.indexOf(origin) !== -1) {
+                    callback(null, true)
+                } else {
+                    callback(new Error('Not allowed by CORS'))
+                }
+            }
+        }));
+
         const sessionMiddleware = session({
-            secret: "supersecret",
+            secret: process.env.SESSION_SECRET || "defaultsecret",
             resave: false,
             saveUninitialized: true,
             cookie: {

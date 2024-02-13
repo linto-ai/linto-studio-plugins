@@ -23,8 +23,9 @@ export default class SessionController {
     if (checkUrl.pathname != '/') {
       console.error(`socketio url should not have a path (it will be a socketio namespace). Current: ${socketioUrl}`)
     }
-
-    this.socket = io(socketioUrl, {path: `${socketioBasePath}/socket.io`})
+    //Fix for socketio base path when DELIVERY_WS_BASE_PATH is not set (subdomain case)
+    const socketioPath = socketioBasePath ? `/${socketioBasePath}/socket.io` : '/socket.io';
+    this.socket = io(socketioUrl, {path: socketioPath})
     this.socket.on('connect', () => {
       console.log('connected to socket.io server')
 

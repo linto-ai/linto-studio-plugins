@@ -21,7 +21,7 @@ class WebServer extends Component {
         this.express.use(cookieParser())
 
         // Handle CORS for multiple domains
-        const allowedDomains = process.env.ALLOWED_DOMAINS ? process.env.ALLOWED_DOMAINS.split(',') : [];
+        const allowedDomains = process.env.DELIVERY_ALLOWED_DOMAINS ? process.env.DELIVERY_ALLOWED_DOMAINS.split(',') : [];
         this.express.use(cors({
             origin: function (origin, callback) {
                 if (!origin || allowedDomains.indexOf(origin) !== -1) {

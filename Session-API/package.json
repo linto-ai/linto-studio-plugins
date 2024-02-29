@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node Session-API.js",
+    "start-live": "npx nodemon Session-API.js",
     "create_db": "node create_db.js"
   },
   "author": "European Commission - DGSCIC",

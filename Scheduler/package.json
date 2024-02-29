@@ -4,7 +4,8 @@
   "description": "Live Transcription Open Source Toolbox : Scheduler Component",
   "main": "index.js",
   "scripts": {
-    "start": "node scheduler.js"
+    "start": "node scheduler.js",
+    "start-live": "npx nodemon scheduler.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [
@@ -30,5 +31,8 @@
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
   }
 }

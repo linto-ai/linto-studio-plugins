@@ -1,0 +1,51 @@
+services:
+  reverse-proxy:
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${LETS_ENCRYPT_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "443:443"
+    labels:
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.rule=Host(`${DOMAIN_NAME}`)"
+
+  broker:
+    restart: always
+
+  database:
+    restart: always
+
+  delivery:
+    restart: always
+    labels:
+      - "traefik.http.routers.delivery.entrypoints=websecure"
+      - "traefik.http.routers.delivery.tls.certresolver=letsencrypt"
+
+  transcriber:
+    restart: always
+
+  sessionapi:
+    restart: always
+    labels:
+      - "traefik.http.routers.sessionapi.entrypoints=websecure"
+      - "traefik.http.routers.sessionapi.tls.certresolver=letsencrypt"
+
+  scheduler:
+    restart: always
+    labels:
+      - "traefik.http.routers.scheduler.entrypoints=websecure"
+      - "traefik.http.routers.scheduler.tls.certresolver=letsencrypt"
+
+  frontend:
+    restart: always
+    labels:
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+

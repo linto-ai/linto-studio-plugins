@@ -17,7 +17,23 @@ This command should be run inside every module of the global project, as well as
 
 ## Quickstart
 
-To quickly test this project, you can use docker-compose. Here are the steps to follow:
+To quickly test this project, you can use either a local build or docker compose.
+
+### Run locally
+
+Here are the steps to follow:
+
+1. make install-local
+
+This command will build all npm packages.
+
+2. make run-dev
+
+This command will start all the services locally.
+You may need to use docker for the broker and the database.
+
+
+### Run with docker compose
 
 1. Create a `.env` file at the root of the project with this content:
 
@@ -64,13 +80,16 @@ SCHEDULER_WEBSERVER_HTTP_PORT=8003
 2. Run the docker-compose command:
 
 ```
-docker compose -f docker-compose-dev.yml up
+make run-docker-dev
 ```
 
 This compose file will compile all the docker images and launch all the containers.
 This will allow you to test the API and transcription.
 
-3. Add a transcriber profile:
+
+### Initialize the app
+
+1. Add a transcriber profile:
 
 Log in to the session API available here: http://localhost/sessionapi/api-docs/
 In the POST /transcriber_profiles section, add the following json:
@@ -94,7 +113,7 @@ In the POST /transcriber_profiles section, add the following json:
 }
 ```
 
-4. Create and start a session:
+2. Create and start a session:
 
 - In the session API POST /sessions, create a new session with the following json:
 
@@ -114,13 +133,13 @@ In the POST /transcriber_profiles section, add the following json:
 - Start the session using the PUT sessions/IP/start endpoint specifying the session id
 - Retrieve your channel's streaming endpoint via GET sessions/ID
 
-5. Connect to the web interface:
+3. Connect to the web interface:
 
 - Go to: http://localhost/frontend/admin.html
 - The user/password combination will be admin/admin (as indicated in the .env file).
 - Now select your session
 
-6. Stream
+4. Stream
 
 You are now ready to receive real-time transcription. For this, send your SRT stream to the streaming endpoint.
 You can use a command like this:

@@ -183,6 +183,36 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        path: '/sessions/:id/reset',
+        method: 'put',
+        controller: async (req, res, next) => {
+            try {
+                const sessionId = req.params.id
+                const session = await Model.Session.findByPk(sessionId)
+                if (!session) {
+                    return res.status(404).send('Session not found')
+                }
+                if (!['active', 'ready'].includes(session.status)) {
+                    res.status(400).json({ 'error': 'Session must be ready or active'})
+                    return
+                }
+
+                const url = `${process.env.SESSION_SCHEDULER_URL}/v1/sessions/${session.id}/reset`
+                try {
+                    await axios.put(url)
+                    res.json(session)
+                } catch (err) {
+                    var msg = err.message
+                    if (err.response && err.response.data) {
+                        msg = err.response.data.error
+                    }
+                    res.status(500).json({ "error": msg })
+                }
+            } catch (err) {
+                next(err)
+            }
+        }
+    }, {
         path: '/sessions/:id/stop',
         method: 'put',
         requireAuth: false,

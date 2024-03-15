@@ -266,6 +266,34 @@ class BrokerClient extends Component {
     }
   }
 
+  async resetSession(sessionId) {
+    // This function free all the session transcriber and enroll new transcribers
+    // In order to follow the good process, the channel are put in errored and will be automatically
+    // reaffected to others transcribers
+    const error = await this.execOnChannels(sessionId, async (channel) => {
+      debug(`Resetting channel ${channel.name} in session ${channel.session.id}`);
+      this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+      const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
+      const newError = {
+        date: new Date(),
+        channel_id: channel.id,
+        error: { code: 2, msg: "Transcriber reset" }
+      }
+      await channel.session.update({errored_on: [...erroredOn, newError]})
+      await channel.update({
+        transcriber_id: null,
+        stream_endpoint: null,
+        transcriber_status: 'errored'
+      })
+    })
+
+    if (error) {
+      return error
+    }
+
+    this.debounceSyncSystem()
+  }
+
   async stopSession(sessionId) {
     const error = await this.execOnChannels(sessionId, async (channel) => {
         this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);

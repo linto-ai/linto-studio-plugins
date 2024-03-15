@@ -84,6 +84,8 @@ services:
     depends_on:
       - broker
     network_mode: host
+    deploy:
+      replicas: ${TRANSCRIBER_REPLICAS}
 
   sessionapi:
     build:

@@ -64,7 +64,7 @@ class BrokerClient extends Component {
   }
 
   async syncSystem() {
-    this.detectErroredChannels()
+    await this.detectErroredChannels()
 
     // update channel in database
     for (const transcriber of this.transcribers) {
@@ -72,7 +72,7 @@ class BrokerClient extends Component {
     }
 
     // try to bind transcriber to errored channel
-    this.bindErroredChannels()
+    await this.bindErroredChannels()
   }
 
   async detectErroredChannels() {
@@ -83,7 +83,7 @@ class BrokerClient extends Component {
         [Model.Op.notIn]: existingTranscriberIds
       },
       transcriber_status: {
-        [Model.Op.in]: ['ready', 'streaming']
+        [Model.Op.in]: ['initialized', 'ready', 'streaming']
       }
     }
 
@@ -122,6 +122,7 @@ class BrokerClient extends Component {
         { model: Model.TranscriberProfile }
       ]
     })
+
     for (const channel of erroredChannels) {
       try {
         const transcriber = await this.enrollTranscriber(channel.transcriber_profile, channel.session)
@@ -216,9 +217,14 @@ class BrokerClient extends Component {
 
   async execOnChannels(sessionId, callback) {
     try {
-      const channels = await Model.Channel.findAll({where: { sessionId: sessionId }})
+      const channels = await Model.Channel.findAll({
+        where: { sessionId: sessionId },
+        include: [
+          { model: Model.Session }
+        ]
+      })
       for (const channel of channels) {
-        callback(channel)
+        await callback(channel)
         this.client.publish(`transcriber/in/${channel.transcriber_id}/start`);
       }
     }
@@ -230,7 +236,7 @@ class BrokerClient extends Component {
   }
 
   async startSession(sessionId) {
-    const error = await this.execOnChannels(sessionId, channel => {
+    const error = await this.execOnChannels(sessionId, async (channel) => {
         this.client.publish(`transcriber/in/${channel.transcriber_id}/start`)
     })
     if (error) {
@@ -261,7 +267,7 @@ class BrokerClient extends Component {
   }
 
   async stopSession(sessionId) {
-    const error = await this.execOnChannels(sessionId, channel => {
+    const error = await this.execOnChannels(sessionId, async (channel) => {
         this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
     })
     if (error) {

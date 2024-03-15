@@ -8,7 +8,6 @@ module.exports = (webserver) => {
     return [{
         path: '/sessions/active',
         method: 'get',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const sessions = await Model.Session.findAll({
@@ -24,7 +23,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions/terminated',
         method: 'get',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const sessions = await Model.Session.findAll({
@@ -41,7 +39,6 @@ module.exports = (webserver) => {
     {
         path: '/sessions/:id',
         method: 'get',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const session = await Model.Session.findByPk(req.params.id, {
@@ -63,7 +60,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions',
         method: 'get',
-        requireAuth: false,
         controller: async (req, res, next) => {
             const limit = req.query.limit ?? 10
             const offset = req.query.offset ?? 0
@@ -99,7 +95,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions',
         method: 'post',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 try {
@@ -129,7 +124,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions/:id',
         method: 'delete',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const session = await Model.Session.findByPk(req.params.id);
@@ -154,7 +148,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions/:id/start',
         method: 'put',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const sessionId = req.params.id
@@ -215,7 +208,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions/:id/stop',
         method: 'put',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const sessionId = req.params.id

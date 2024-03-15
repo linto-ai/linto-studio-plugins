@@ -6,12 +6,6 @@ function logger(req, res, next) {
     next()
 }
 
-function checkAuth(req, res, next) {
-    // gotta check session here
-    next()
-}
-
 module.exports = {
-    checkAuth,
     logger
 }

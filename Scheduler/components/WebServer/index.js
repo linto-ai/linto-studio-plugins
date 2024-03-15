@@ -1,9 +1,7 @@
 const debug = require('debug')(`scheduler:webserver`)
 const { Component } = require("live-srt-lib")
-const path = require('path')
 const cors = require('cors');
 const express = require('express')
-const session = require('express-session');
 const bodyParser = require('body-parser')
 const cookieParser = require('cookie-parser')
 

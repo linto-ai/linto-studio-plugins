@@ -12,28 +12,15 @@ class Router {
             for (let path in routes[level]) {
                 const route = routes[level][path]
                 const method = route.method
-                if (route.requireAuth) {
-                    webServer.express[method](
-                        level + route.path,
-                        middlewares.logger,
-                        middlewares.checkAuth,
-                        ifHasElse(
-                            Array.isArray(route.controller),
-                            () => Object.values(route.controller),
-                            () => route.controller
-                        )
+                webServer.express[method](
+                    level + route.path,
+                    middlewares.logger,
+                    ifHasElse(
+                        Array.isArray(route.controller),
+                        () => Object.values(route.controller),
+                        () => route.controller
                     )
-                } else {
-                    webServer.express[method](
-                        level + route.path,
-                        middlewares.logger,
-                        ifHasElse(
-                            Array.isArray(route.controller),
-                            () => Object.values(route.controller),
-                            () => route.controller
-                        )
-                    )
-                }
+                )
             }
         }
     }

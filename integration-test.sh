@@ -208,4 +208,4 @@ response=$(get_request "$SESSION_URL/$SESSION_ID")
 check_response "$response" "[[ $(echo $response | jq -r '.status') == 'terminated' ]]" "Transcriber status ready in DB: OK" "Error: Transcriber status not ready in DB"
 
 ## Stop the env
-docker compose --env-file .envtest -f docker-compose-test.yml down --volumes
+docker compose --env-file .envtest -f compose.yml -f compose.test.yml down --volumes

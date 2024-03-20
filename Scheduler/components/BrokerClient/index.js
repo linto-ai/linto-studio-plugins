@@ -58,7 +58,7 @@ class BrokerClient extends Component {
     }
 
     this.timeoutId = setTimeout(() => {
-      this.syncSystem()
+      await this.syncSystem()
       this.timeoutId = null
     }, 3000)
   }
@@ -291,7 +291,7 @@ class BrokerClient extends Component {
       return error
     }
 
-    this.debounceSyncSystem()
+    await this.debounceSyncSystem()
   }
 
   async stopSession(sessionId) {
@@ -392,14 +392,14 @@ class BrokerClient extends Component {
       this.transcribers.push(transcriber);
       debug(`registering transcriber ${transcriber.uniqueId}`);
     }
-    this.debounceSyncSystem()
+    await this.debounceSyncSystem()
   }
 
   async unregisterTranscriber(transcriber) {
     //remove transcriber from list of transcribers, using transcriber.uniqueId
     debug(`unregistering transcriber ${transcriber.uniqueId}`)
     this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId)
-    this.debounceSyncSystem()
+    await this.debounceSyncSystem()
   }
 }
 

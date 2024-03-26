@@ -76,7 +76,7 @@ class BrokerClient extends Component {
       this.app.components['ASR'].configure(transcriberProfile)
     }
     else {
-      this.app.components['StreamingServer'].on('initialized', () => {
+      this.app.components['StreamingServer'].once('initialized', () => {
         this.app.components['ASR'].configure(transcriberProfile)
       })
     }

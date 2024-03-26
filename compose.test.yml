@@ -1,0 +1,37 @@
+services:
+  delivery:
+    healthcheck:
+      disable: true
+    env_file:
+      - .envdefault
+      - .envtest
+
+  transcriber:
+    healthcheck:
+      disable: true
+    container_name: transcriber-integration-test
+    env_file:
+      - .envdefault
+      - .envtest
+
+  sessionapi:
+    healthcheck:
+      disable: true
+    env_file:
+      - .envdefault
+      - .envtest
+
+  scheduler:
+    healthcheck:
+      disable: true
+    env_file:
+      - .envdefault
+      - .envtest
+
+  frontend:
+    healthcheck:
+      disable: true
+    env_file:
+      - .envdefault
+      - .envtest
+

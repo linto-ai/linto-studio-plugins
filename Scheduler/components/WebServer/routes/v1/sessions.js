@@ -7,7 +7,6 @@ module.exports = (webserver) => {
     return [{
         path: '/sessions',
         method: 'post',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 try {
@@ -24,7 +23,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions/:id',
         method: 'delete',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const error = await webserver.app.components['BrokerClient'].deleteSession(req.params.id)
@@ -43,7 +41,6 @@ module.exports = (webserver) => {
     }, {
         path: '/sessions/:id/start',
         method: 'put',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const error = await webserver.app.components['BrokerClient'].startSession(req.params.id)
@@ -60,9 +57,26 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        path: '/sessions/:id/reset',
+        method: 'put',
+        controller: async (req, res, next) => {
+            try {
+                const error = await webserver.app.components['BrokerClient'].resetSession(req.params.id)
+                if (error) {
+                    res.status(500).json({ "error": error })
+                }
+                else {
+                    res.json({'success': true})
+                }
+            } catch (err) {
+                res.status(500).json({ "error": err.message })
+                debug(err)
+                next(err)
+            }
+        }
+    }, {
         path: '/sessions/:id/stop',
         method: 'put',
-        requireAuth: false,
         controller: async (req, res, next) => {
             try {
                 const error = await webserver.app.components['BrokerClient'].stopSession(req.params.id)

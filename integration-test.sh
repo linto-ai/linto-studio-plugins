@@ -130,8 +130,8 @@ SESSION_URL="http://localhost/sessionapi/v1/sessions"
 ## ---------------------
 ## Start the env
 echo "Start the service"
-docker compose --env-file .envtest -f docker-compose-test.yml down --volumes
-docker compose --env-file .envtest -f docker-compose-test.yml up --build -d
+docker compose --env-file .envtest -f compose.yml -f compose.test.yml down --volumes
+docker compose --env-file .envtest -f compose.yml -f compose.test.yml up --build -d
 
 while ! curl -s -o /dev/null -w "%{http_code}" $TRANSCRIBER_PROFILE_URL | grep -q 200; do
     echo "Waiting for containers..."
@@ -208,4 +208,4 @@ response=$(get_request "$SESSION_URL/$SESSION_ID")
 check_response "$response" "[[ $(echo $response | jq -r '.status') == 'terminated' ]]" "Transcriber status ready in DB: OK" "Error: Transcriber status not ready in DB"
 
 ## Stop the env
-docker compose --env-file .envtest -f docker-compose-test.yml down --volumes
+docker compose --env-file .envtest -f compose.yml -f compose.test.yml down --volumes

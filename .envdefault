@@ -2,6 +2,8 @@
 # You can override them by creating a file named .env in the same directory
 # you can also override them by setting them in the environment before running the app (e.g. export SRT_PORT=1234)
 
+NODE_ENV=production # used to load the appropriate migration config
+
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,ASR # Comma separated list of components to run, they load in this order
 SCHEDULER_COMPONENTS=BrokerClient,WebServer # Comma separated list of components to run, they load in this order
 SESSION_API_COMPONENTS=BrokerClient,WebServer,IoHandler
@@ -9,6 +11,7 @@ DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
 SESSION_API_HOST=http://localhost:8000
 SESSION_API_WEBSERVER_HTTP_PORT=8000
 SESSION_API_PUBLIC_URL=http://localhost:8000
+SESSION_SCHEDULER_URL=http://localhost:8002
 SCHEDULER_WEBSERVER_HTTP_PORT=8002
 DELIVERY_WEBSERVER_HTTP_PORT=8001
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

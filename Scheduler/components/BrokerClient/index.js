@@ -58,13 +58,13 @@ class BrokerClient extends Component {
     }
 
     this.timeoutId = setTimeout(() => {
-      this.syncSystem()
+      await this.syncSystem()
       this.timeoutId = null
     }, 3000)
   }
 
   async syncSystem() {
-    this.detectErroredChannels()
+    await this.detectErroredChannels()
 
     // update channel in database
     for (const transcriber of this.transcribers) {
@@ -72,7 +72,7 @@ class BrokerClient extends Component {
     }
 
     // try to bind transcriber to errored channel
-    this.bindErroredChannels()
+    await this.bindErroredChannels()
   }
 
   async detectErroredChannels() {
@@ -83,7 +83,7 @@ class BrokerClient extends Component {
         [Model.Op.notIn]: existingTranscriberIds
       },
       transcriber_status: {
-        [Model.Op.in]: ['ready', 'streaming']
+        [Model.Op.in]: ['initialized', 'ready', 'streaming']
       }
     }
 
@@ -122,6 +122,7 @@ class BrokerClient extends Component {
         { model: Model.TranscriberProfile }
       ]
     })
+
     for (const channel of erroredChannels) {
       try {
         const transcriber = await this.enrollTranscriber(channel.transcriber_profile, channel.session)
@@ -216,9 +217,14 @@ class BrokerClient extends Component {
 
   async execOnChannels(sessionId, callback) {
     try {
-      const channels = await Model.Channel.findAll({where: { sessionId: sessionId }})
+      const channels = await Model.Channel.findAll({
+        where: { sessionId: sessionId },
+        include: [
+          { model: Model.Session }
+        ]
+      })
       for (const channel of channels) {
-        callback(channel)
+        await callback(channel)
         this.client.publish(`transcriber/in/${channel.transcriber_id}/start`);
       }
     }
@@ -230,7 +236,7 @@ class BrokerClient extends Component {
   }
 
   async startSession(sessionId) {
-    const error = await this.execOnChannels(sessionId, channel => {
+    const error = await this.execOnChannels(sessionId, async (channel) => {
         this.client.publish(`transcriber/in/${channel.transcriber_id}/start`)
     })
     if (error) {
@@ -260,8 +266,36 @@ class BrokerClient extends Component {
     }
   }
 
+  async resetSession(sessionId) {
+    // This function free all the session transcriber and enroll new transcribers
+    // In order to follow the good process, the channel are put in errored and will be automatically
+    // reaffected to others transcribers
+    const error = await this.execOnChannels(sessionId, async (channel) => {
+      debug(`Resetting channel ${channel.name} in session ${channel.session.id}`);
+      this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+      const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
+      const newError = {
+        date: new Date(),
+        channel_id: channel.id,
+        error: { code: 2, msg: "Transcriber reset" }
+      }
+      await channel.session.update({errored_on: [...erroredOn, newError]})
+      await channel.update({
+        transcriber_id: null,
+        stream_endpoint: null,
+        transcriber_status: 'errored'
+      })
+    })
+
+    if (error) {
+      return error
+    }
+
+    await this.debounceSyncSystem()
+  }
+
   async stopSession(sessionId) {
-    const error = await this.execOnChannels(sessionId, channel => {
+    const error = await this.execOnChannels(sessionId, async (channel) => {
         this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
     })
     if (error) {
@@ -358,14 +392,14 @@ class BrokerClient extends Component {
       this.transcribers.push(transcriber);
       debug(`registering transcriber ${transcriber.uniqueId}`);
     }
-    this.debounceSyncSystem()
+    await this.debounceSyncSystem()
   }
 
   async unregisterTranscriber(transcriber) {
     //remove transcriber from list of transcribers, using transcriber.uniqueId
     debug(`unregistering transcriber ${transcriber.uniqueId}`)
     this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId)
-    this.debounceSyncSystem()
+    await this.debounceSyncSystem()
   }
 }
 

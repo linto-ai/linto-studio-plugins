@@ -82,6 +82,18 @@ class ASR extends Component {
     });
   }
 
+  sendResetMessage() {
+      const final = {
+          "astart": this.startedAt,
+          "text": "Channel reset.",
+          "start": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
+          "end": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
+          "lang": 'EN-en',
+          "locutor": process.env.TRANSCRIBER_BOT_NAME
+      }
+      this.emit('final', final)
+  }
+
 
   async startTranscription() {
     this.transcriber.start();

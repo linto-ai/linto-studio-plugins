@@ -2,6 +2,10 @@ const debug = require('debug')(`scheduler:BrokerClient`);
 const { MqttClient, Component, Model } = require('live-srt-lib')
 const { v4: uuidv4 } = require('uuid');
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 class BrokerClient extends Component {
 
   static states = {
@@ -57,7 +61,7 @@ class BrokerClient extends Component {
       clearTimeout(this.timeoutId)
     }
 
-    this.timeoutId = setTimeout(() => {
+    this.timeoutId = setTimeout(async () => {
       await this.syncSystem()
       this.timeoutId = null
     }, 3000)
@@ -272,7 +276,11 @@ class BrokerClient extends Component {
     // reaffected to others transcribers
     const error = await this.execOnChannels(sessionId, async (channel) => {
       debug(`Resetting channel ${channel.name} in session ${channel.session.id}`);
-      this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+      this.client.publish(`transcriber/in/${channel.transcriber_id}/reset`);
+
+      // let 2 seconds to the reset message to come back to the scheduler in order to be saved in the database
+      // then the channel.trancriber_id can be set to null
+      await sleep(2000);
       const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
       const newError = {
         date: new Date(),

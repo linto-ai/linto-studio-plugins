@@ -95,6 +95,11 @@ class BrokerClient extends Component {
     this.client.registerDomainSpecificValues({ bound_session: null })
     this.client.publishStatus();
   }
+
+  async reset() {
+    this.app.components['ASR'].sendResetMessage();
+    await this.free();
+  }
 }
 
 module.exports = app => new BrokerClient(app);

@@ -12,6 +12,8 @@ RUN cd /usr/src/app/front-end && npm install
 COPY front-end/docker-entrypoint.sh /
 
 WORKDIR /usr/src/app/front-end
+RUN  cd /usr/src/app ; chown -R node:node ./
+USER node
 HEALTHCHECK --interval=60s --timeout=3s --start-period=30s CMD ./healthcheck.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
 

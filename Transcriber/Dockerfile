@@ -27,6 +27,8 @@ COPY wait-for-it.sh /
 COPY Transcriber/docker-entrypoint.sh /
 
 WORKDIR /usr/src/app/transcriber
+RUN  cd /usr/src/app ; chown -R node:node ./ .envdefault
+USER node
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
 CMD ["npm start"]

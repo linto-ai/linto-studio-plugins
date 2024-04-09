@@ -8,5 +8,6 @@ COPY migration/docker-entrypoint.sh /
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 WORKDIR /usr/src/app/migration
-
+RUN  cd /usr/src/app ; chown -R node:node ./ .envdefault
+USER node
 CMD ["npm run migrate"]

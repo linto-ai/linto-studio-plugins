@@ -17,8 +17,10 @@ class ASR extends Component {
   constructor(app) {
     super(app);
     this.id = this.constructor.name;
-    this.startedAt = null
-    this.startTimestamp = null
+    // startedAt and startTimestamp will be reinit when transcription start
+    // we don't want null value here
+    this.startedAt = new Date().toISOString();
+    this.startTimestamp = Math.floor(new Date().getTime() / 1000)
     this.setTranscriber(process.env.ASR_PROVIDER);
     this.init(); //attaches event controllers
   }

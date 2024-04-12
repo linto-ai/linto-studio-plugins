@@ -35,13 +35,13 @@ module.exports = function () {
             case 'reset':
               // Handle reset message
               // Similar to free but emit a msg in the transcription
-              await this.reset();
               debug(`${this.uniqueId} received reset message`);
+              await this.reset();
               break;
             case 'start':
               // Handle start message
-              this.start();
               debug(`${this.uniqueId} received start message`);
+              this.start();
               break;
             default:
               debug(`${this.uniqueId} received unknown action ${action}`);

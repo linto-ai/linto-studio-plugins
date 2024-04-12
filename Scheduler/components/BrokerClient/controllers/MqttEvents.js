@@ -16,7 +16,10 @@ module.exports = async function () {
         }
         if (action === 'final') {
           const transcription = JSON.parse(message.toString());
-          this.saveTranscription(transcription, uniqueId); //save transcription to db using transcriber uniqueId
+          await this.saveTranscription(transcription, uniqueId); //save transcription to db using transcriber uniqueId
+          if (transcription.locutor == process.env.TRANSCRIBER_BOT_NAME && transcription.text == process.env.TRANSCRIBER_RESET_MESSAGE) {
+            await this.resetSessionUpdateDb(uniqueId);
+          }
         }
         break;
       default:

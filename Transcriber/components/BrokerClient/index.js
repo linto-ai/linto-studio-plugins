@@ -91,9 +91,14 @@ class BrokerClient extends Component {
     this.bound_session = null;
     this.state = BrokerClient.states.READY;
     debug(`${this.uniqueId} Freed from session`)
-    this.app.components['StreamingServer'].initialize()
+    await this.app.components['StreamingServer'].initialize()
     this.client.registerDomainSpecificValues({ bound_session: null })
     this.client.publishStatus();
+  }
+
+  async reset() {
+    this.app.components['ASR'].sendResetMessage();
+    await this.free();
   }
 }
 

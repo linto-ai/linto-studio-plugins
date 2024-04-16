@@ -57,7 +57,7 @@ class BrokerClient extends Component {
       clearTimeout(this.timeoutId)
     }
 
-    this.timeoutId = setTimeout(() => {
+    this.timeoutId = setTimeout(async () => {
       await this.syncSystem()
       this.timeoutId = null
     }, 3000)
@@ -125,6 +125,7 @@ class BrokerClient extends Component {
 
     for (const channel of erroredChannels) {
       try {
+        debug(`Enrolling errored channel ${channel.id}`);
         const transcriber = await this.enrollTranscriber(channel.transcriber_profile, channel.session)
         channel.transcriber_id = transcriber.uniqueId
         channel.stream_endpoint = transcriber.stream_endpoint
@@ -139,7 +140,7 @@ class BrokerClient extends Component {
           }, 3000)
         }
       } catch (error) {
-        debug(`No transcriber available for session ${channel.session.id}.`)
+        debug(`No transcriber available for session ${channel.session.id}. ${error}`)
       }
     }
   }
@@ -225,7 +226,6 @@ class BrokerClient extends Component {
       })
       for (const channel of channels) {
         await callback(channel)
-        this.client.publish(`transcriber/in/${channel.transcriber_id}/start`);
       }
     }
     catch (error) {
@@ -266,13 +266,17 @@ class BrokerClient extends Component {
     }
   }
 
-  async resetSession(sessionId) {
-    // This function free all the session transcriber and enroll new transcribers
-    // In order to follow the good process, the channel are put in errored and will be automatically
-    // reaffected to others transcribers
-    const error = await this.execOnChannels(sessionId, async (channel) => {
-      debug(`Resetting channel ${channel.name} in session ${channel.session.id}`);
-      this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
+  async resetSessionUpdateDb(transcriberId) {
+    try {
+      const channel = await Model.Channel.findOne({
+        where: {transcriber_id: transcriberId},
+        include: [
+          { model: Model.Session }
+        ]
+      })
+      if (!channel) {
+        throw new Error(`Channel with transcriber_id ${transcriberId} not found`)
+      }
       const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
       const newError = {
         date: new Date(),
@@ -285,6 +289,18 @@ class BrokerClient extends Component {
         stream_endpoint: null,
         transcriber_status: 'errored'
       })
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [RESET_SESSION_UPDATE_DB]: ${err.message}`);
+    }
+  }
+
+  async resetSession(sessionId) {
+    // This function free all the session transcriber and enroll new transcribers
+    // In order to follow the good process, the channel are put in errored and will be automatically
+    // reaffected to others transcribers
+    const error = await this.execOnChannels(sessionId, async (channel) => {
+      debug(`Resetting channel ${channel.name} in session ${channel.session.id}`);
+      this.client.publish(`transcriber/in/${channel.transcriber_id}/reset`);
     })
 
     if (error) {
@@ -358,7 +374,9 @@ class BrokerClient extends Component {
       }
       this.on(`transcriber_updated`, onTranscriberUpdated);
       //filter transcribers not enrolled in any session
-      const availableTranscribers = this.transcribers.filter(t => !t.bound_session);
+      const availableTranscribers = this.transcribers.filter(
+        t => !t.bound_session && (t.streamingServerStatus == 'ready' || t.streamingServerStatus == 'initialized')
+      );
       if (availableTranscribers.length === 0) {
         reject(new Error(`No available transcribers to enroll into session - ${this.transcribers.length} transcriber known by scheduler`));
       }

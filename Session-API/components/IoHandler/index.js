@@ -5,7 +5,7 @@ const socketIO = require('socket.io');
 
 class IoHandler extends Component {
     constructor(app) {
-        super(app, "WebServer") // Relies on a WebServer component to be registrated
+        super(app, "WebServer", "BrokerClient") // Relies on a WebServer component to be registrated
         this.id = this.constructor.name
         this.app = app
         //Adds socket.io

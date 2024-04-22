@@ -1,4 +1,7 @@
-FROM node:20
+ARG default_image=registry.fpfis.eu/scic/open-source-speech-to-text/source/node:20-ubuntu
+#non code.europe.eu
+FROM $default_image
+#end non code.europe.eu
 
 RUN apt-get update && \
     apt-get install -y \

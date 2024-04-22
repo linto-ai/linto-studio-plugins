@@ -5,6 +5,12 @@ services:
     env_file:
       - .envdefault
       - .envtest
+  
+  migration:
+    healthcheck:
+      disable: true
+    env_file:
+      - .envtest
 
   transcriber:
     healthcheck:

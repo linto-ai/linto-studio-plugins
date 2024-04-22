@@ -1,13 +1,15 @@
-FROM node:20
-
-RUN apt-get update && apt-get install -y mosquitto-clients
+ARG default_image=registry.fpfis.eu/scic/open-source-speech-to-text/source/node:20-alpine
+#non code.europe.eu
+FROM $default_image
+#end non code.europe.eu
+RUN apk add --no-cache libstdc++ dumb-init curl bash mosquitto-clients
 
 COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/
 COPY Scheduler/ /usr/src/app/scheduler
 
 RUN cd /usr/src/app/lib && npm install
-RUN cd /usr/src/app/scheduler && npm install
+RUN cd /usr/src/app/scheduler && npm install && npm cache clean --force  
 
 COPY wait-for-it.sh /
 COPY Scheduler/docker-entrypoint.sh /

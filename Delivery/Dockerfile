@@ -1,7 +1,5 @@
-ARG default_image=registry.fpfis.eu/scic/open-source-speech-to-text/source/node:20-alpine
-#non code.europe.eu
+ARG default_image=node:20-alpine3.19
 FROM $default_image
-#end non code.europe.eu
 
 RUN apk add --no-cache libstdc++ dumb-init curl bash 
 COPY lib/ /usr/src/app/lib

@@ -1,4 +1,4 @@
-ARG default_image=registry.fpfis.eu/scic/open-source-speech-to-text/source/node:20-alpine
+ARG default_image=node:20-alpine3.19
 #non code.europe.eu
 FROM $default_image
 #end non code.europe.eu

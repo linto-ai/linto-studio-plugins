@@ -42,6 +42,47 @@ set -e
 # This script test from end to end the service
 # To start this test, the following env var must be set
 
+if [ -f .envtest ]; then
+source .envtest
+else
+echo "
+ASR_ENDPOINT=${ASR_ENDPOINT}
+ASR_REGION=${ASR_REGION}
+ASR_API_KEY=${ASR_API_KEY}
+ASR_PROVIDER=microsoft
+ASR_LANGUAGE=fr-FR
+#ASR_USERNAME=
+#ASR_PASSWORD=
+DB_USER=myuser
+DB_PASSWORD=mypass
+DB_NAME=mydb
+DB_PORT=5432
+STREAMING_PASSPHRASE=false
+STREAMING_USE_PROXY=false
+STREAMING_PROXY_HOST=127.0.0.1
+SESSION_API_HOST=http://localhost
+BROKER_PORT=1883
+DELIVERY_WEBSERVER_HTTP_PORT=8001
+SESSION_API_WEBSERVER_HTTP_PORT=8002
+SESSION_API_BASE_PATH=/sessionapi
+FRONT_END_ADMIN_USERNAME=admin
+FRONT_END_ADMIN_PASSWORD=admin
+FRONT_END_PORT=8000
+FRONT_END_PUBLIC_URL=http://localhost/frontend
+DELIVERY_WS_BASE_PATH=/delivery
+SESSION_API_PUBLIC_URL=http://localhost/sessionapi
+DELIVERY_WS_PUBLIC_URL=ws://localhost
+DELIVERY_PUBLIC_URL=http://localhost/delivery
+DELIVERY_SESSION_URL=http://sessionapi:8002
+UDP_RANGE=8889-8999
+LETS_ENCRYPT_EMAIL=jsbevilacqua@linagora.com
+DOMAIN_NAME=localhost
+TRANSCRIBER_REPLICAS=1
+SESSION_SCHEDULER_URL=http://scheduler:8003
+SCHEDULER_WEBSERVER_HTTP_PORT=8003" > .envtest
+source .envtest
+fi
+
 generic_request() {
     local method=$1
     local url=$2
@@ -130,10 +171,19 @@ SESSION_URL="http://localhost/sessionapi/v1/sessions"
 echo "Start the service"
 docker compose --env-file .envtest -f compose.yml -f compose.test.yml down --volumes
 docker compose --env-file .envtest -f compose.yml -f compose.test.yml up --build -d
-
+retries=0
 while ! curl -s -o /dev/null -w "%{http_code}" $TRANSCRIBER_PROFILE_URL | grep -q 200; do
     echo "Waiting for containers..."
+    #curl_result=$(curl -o /dev/null -w "%{http_code}" $TRANSCRIBER_PROFILE_URL)
+    #echo "$curl_result"
     sleep 5
+    retries=$((retries + 1))
+    # docker compose --env-file .envtest -f compose.yml -f compose.test.yml up --build -d
+    if [[ $retries -eq 30 ]]; then 
+      echo "Couldn't verify the status of the transcriber"
+      docker compose --env-file .envtest -f compose.yml -f compose.test.yml down --volumes
+      exit 1
+    fi 
 done
 
 ## ---------------------

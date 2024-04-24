@@ -1,0 +1,95 @@
+variables:
+  DOCKER_DRIVER: overlay2
+
+.build_docker_images_services:
+  stage: build
+  image: registry.fpfis.eu/scic/open-source-speech-to-text/source/docker:latest
+  script: 
+    - ls -al
+    - apk add --no-cache bash
+    - ./scripts/build_docker.sh
+
+services:
+  - registry.fpfis.eu/scic/open-source-speech-to-text/source/docker:dind
+
+stages:
+  - prebuild
+  - tests
+  - build
+  - deploy
+
+pull_remote_images_and_retag:
+  image: registry.fpfis.eu/scic/open-source-speech-to-text/source/docker:latest
+  stage: prebuild
+  script: 
+    - docker pull node:20-alpine3.19
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker tag node:20-alpine3.19 "$REGISTRY_IMAGE_PREFIX/node:20-alpine"
+    - docker push "$REGISTRY_IMAGE_PREFIX/node:20-alpine"
+    - docker pull node:20
+    - docker tag node:20 "$REGISTRY_IMAGE_PREFIX/node:20-ubuntu"
+    - docker tag node:20 "$REGISTRY_IMAGE_PREFIX/node:20"
+    - docker push "$REGISTRY_IMAGE_PREFIX/node:20-ubuntu"
+    - docker push "$REGISTRY_IMAGE_PREFIX/node:20"
+    - docker pull docker:dind
+    - docker tag docker:dind "$REGISTRY_IMAGE_PREFIX/docker:dind"
+    - docker push "$REGISTRY_IMAGE_PREFIX/docker:dind"
+    - docker pull docker:latest
+    - docker tag docker:latest "$REGISTRY_IMAGE_PREFIX/docker:latest"
+    - docker push "$REGISTRY_IMAGE_PREFIX/docker:latest"
+    # login and push to nexus repo
+    - echo "$NEXUS_PASSWORD" | docker login $NEXUS_REPO --username $NEXUS_USER  --password-stdin 
+    - docker tag node:20-alpine3.19 "$NEXUS_REPO/node:20-alpine"
+    - docker push "$NEXUS_REPO/node:20-alpine"
+    - docker tag node:20 "$NEXUS_REPO/node:20-ubuntu"
+    - docker push "$NEXUS_REPO/node:20-ubuntu"
+    - docker tag docker:dind  "$NEXUS_REPO/docker:dind"
+    - docker push "$NEXUS_REPO/docker:dind"
+    - docker tag docker:latest "$NEXUS_REPO/docker:latest"
+    - docker push "$NEXUS_REPO/docker:latest"
+  when: manual
+
+deploy_migration:
+  image: registry.fpfis.eu/scic/open-source-speech-to-text/source/node:20-alpine
+  stage: deploy
+  variables:
+    DB_HOST: "10.178.181.91"
+    DB_PORT: 5432
+    DB_USER: "myuser"
+    DB_PASSWORD: "mypass"
+    DB_NAME: "mydb"
+    NODE_ENV: "production"
+  script: 
+    - cd migration/ && npm install && npm run migrate
+  when: manual
+
+build_images_dev:
+  extends: .build_docker_images_services
+  variables:
+    TAG: DEV
+  except:
+     - main
+     - tags
+
+# disabled for now because of the issue running in CI/CD of gitlab
+# integration_tests:
+#   image: registry.fpfis.eu/scic/open-source-speech-to-text/source/docker:latest
+#   stage: tests
+#   script:
+#     - apk add --no-cache bash curl gstreamer gstreamer-tools jq
+#     - touch .env
+#     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+#     - ./integration-test-ci.sh    
+#   after_script:
+#     - docker compose --env-file .envtest -f compose.yml -f compose.test.yml down --volumes
+#   except:
+#     - main
+#     - tags
+
+build_images_prod:
+  extends: .build_docker_images_services
+  variables:
+    TAG: latest
+  only:
+     - main
+     - tags

@@ -1,4 +1,5 @@
-FROM node:20
+ARG default_image=node:20
+FROM $default_image
 
 RUN apt-get update && \
     apt-get install -y \

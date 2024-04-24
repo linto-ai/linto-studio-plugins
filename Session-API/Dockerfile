@@ -1,11 +1,13 @@
-FROM node:20
+ARG default_image=node:20-alpine3.19
+FROM $default_image
 
+RUN apk add --no-cache libstdc++ dumb-init curl bash 
 COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/
 COPY Session-API/ /usr/src/app/sessionapi
 
 RUN cd /usr/src/app/lib && npm install
-RUN cd /usr/src/app/sessionapi && npm install
+RUN cd /usr/src/app/sessionapi && npm install && npm cache clean --force  
 
 COPY wait-for-it.sh /
 COPY Session-API/docker-entrypoint.sh /

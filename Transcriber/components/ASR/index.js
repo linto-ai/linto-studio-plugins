@@ -17,10 +17,8 @@ class ASR extends Component {
   constructor(app) {
     super(app);
     this.id = this.constructor.name;
-    // startedAt and startTimestamp will be reinit when transcription start
-    // we don't want null value here
-    this.startedAt = new Date().toISOString();
-    this.startTimestamp = Math.floor(new Date().getTime() / 1000)
+    this.startedAt = null
+    this.startTimestamp = null
     this.setTranscriber(process.env.ASR_PROVIDER);
     this.init(); //attaches event controllers
   }
@@ -71,7 +69,7 @@ class ASR extends Component {
       console.error(msg)
       this.state = ERROR
     })
-    this.transcriber.on('close', (code, reason) => {
+    this.transcriber.on('closed', (code, reason) => {
       debug(`ASR connexion closed with code ${code}`);
       this.state = CLOSED;
     });
@@ -82,18 +80,6 @@ class ASR extends Component {
     this.transcriber.on('transcribed', (transcription) => {
       this.emit('final', transcription);
     });
-  }
-
-  sendResetMessage() {
-      const final = {
-          "astart": this.startedAt,
-          "text": "Channel reset.",
-          "start": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
-          "end": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
-          "lang": 'EN-en',
-          "locutor": process.env.TRANSCRIBER_BOT_NAME
-      }
-      this.emit('final', final)
   }
 
 

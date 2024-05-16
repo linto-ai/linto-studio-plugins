@@ -63,7 +63,7 @@ class BrokerClient extends Component {
       this.emit("message", topic, message);
     });
   }
-
+  
   async setSession(sessionInfo) {
     const { sessionId, transcriberProfile } = sessionInfo;
     this.bound_session = sessionId;
@@ -76,7 +76,7 @@ class BrokerClient extends Component {
       this.app.components['ASR'].configure(transcriberProfile)
     }
     else {
-      this.app.components['StreamingServer'].once('initialized', () => {
+      this.app.components['StreamingServer'].on('initialized', () => {
         this.app.components['ASR'].configure(transcriberProfile)
       })
     }
@@ -91,14 +91,8 @@ class BrokerClient extends Component {
     this.bound_session = null;
     this.state = BrokerClient.states.READY;
     debug(`${this.uniqueId} Freed from session`)
-    await this.app.components['StreamingServer'].initialize()
     this.client.registerDomainSpecificValues({ bound_session: null })
     this.client.publishStatus();
-  }
-
-  async reset() {
-    this.app.components['ASR'].sendResetMessage();
-    await this.free();
   }
 }
 

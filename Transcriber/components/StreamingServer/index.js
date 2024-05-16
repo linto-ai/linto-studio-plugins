@@ -1,40 +1,8 @@
 const debug = require('debug')(`transcriber:StreamingServer`);
-const gstreamer = require('gstreamer-superficial');
 const { Component, CustomErrors } = require("live-srt-lib");
-const dgram = require('dgram');
-const { exec } = require('child_process');
-const fs = require('fs')
-
-async function findFreeUDPPortInRange() {
-  const [startPort, endPort] = process.env.UDP_RANGE.split('-');
-  for (let port = startPort; port <= endPort; port++) {
-    if (!(await isUDPPortInUse(port))) {
-      return port;
-    }
-  }
-  throw new Error(`No available UDP port found in range ${startPort}-${endPort}`);
-}
-
-function isUDPPortInUse(port) {
-  return new Promise((resolve, reject) => {
-    const socket = dgram.createSocket('udp4');
-    setTimeout(() => {
-      socket.bind(port, () => {
-        socket.once('close', () => {
-          resolve(false);
-        });
-        socket.close();
-      });
-    }, Math.floor(Math.random() * 4500) + 500); // Wait for a random time between 500 and 5000 milliseconds
-    socket.on('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        resolve(true);
-      } else {
-        reject(err);
-      }
-    });
-  });
-}
+const { Worker, SHARE_ENV } = require('worker_threads');
+const path = require('path');
+const NodeMediaServer = require('node-media-server');
 
 function generatePassphrase() {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
@@ -53,8 +21,11 @@ class StreamingServer extends Component {
     super(app);
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.state = StreamingServer.states.CLOSED;
-    this.streamURI = null;
-    this.error_repetition = 0
+    this.protocols = process.env.STREAMING_PROTOCOL.split(',').map(protocol => protocol.trim());
+    this.srtMode = process.env.SRT_MODE || "listener";
+    this.streamURIs = {}; // srt:..., rtmp:...
+    this.streamURI = ""; // as a comma separated list of URIs
+    this.servers = []; // array of server workers
     if (process.env.STREAMING_PASSPHRASE === "true") {
       this.passphrase = generatePassphrase();
     } else if (process.env.STREAMING_PASSPHRASE === "false") {
@@ -67,176 +38,131 @@ class StreamingServer extends Component {
     }
     this.streamingHost = process.env.STREAMING_HOST || "0.0.0.0";
     this.init().then(async () => {
-      await this.initStreamURI()
-      await this.initialize()
+      // intialize the streaming servers
+      this.initialize();
     })
   }
 
-  async initStreamURI() {
-      this.srtMode = process.env.SRT_MODE
-      this.port = await findFreeUDPPortInRange();
-      switch (process.env.STREAMING_PROTOCOL) {
-        case "SRT":
+  async initialize() {
+    try {
+      for (const server of this.servers) {
+        // terminate all servers workers
+        //remove message listeners
+        server.removeAllListeners();
+        server.terminate();
+      }
+      this.servers = [];
+      for (const protocol of this.protocols) {
+        switch (protocol) {
+          case "SRT":
+            this.initSRTServer();
+            break;
+          case "RTMP":
+            this.initRTMPServer();
+            break;
+          default:
+            throw new CustomErrors.streamingServerError("STREAMING_PROTOCOL_MISSMATCH", `STREAMING_PROTOCOL must be either SRT or RTMP, but got ${protocol}`)
+        }
+      }
+    } catch (error) {
+      debug(error)
+      process.exit(1)
+      // When the application receives an error message it should stop playback of the pipeline
+      // and not assume that more data will be played.
+      // It can be caused by a port conflict so we try to reload the pipeline only 5 times to mitigate this port conflict occuring with other transcriber instances
+      // exits the process with an error code. This will trigger a restart of the container by docker-compose or orchestrator
+    }
+  }
+
+  start() {
+
+  }
+
+  initSRTServer() {
+    // spawn a worker to handle the server
+    const worker = new Worker(path.join(__dirname, 'srt-worker.js'), {
+      workerData: {
+        mode: this.srtMode,
+        streamingHost: this.streamingHost,
+        passphrase: this.passphrase
+      },
+      env: SHARE_ENV
+    });
+    worker.postMessage('initialize');
+    // add server to the internal list of servers
+    this.servers.push(worker);
+    worker.on('message', (msg) => {
+      switch (msg.type) {
+        case 'error':
+          worker.terminate();
+          worker.removeAllListeners();
+          throw new CustomErrors.streamingServerError("STREAMING_SERVER_ERROR", msg.data);
+          break;
+        case 'reinit':
+          debug("Reinitializing SRT server")
+          this.state = StreamingServer.states.CLOSED;
+          worker.postMessage('initialize');
+          break;
+        case 'port_selected':
+          debug(`SRT server initialized on port ${msg.data}`)
+          this.srtPort = msg.data;
           const streamingProxyHost = process.env.STREAMING_PROXY_HOST === "false" ? this.streamingHost : process.env.STREAMING_PROXY_HOST || this.streamingHost;
-          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? this.port : process.env.STREAMING_PROXY_PORT || this.port;
-          this.streamURI = `srt://${streamingProxyHost}:${streamingProxyPort}?mode=${this.srtMode}`;
+          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? this.srtPort : process.env.STREAMING_PROXY_PORT || this.srtPort;
+          this.streamURIs.srt = `srt://${streamingProxyHost}:${streamingProxyPort}?mode=${this.srtMode}`;
           if (this.passphrase) {
-            this.streamURI += `&passphrase=${this.passphrase}`;
+            this.streamURIs.srt += `&passphrase=${this.passphrase}`;
           }
           if (this.srtMode === "caller") {
-            this.streamURI = this.streamURI.replace("caller", "listener")
+            this.streamURIs.srt = this.streamURIs.srt.replace("caller", "listener")
           } else if (this.srtMode === "listener") {
-            this.streamURI = this.streamURI.replace("listener", "caller")
+            this.streamURIs.srt = this.streamURIs.srt.replace("listener", "caller")
           }
+          this.rebuildState();
+          this.state = StreamingServer.states.INITIALIZED;
           break;
-        case "RTMP":
-          this.streamURI = `rtmp://${this.streamingHost}:${this.port}/${this.appName}/${this.streamName}`;
+        case 'info':
+          debug(msg.data);
+          break;
+        case 'ready':
+          debug("srt server ready to stream")
+          this.state = StreamingServer.states.READY;
+          break;
+        case 'streaming':
+          debug("srt server streaming")
+          this.state = StreamingServer.states.STREAMING;
           break;
         default:
-          throw new CustomErrors.streamingServerError("STREAMING_PROTOCOL_MISSMATCH", "STREAMING_PROTOCOL must be either SRT or RTMP")
+          break;
+        case 'closed':
+          debug("srt server closed")
+          this.state = StreamingServer.states.CLOSED;
+          break;
+        case 'eos':
+          debug("srt server End Of Stream")
+          this.emit('eos');
+          break;
+        case 'audio':
+          this.emit('audio', Buffer.from(msg.data));
+          break;
       }
+    });
   }
 
-  async initialize() {
-    if (this.pipeline) {
-      this.stop()
-    }
-
-    const { ERROR, INITIALIZED } = this.constructor.states
-    try {
-      this.internalStreamURI = `srt://${this.streamingHost}:${this.port}?mode=${this.srtMode}`;
-      if (this.passphrase) {
-        this.internalStreamURI += `&passphrase=${this.passphrase}`;
-      }
-      const pipelineString = `srtsrc uri="${this.internalStreamURI}" ! fakesink`;
-      this.pipeline = new gstreamer.Pipeline(pipelineString)
-      this.pipeline.pollBus(async (msg) => {
-        switch (msg.type) {
-          case 'error':
-            debug(msg)
-            // When the application receives an error message it should stop playback of the pipeline
-            // and not assume that more data will be played.
-            // It can be caused by a port conflict so we try to reload the pipeline only 5 times to mitigate this port conflict occuring with other transcriber instances
-            if (this.error_repetition > 5) {
-              debug("Too many errors when trying to start GStreamer pipeline")
-              process.exit(1) // exits the process with an error code. This will trigger a restart of the container by docker-compose or orchestrator
-            }
-            debug("Error when trying to create GStreamer streaming server, retrying...")
-            this.error_repetition += 1
-            this.stop()
-            await this.initStreamURI()
-            await this.initialize()
-          default:
-            break;
-        }
-      });
-
-      await this.pipeline.play()
-      this.state = INITIALIZED
-      debug(`Streaming Server is started on ${this.streamURI}`)
-    } catch (error) {
-      console.error(`Error when initializing transcriber: ${error}`)
-      this.state = ERROR;
-    }
+  //Switch transcriber to initialized state, rebuilds streamURI endpoint. Switching states triggers a emit event
+  rebuildState() {
+    this.streamURI = Object.values(this.streamURIs).join(',');
   }
 
-  async start(force = false) {
-    const { INITIALIZED, READY, ERROR, STREAMING } = this.constructor.states;
-
-    // if the transcriber is not initialized, we do nothing
-    if (this.state != INITIALIZED && !force) {
-      debug("Trying to start an uninitialized transcriber")
-      return
-    }
-
-    if (this.pipeline) {
-      this.stop()
-    }
-
-    let transcodePipelineString = `! queue
-    ! decodebin
-    ! queue
-    ! audioconvert
-    ! audio/x-raw,format=S16LE,channels=1
-    ! queue
-    ! audioresample
-    ! audio/x-raw,rate=16000
-    ! queue
-    ! appsink name=sink`
-    try {
-      switch (process.env.STREAMING_PROTOCOL) {
-        case "SRT":
-          this.internalStreamURI = `srt://${this.streamingHost}:${this.port}?mode=${this.srtMode}`;
-          if (this.passphrase) {
-            this.internalStreamURI += `&passphrase=${this.passphrase}`;
-          }
-          this.pipelineString = `srtsrc uri="${this.internalStreamURI}" ${transcodePipelineString}`;
-          break;
-        case "RTMP":
-          // TODO: add support for RTMP, WebRTC and maybe others 
-          this.appName = "live";
-          this.streamName = "stream";
-          this.pipelineString = `flvmux name=mux ! rtmpsink location=${this.streamURI} ${transcodePipelineString}`;
-          break;
-        default:
-          throw new CustomErrors.streamingServerError("STREAMING_PROTOCOL_MISSMATCH", "STREAMING_PROTOCOL must be either SRT or RTMP")
-      }
-
-
-      this.pipeline = new gstreamer.Pipeline(this.pipelineString);
-
-      this.pipeline.pollBus(async (msg) => {
-        switch (msg.type) {
-          case 'eos':
-            this.emit('eos'); // ASR/Controller will handle this to flush buffer and stop transcription
-            this.start(true)
-            break;
-          case 'state-changed':
-            if (msg._src_element_name === 'sink') {
-              // Here we might do something when the appsink state changes
-              //debug(`Sink state changed from ${msg['old-state']} to ${msg['new-state']}`);
-            }
-            break;
-          default:
-            break;
-        }
-      });
-
-      // Find the appsink element in the pipeline
-      this.appsink = this.pipeline.findChild('sink');
-
-      // Define a callback function to handle new audio samples
-      const onData = (buf, caps) => {
-        if ((this.state === READY && buf)) {
-          this.state = STREAMING;
-        }
-        if (buf) {
-          this.emit('audio', buf);
-          // Continue pulling audio samples from the appsink element, if no buffer, the pipeline pollbus will emit an eos event
-          this.appsink.pull(onData); // recurses
-        }
-      }
-
-      this.pipeline.play()
-      this.state = READY
-      this.appsink.pull(onData);
-      debug(`Streaming Server is reachable on ${this.streamURI}`)
-    } catch (error) {
-      console.log(error)
-      this.state = ERROR;
-      //this.start();
-    }
-
+  start() {
+    this.servers.forEach(server => {
+      server.postMessage('start');
+    })
   }
 
   stop() {
-    this.pipeline.stop();
-    if (this.appsink) {
-      delete this.appsink
-    }
-    delete this.appsink;
-    delete this.pipeline
-    this.state = StreamingServer.states.CLOSED;
+    this.servers.forEach(server => {
+      server.postMessage('stop');
+    })
   }
 }
 

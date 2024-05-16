@@ -168,6 +168,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 debug("ASR recognition stopped");
                 this.recognizer.close();
                 this.recognizer = null;
+                this.emit('closed');
             });
         }
     }

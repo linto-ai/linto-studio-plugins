@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+
 # To launch the test, you must create a file named .envtest with the following content:
 #
 # ASR_ENDPOINT=[MICROSOFT ASR ENDPOINT]
@@ -41,6 +41,8 @@ set -e
 
 # This script test from end to end the service
 # To start this test, the following env var must be set
+
+source .envtest
 
 generic_request() {
     local method=$1

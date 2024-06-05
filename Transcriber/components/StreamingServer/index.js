@@ -22,7 +22,7 @@ class StreamingServer extends Component {
     this.state = StreamingServer.states.CLOSED;
     this.protocols = process.env.STREAMING_PROTOCOL.split(',').map(protocol => protocol.trim());
     this.srtMode = process.env.SRT_MODE || "listener";
-    this.streamURIs = {}; // srt:..., rtmp:...
+    this.streamURIs = {}; // srt:..., rtmp:..., websocket:...
     this.streamURI = ""; // as a comma separated list of URIs
     this.servers = []; // array of server workers
     if (process.env.STREAMING_PASSPHRASE === "true") {
@@ -59,8 +59,11 @@ class StreamingServer extends Component {
           case "RTMP":
             this.initRTMPServer();
             break;
+          case "WEBSOCKET":
+            this.initWebsocketServer();
+            break;
           default:
-            throw new CustomErrors.streamingServerError("STREAMING_PROTOCOL_MISSMATCH", `STREAMING_PROTOCOL must be either SRT or RTMP, but got ${protocol}`)
+            throw new CustomErrors.streamingServerError("STREAMING_PROTOCOL_MISSMATCH", `STREAMING_PROTOCOL must be either SRT or RTMP or WEBSOCKET, but got ${protocol}`)
         }
       }
     } catch (error) {
@@ -195,6 +198,66 @@ class StreamingServer extends Component {
       }
     });
   }
+
+  initWebsocketServer() {
+    // spawn a worker to handle the server
+    const worker = new Worker(path.join(__dirname, 'websocket-worker.js'), {
+      workerData: {
+        streamingHost: this.streamingHost,
+      },
+      env: SHARE_ENV
+    });
+    worker.postMessage('initialize');
+    // add server to the internal list of servers
+    this.servers.push(worker);
+    worker.on('message', (msg) => {
+      switch (msg.type) {
+        case 'error':
+          worker.terminate();
+          worker.removeAllListeners();
+          throw new CustomErrors.streamingServerError("STREAMING_SERVER_ERROR", msg.data);
+        case 'reinit':
+          debug("Reinitializing WEBSOCKET server")
+          this.state = StreamingServer.states.CLOSED;
+          worker.postMessage('initialize');
+          break;
+        case 'port_selected':
+          debug(`WEBSOCKET server initialized on port ${msg.data}`)
+          const websocketPort = msg.data;
+          const streamingProxyHost = process.env.STREAMING_PROXY_HOST === "false" ? this.streamingHost : process.env.STREAMING_PROXY_HOST || this.streamingHost;
+          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? websocketPort : process.env.STREAMING_PROXY_PORT || websocketPort;
+          this.streamURIs.websocket = `ws://${streamingProxyHost}:${streamingProxyPort}/stream`;
+          this.rebuildState();
+          this.state = StreamingServer.states.INITIALIZED;
+          break;
+        case 'info':
+          debug(msg.data);
+          break;
+        case 'ready':
+          debug("WEBSOCKET server ready to stream")
+          this.state = StreamingServer.states.READY;
+          break;
+        case 'streaming':
+          debug("WEBSOCKET server streaming")
+          this.state = StreamingServer.states.STREAMING;
+          break;
+        default:
+          break;
+        case 'closed':
+          debug("WEBSOCKET server closed")
+          this.state = StreamingServer.states.CLOSED;
+          break;
+        case 'eos':
+          debug("WEBSOCKET server end of stream")
+          this.emit('eos');
+          break;
+        case 'audio':
+          this.emit('audio', Buffer.from(msg.data));
+          break;
+      }
+    });
+  }
+
 
 
   //Switch transcriber to initialized state, rebuilds streamURI endpoint. Switching states triggers a emit event

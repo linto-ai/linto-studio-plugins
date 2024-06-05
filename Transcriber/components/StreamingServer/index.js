@@ -74,10 +74,6 @@ class StreamingServer extends Component {
     }
   }
 
-  start() {
-
-  }
-
   initSRTServer() {
     // spawn a worker to handle the server
     const worker = new Worker(path.join(__dirname, 'srt-worker.js'), {
@@ -97,7 +93,6 @@ class StreamingServer extends Component {
           worker.terminate();
           worker.removeAllListeners();
           throw new CustomErrors.streamingServerError("STREAMING_SERVER_ERROR", msg.data);
-          break;
         case 'reinit':
           debug("Reinitializing SRT server")
           this.state = StreamingServer.states.CLOSED;
@@ -105,9 +100,9 @@ class StreamingServer extends Component {
           break;
         case 'port_selected':
           debug(`SRT server initialized on port ${msg.data}`)
-          this.srtPort = msg.data;
+          const srtPort = msg.data;
           const streamingProxyHost = process.env.STREAMING_PROXY_HOST === "false" ? this.streamingHost : process.env.STREAMING_PROXY_HOST || this.streamingHost;
-          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? this.srtPort : process.env.STREAMING_PROXY_PORT || this.srtPort;
+          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? srtPort : process.env.STREAMING_PROXY_PORT || srtPort;
           this.streamURIs.srt = `srt://${streamingProxyHost}:${streamingProxyPort}?mode=${this.srtMode}`;
           if (this.passphrase) {
             this.streamURIs.srt += `&passphrase=${this.passphrase}`;

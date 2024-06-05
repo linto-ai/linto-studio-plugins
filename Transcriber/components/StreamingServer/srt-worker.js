@@ -100,7 +100,6 @@ async function initialize() {
 async function start(force = false) {
     // if the transcriber is not initialized, we do nothing
     if (state != states.INITIALIZED && !force) {
-        console.log(state)
         parentPort.postMessage({ type: 'info', data: `Trying to start an uninitialized transcriber` });
         return
     }
@@ -157,15 +156,23 @@ async function start(force = false) {
             }
             if (buf) {
                 parentPort.postMessage({ type: 'audio', data: buf });
-                // Continue pulling audio samples from the appsink element, if no buffer, the pipeline pollbus will emit an eos event
-                appsink.pull(onData); // recurses
             }
         }
+
+        const pullSamples = () => {
+          appsink.pull((buf, caps) => {
+            if (buf) {
+              onData(buf, caps);
+              // Continue pulling samples without blocking event loop
+              setImmediate(pullSamples);
+            }
+          });
+        };
 
         await pipeline.play()
         state = states.READY;
         parentPort.postMessage({ type: 'ready', data: `SRT Server Ready to receive stream` });
-        appsink.pull(onData);
+        pullSamples();
     } catch (error) {
         state = states.ERROR;
         parentPort.postMessage({ type: 'error', data: `Error when starting transcriber: ${error}` });
@@ -173,7 +180,7 @@ async function start(force = false) {
 
 }
 
-function stop() {
+async function stop() {
     if (pipeline) {
         pipeline.stop();
         pipeline = null;

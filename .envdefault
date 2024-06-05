@@ -28,6 +28,7 @@ STREAMING_PROXY_PORT=false # Proxy port for inbound streaming (false to disable)
 STREAMING_PROTOCOL=SRT # SRT, RTMP, WEBRTC
 STREAMING_HOST=0.0.0.0 # Listening address for transcriber. 0.0.0.0 for all interfaces (listener), you might use a specific IP address for SRT rendez-vous/caller mode
 UDP_RANGE=8889-8999
+TCP_RANGE=8900-8910
 STREAMING_PASSPHRASE=true # true, false or a passphrase (at least 10 chars). If true a random passphrase will be generated and published to the broker when registering
 #SRT
 SRT_MODE=listener # listerner, caller, rendezvous

@@ -2,7 +2,6 @@ const debug = require('debug')(`transcriber:StreamingServer`);
 const { Component, CustomErrors } = require("live-srt-lib");
 const { Worker, SHARE_ENV } = require('worker_threads');
 const path = require('path');
-const NodeMediaServer = require('node-media-server');
 
 function generatePassphrase() {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
@@ -142,6 +141,61 @@ class StreamingServer extends Component {
       }
     });
   }
+
+  initRTMPServer() {
+    // spawn a worker to handle the server
+    const worker = new Worker(path.join(__dirname, 'rtmp-worker.js'), {
+      workerData: {
+        streamingHost: this.streamingHost,
+      },
+      env: SHARE_ENV
+    });
+    worker.postMessage('initialize');
+    // add server to the internal list of servers
+    this.servers.push(worker);
+    worker.on('message', (msg) => {
+      switch (msg.type) {
+        case 'error':
+          worker.terminate();
+          worker.removeAllListeners();
+          throw new CustomErrors.streamingServerError("STREAMING_SERVER_ERROR", msg.data);
+        case 'port_selected':
+          debug(`RTMP server initialized on port ${msg.data}`)
+          const rtmpPort = msg.data;
+          const streamingProxyHost = process.env.STREAMING_PROXY_HOST === "false" ? this.streamingHost : process.env.STREAMING_PROXY_HOST || this.streamingHost;
+          const streamingProxyPort = process.env.STREAMING_PROXY_PORT === "false" ? rtmpPort : process.env.STREAMING_PROXY_PORT || rtmpPort;
+          this.streamURIs.rtmp = `rtmp://${streamingProxyHost}:${streamingProxyPort}/live/stream`;
+          this.rebuildState();
+          this.state = StreamingServer.states.INITIALIZED;
+          break;
+        case 'info':
+          debug(msg.data);
+          break;
+        case 'ready':
+          debug("rtmp server ready to stream")
+          this.state = StreamingServer.states.READY;
+          break;
+        case 'streaming':
+          debug("rtmp server streaming")
+          this.state = StreamingServer.states.STREAMING;
+          break;
+        default:
+          break;
+        case 'closed':
+          debug("rtmp server closed")
+          this.state = StreamingServer.states.CLOSED;
+          break;
+        case 'eos':
+          debug("rtmp server End Of Stream")
+          this.emit('eos');
+          break;
+        case 'audio':
+          this.emit('audio', Buffer.from(msg.data));
+          break;
+      }
+    });
+  }
+
 
   //Switch transcriber to initialized state, rebuilds streamURI endpoint. Switching states triggers a emit event
   rebuildState() {

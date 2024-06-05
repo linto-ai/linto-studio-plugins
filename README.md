@@ -148,6 +148,12 @@ You can use a command like this:
 gst-launch-1.0 filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtsink uri="srt://127.0.0.1:8889?mode=caller"
 ```
 
+Or like this for RTMP:
+
+```
+gst-launch-1.0 -v filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_aac ! flvmux ! rtmpsink location=rtmp://localhost:1935/live/STREAM_NAME
+```
+
 You should now see the transcriptions appearing in real time.
 
 

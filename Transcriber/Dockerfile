@@ -41,7 +41,6 @@ RUN cd /usr/src/app/transcriber && npm install
 
 # Étape finale
 FROM $default_image
-
 # Installer les dépendances d'exécution seulement
 RUN apk update && \
     apk add --no-cache \

@@ -12,7 +12,7 @@ echo "Building docker image for $COMPONENT"
 COMPONENT_TAG=$(echo "$COMPONENT" | awk '{print tolower($0)}' | tr -d '-')
 docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
 docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-if [[ $COMPONENT == "front-end" || $COMPONENT == "Transcriber" ]]; then
+if [[ $COMPONENT == "front-end" ]]; then
 docker build -t "$REGISTRY_IMAGE_PREFIX/$COMPONENT_TAG:$CI_COMMIT_SHORT_SHA" -t "$REGISTRY_IMAGE_PREFIX/$COMPONENT_TAG:$TAG" --build-arg default_image="$REGISTRY_IMAGE_PREFIX/node:20-ubuntu" -f "$COMPONENT/Dockerfile" .
 else
 docker build -t "$REGISTRY_IMAGE_PREFIX/$COMPONENT_TAG:$CI_COMMIT_SHORT_SHA" -t "$REGISTRY_IMAGE_PREFIX/$COMPONENT_TAG:$TAG" --build-arg default_image="$REGISTRY_IMAGE_PREFIX/node:20-alpine" -f "$COMPONENT/Dockerfile" .

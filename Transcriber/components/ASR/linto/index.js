@@ -73,8 +73,6 @@ class LintoTranscriber extends EventEmitter {
     transcribe(buffer) {
         if (this.ws) {
             this.ws.send(buffer);
-        } else {
-            debug("Trying to send a buffer without websocket");
         }
     }
 

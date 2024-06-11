@@ -67,7 +67,7 @@ class MicrosoftTranscriber extends EventEmitter {
         };
         this.recognizer.sessionStopped = (s, e) => {
             debug(`Microsoft ASR session stopped: ${e.reason}`);
-            this.emit('close', e.reason);
+            this.emit('closed', e.reason);
         };
     }
 

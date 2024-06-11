@@ -91,8 +91,9 @@ async function start(force = false) {
     }
 
     if(websocketServer) {
-      websocketServer.close();
+      stop();
     }
+
 
     try {
       websocketServer = new WebSocket.Server({ server: httpServer });
@@ -123,6 +124,11 @@ async function start(force = false) {
 }
 
 function stop() {
+    if(websocketServer) {
+      websocketServer.close();
+      websocketServer = null;
+    }
+
     state = states.CLOSED
     parentPort.postMessage({ type: 'closed', data: `Websocket Server closed` });
 }

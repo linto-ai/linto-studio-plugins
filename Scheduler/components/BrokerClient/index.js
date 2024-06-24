@@ -175,7 +175,10 @@ class BrokerClient extends Component {
         name: requestBody.name || 'New session',
         start_time: null,
         end_time: null,
-        errorred_on: null
+        errorred_on: null,
+        owner: requestBody.owner || null,
+        organizationId: requestBody.organizationId || null,
+        public: requestBody.public !== undefined ? requestBody.public : true,
       }, { transaction: t });
       // Create a new channel for each channel in the request body
       let createdChannels = [];

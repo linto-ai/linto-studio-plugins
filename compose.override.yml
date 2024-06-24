@@ -4,28 +4,28 @@ services:
       disable: true
     volumes:
       - ./Delivery:/usr/src/app/delivery
-    command: ["npm install && npm run start-live"]
+    command: ["npm run start-live"]
 
   transcriber:
     healthcheck:
       disable: true
     volumes:
       - ./Transcriber:/usr/src/app/transcriber
-    command: ["npm install && npm run start-live"]
+    command: ["npm run start-live"]
 
   sessionapi:
     healthcheck:
       disable: true
     volumes:
       - ./Session-API:/usr/src/app/sessionapi
-    command: ["npm install && npm run start-live"]
+    command: ["npm run start-live"]
 
   scheduler:
     healthcheck:
       disable: true
     volumes:
       - ./Scheduler:/usr/src/app/scheduler
-    command: ["npm install && npm run start-live"]
+    command: ["npm run start-live"]
 
   frontend:
     healthcheck:

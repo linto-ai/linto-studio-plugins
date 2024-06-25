@@ -35,6 +35,18 @@ module.exports = {
       updatedAt: {
         allowNull: false,
         type: Sequelize.DATE
+      },
+      owner: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      organizationId: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      public: {
+          type: Sequelize.BOOLEAN,
+          allowNull: false,
       }
     });
   },

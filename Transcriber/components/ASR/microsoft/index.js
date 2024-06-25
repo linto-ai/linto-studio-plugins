@@ -67,7 +67,7 @@ class MicrosoftTranscriber extends EventEmitter {
         };
         this.recognizer.sessionStopped = (s, e) => {
             debug(`Microsoft ASR session stopped: ${e.reason}`);
-            this.emit('close', e.reason);
+            this.emit('closed', e.reason);
         };
     }
 
@@ -160,6 +160,9 @@ class MicrosoftTranscriber extends EventEmitter {
         if (this.recognizer) {
             this.pushStream.write(buffer);
         }
+        else {
+            debug("Microsoft ASR transcriber can't decode buffer");
+        }
     }
 
     stop() {
@@ -168,6 +171,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 debug("ASR recognition stopped");
                 this.recognizer.close();
                 this.recognizer = null;
+                this.emit('closed');
             });
         }
     }

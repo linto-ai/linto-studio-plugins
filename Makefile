@@ -14,6 +14,9 @@ run-dev: migrate
 run-docker-dev:
 	docker compose up --build
 
+stop-docker-dev:
+	docker compose stop
+
 down-docker-dev:
 	docker compose down
 

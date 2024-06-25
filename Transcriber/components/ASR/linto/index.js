@@ -66,7 +66,7 @@ class LintoTranscriber extends EventEmitter {
         });
 
         this.ws.on('close', (code, reason) => {
-            this.emit('close', code, reason);
+            this.emit('closed', code, reason);
         });
     }
 

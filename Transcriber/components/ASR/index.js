@@ -71,7 +71,7 @@ class ASR extends Component {
       console.error(msg)
       this.state = ERROR
     })
-    this.transcriber.on('close', (code, reason) => {
+    this.transcriber.on('closed', (code, reason) => {
       debug(`ASR connexion closed with code ${code}`);
       this.state = CLOSED;
     });
@@ -95,7 +95,6 @@ class ASR extends Component {
       }
       this.emit('final', final)
   }
-
 
   async startTranscription() {
     this.transcriber.start();

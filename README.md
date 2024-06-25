@@ -70,7 +70,7 @@ DELIVERY_WS_PUBLIC_URL=ws://localhost
 DELIVERY_PUBLIC_URL=http://localhost/delivery
 DELIVERY_SESSION_URL=http://sessionapi:8002
 UDP_RANGE=8889-8999
-LETS_ENCRYPT_EMAIL=jsbevilacqua@linagora.com
+LETS_ENCRYPT_EMAIL=fake@fake.com
 DOMAIN_NAME=localhost
 TRANSCRIBER_REPLICAS=2
 SESSION_SCHEDULER_URL=http://scheduler:8003
@@ -146,6 +146,12 @@ You can use a command like this:
 
 ```
 gst-launch-1.0 filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtsink uri="srt://127.0.0.1:8889?mode=caller"
+```
+
+Or like this for RTMP:
+
+```
+gst-launch-1.0 -v filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_aac ! flvmux ! rtmpsink location=rtmp://localhost:1935/live/STREAM_NAME
 ```
 
 You should now see the transcriptions appearing in real time.

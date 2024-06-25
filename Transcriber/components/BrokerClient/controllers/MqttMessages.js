@@ -40,8 +40,8 @@ module.exports = function () {
               break;
             case 'start':
               // Handle start message
-              debug(`${this.uniqueId} received start message`);
               this.start();
+              debug(`${this.uniqueId} received start message`);
               break;
             default:
               debug(`${this.uniqueId} received unknown action ${action}`);

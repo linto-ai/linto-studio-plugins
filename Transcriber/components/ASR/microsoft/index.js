@@ -160,6 +160,9 @@ class MicrosoftTranscriber extends EventEmitter {
         if (this.recognizer) {
             this.pushStream.write(buffer);
         }
+        else {
+            debug("Microsoft ASR transcriber can't decode buffer");
+        }
     }
 
     stop() {

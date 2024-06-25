@@ -32,6 +32,12 @@ module.exports = function () {
               this.free();
               debug(`${this.uniqueId} received free message`);
               break;
+            case 'reset':
+              // Handle reset message
+              // Similar to free but emit a msg in the transcription
+              debug(`${this.uniqueId} received reset message`);
+              await this.reset();
+              break;
             case 'start':
               // Handle start message
               this.start();

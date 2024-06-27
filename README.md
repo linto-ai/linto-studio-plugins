@@ -262,6 +262,61 @@ In order to comprehensively test the project, integration tests have been added 
 
 After creating the `.envtest` file (as documented at the beginning of integration-test.sh), these tests can be simply run with ./integration-test.sh.
 
+## Custom ASR
+
+There are currently two ASRs available: Microsoft and Linto.
+They are located in Transcriber/components/ASR/linto and Transcriber/components/ASR/microsoft.
+You can use them as inspiration to create your own ASR.
+
+Here are the rules to follow:
+
+1. Create a folder named after your ASR. The name of the folder will be the name specified in the "type" field of your transcriber profile.
+2. Create an `index.js` file in this folder.
+3. This `index.js` must export the class of your ASR by default: module.exports = MyASRTranscriber;
+4. Your ASR class must extend EventEmitter and implement the following API.
+5. Your class must then emit the following events API using `this.emit`.
+
+### API
+
+- `start(): null` -> Connect to your ASR system
+- `stop(): null` -> Disconnect to your ASR system and end ASR transactions
+- `transcribe(buffer: Buffer): null` -> Buffer or raw audio to send to your ASR system.
+
+The buffer can be configured with these environment variables:
+
+- `MAX_AUDIO_BUFFER`: If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
+- `MIN_AUDIO_BUFFER`: Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
+- `BYTES_PER_SAMPLE`: 1 for 8-bit, 2 for 16-bit, 4 for 32-bit
+
+```
+class MyASRTranscriber extends EventEmitter {
+    start() {}
+    stop() {}
+    transcribe(buffer) {}
+}
+```
+
+### Event API
+
+- `this.emit('connecting')` -> Called in the `start` function when the ASR connection is not ready yet
+- `this.emit('ready')` -> Called in the `start` function when the ASR connexion is ready to work
+- `this.emit('closed')` -> Called in the `stop` function when the ASR connexion is really closed.
+- `this.emit('transcribing', text: string)` -> Called in the `transcribe` function for partial transcription. `text` is the partial transcription.
+- `this.emit('transcribed', data: object)` -> Called in the `transcriber` function for final transcription. The `data` argument is an object with the following attributes:
+
+```
+const data = {
+    "astart": ISO format datetime of the ASR session start,
+    "text": The final transcription,
+    "start": The number of seconds since the start of the transcription,
+    "end": Start plus the duration of this transcription in seconds,
+    "lang": The language,
+    "locutor": The locutor (may be null),
+}
+```
+
+- `this.emit('error', text: string)` -> Called when there is an error. `text` is the error message.
+
 ## Some useful documentation below
 
 ### FFMPEG COMMANDS

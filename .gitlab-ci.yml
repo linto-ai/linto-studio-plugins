@@ -15,8 +15,19 @@ services:
 stages:
   - prebuild
   - tests
+  - publish
   - build
   - deploy
+
+publish_to_code_europa_eu:
+  stage: publish
+  image: registry.fpfis.eu/scic/open-source-speech-to-text/source/docker:latest
+  script:
+   - apk add --no-cache bash
+   - ./scripts/sync_to_code_europa_eu.sh
+  only:
+    - main
+  when: manual
 
 pull_remote_images_and_retag:
   image: registry.fpfis.eu/scic/open-source-speech-to-text/source/docker:latest

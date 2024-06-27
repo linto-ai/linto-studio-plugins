@@ -1,9 +1,18 @@
 const debug = require('debug')(`transcriber:ASR`);
+const path = require('path');
+const fs = require('fs');
 const { Component } = require("live-srt-lib");
-const LintoTranscriber = require('./linto');
-const MicrosoftTranscriber = require('./microsoft');
 const ASR_ERROR = require('./error.js')
 
+
+function loadAsr(asrName) {
+  const asrPath = path.join(__dirname, asrName, 'index.js');
+  if (!fs.existsSync(asrPath)) {
+    throw new Error(`No ASR named '${asrName}' in '${asrPath}'`);
+  }
+  const AsrClass = require(asrPath);
+  return AsrClass;
+}
 
 class ASR extends Component {
   static states = {
@@ -36,17 +45,8 @@ class ASR extends Component {
     if (this.transcriber) {
       this.transcriber.removeAllListeners();
     }
-    switch (transcriber) {
-      case 'linto':
-        this.transcriber = transcriberProfile ? new LintoTranscriber(transcriberProfile) : new LintoTranscriber();
-        break;
-      case 'microsoft':
-        this.transcriber = transcriberProfile ? new MicrosoftTranscriber(transcriberProfile) : new MicrosoftTranscriber();
-        break;
-      default:
-        // handle default case
-        break;
-    }
+    const AsrClass = loadAsr(transcriber)
+    this.transcriber = new AsrClass(transcriberProfile);
     this.state = ASR.states.CLOSED;
     // Set new listeners
     this.transcriber.on('connecting', () => {

@@ -1,9 +1,11 @@
 const { fork } = require('child_process');
+const crypto = require('crypto');
 const { CustomErrors } = require("live-srt-lib");
 const path = require('path');
 
-function generatePassphrase() {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+function generatePassphrase(length=26) {
+  const bytesNeeded = Math.ceil(length * 3 / 4);
+  return crypto.randomBytes(bytesNeeded).toString('base64').substring(0, length);
 }
 
 class SRTServer {

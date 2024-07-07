@@ -51,44 +51,12 @@ class WebServer extends Component {
 
         //final "catch all" 4 parameters function 500 Error
         this.express.use((err, req, res, next) => {
-            console.error(err)
-            res.status(500)
-            res.end()
+            res.status(err.status || 500)
+            res.json({
+                error: err.message})
         })
 
         return this.init()
-    }
-
-    waitAckSessionCreation(sessionId) {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error(`Session creation timeout`));
-                this.removeListener(`session_ack_creation`, onSessionAckCreation);
-                this.removeListener(`session_reject_creation`, onSessionRejectCreation);
-            }, 10000);
-
-            const onSessionAckCreation = (ackSessionId) => {
-                if (ackSessionId === sessionId) {
-                    clearTimeout(timeout);
-                    resolve(sessionId);
-                    this.removeListener(`session_ack_creation`, onSessionAckCreation);
-                    this.removeListener(`session_reject_creation`, onSessionRejectCreation);
-                }
-            };
-
-            const onSessionRejectCreation = (payload) => {
-                payload = payload
-                if (payload.sessionId === sessionId) {
-                    clearTimeout(timeout);
-                    reject(new Error(payload.error));
-                    this.removeListener(`session_ack_creation`, onSessionAckCreation);
-                    this.removeListener(`session_reject_creation`, onSessionRejectCreation);
-                }
-            };
-
-            this.on(`session_ack_creation`, onSessionAckCreation);
-            this.on(`session_reject_creation`, onSessionRejectCreation);
-        });
     }
 }
 

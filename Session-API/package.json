@@ -5,8 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node Session-API.js",
-    "start-live": "npx nodemon Session-API.js",
-    "create_db": "node create_db.js"
+    "start-live": "npx nodemon Session-API.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [
@@ -31,6 +30,7 @@
     "debug": "^4.3.4",
     "express": "^4.18.2",
     "express-session": "^1.17.3",
+    "language-tags": "^1.0.9",
     "live-srt-lib": "file:../lib",
     "socket.io": "^4.7.1",
     "swagger-jsdoc": "^6.2.8",

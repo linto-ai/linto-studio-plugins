@@ -9,9 +9,6 @@ const validateTranscriberProfile = (body) => {
     if (!config.type || !config.name || !config.description || !config.languages || !config.languages.length) {
         return { error: 'TranscriberProfile object is missing required properties', status: 400 };
     }
-    if (config.type !== 'linto' && config.type !== 'microsoft') {
-        return { error: `Invalid TranscriberProfile type: ${config.type}`, status: 400 };
-    }
     if (config.type === 'linto' && (!config.languages.every(lang => lang.candidate && lang.endpoint))) {
         return { error: 'Invalid Linto TranscriberProfile endpoint or languages', status: 400 };
     }

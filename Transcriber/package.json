@@ -26,7 +26,9 @@
   "license": "EUPL",
   "dependencies": {
     "debug": "^4.3.4",
+    "eventemitter3": "^5.0.1",
     "gstreamer-superficial": "^1.7.4",
+    "linto-node-srt": "git+https://github.com/linto-ai/node-srt.git",
     "live-srt-lib": "file:../lib",
     "microsoft-cognitiveservices-speech-sdk": "1.38.0",
     "node-media-server": "^2.6.6",

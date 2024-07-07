@@ -1,7 +1,7 @@
 const debug = require('debug')('transcriber:BrokerClient:mqtt-messages');
 
-//Deals with MQTT messages
-//here, "this" is bound to the BrokerClient component
+// Deals with MQTT messages
+// here, "this" is bound to the BrokerClient component
 module.exports = function () {
   this.client.on("message", async (topic, message) => {
     const [type, ...parts] = topic.split('/');
@@ -9,47 +9,41 @@ module.exports = function () {
       case 'scheduler':
         const scheduler = JSON.parse(message.toString());
         if (scheduler.online && this.state == this.constructor.states.WAITING_SCHEDULER) {
-          debug(`${this.uniqueId} scheduler online, registering...`)
+          debug(`${this.uniqueId} scheduler online, registering...`);
           this.client.publishStatus();
+          // Scheduler online, activate streaming server
+          this.app.components['StreamingServer'].startServers();
           this.state = this.constructor.states.READY;
         }
         if (!scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
-          this.state = this.constructor.states.WAITING_SCHEDULER
-          debug(`${this.uniqueId} scheduler offline, waiting...`)
+          this.state = this.constructor.states.WAITING_SCHEDULER;
+          // Scheduler offline, deactivate streaming server
+          this.app.components['StreamingServer'].stopServers();
+          debug(`${this.uniqueId} scheduler offline, waiting...`);
         }  
         break;
-      case 'transcriber':
-        const [direction, id, action] = parts;
-        if (direction === 'in' && id === this.uniqueId) {
-          switch (action) {
-            case 'enroll':
-              // Handle enroll message
-              debug(`${this.uniqueId} received enroll message`);
-              await this.setSession(JSON.parse(message));
-              break;
-            case 'free':
-              // Handle free message
-              this.free();
-              debug(`${this.uniqueId} received free message`);
-              break;
-            case 'reset':
-              // Handle reset message
-              // Similar to free but emit a msg in the transcription
-              debug(`${this.uniqueId} received reset message`);
-              await this.reset();
-              break;
-            case 'start':
-              // Handle start message
-              this.start();
-              debug(`${this.uniqueId} received start message`);
-              break;
-            default:
-              debug(`${this.uniqueId} received unknown action ${action}`);
+        case 'system':
+          const [direction, ...subparts] = parts;
+          if (direction === 'out') {
+            const [systemType, ...systemParts] = subparts;
+            if (systemType === 'sessions') {
+              const action = systemParts.join('/');
+              switch (action) {
+                case 'statuses':
+                  // Handle system/out/sessions/statuses messages here
+                  const sessions = JSON.parse(message);
+                  this.handleSessions(sessions);
+                  break;
+                default:
+                  break;
+              }
+            } else {
+              debug(`Received message for unknown system type ${systemType}`);
+            }
           }
-        }
-        break;
+          break;
       default:
         debug(`Received message for unknown type ${type}`);
     }
   });
-}
+};

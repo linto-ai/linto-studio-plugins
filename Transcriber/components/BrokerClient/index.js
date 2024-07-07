@@ -8,36 +8,66 @@ class BrokerClient extends Component {
     CONNECTING: 'connecting',
     READY: 'ready',
     WAITING_SCHEDULER: 'waiting_scheduler',
-    ERROR: 'error',
-    SESSION_BOUND: 'session_bound', //connected and bound to a session
+    ERROR: 'error'
   };
 
   constructor(app) {
     super(app);
     this._state = BrokerClient.states.DISCONNECTED;
     this.id = this.constructor.name; //singleton ID within transcriber app
+    this.sessions = []; //sessions will be updated by the system/out/sessions/statuses messages (see controllers/MqttMessages.js)
     this.uniqueId = uuidv4(); //unique ID for this instance / path for MQTT
-    this.streaming_protocol = process.env.STREAMING_PROTOCOL
-    this.srt_mode = process.env.SRT_MODE || null;
-    this.bound_session = null; // will bind to a session when used
 
     this.domainSpecificValues = {
-      streaming_protocol: this.streaming_protocol,
       srt_mode: this.srt_mode,
       uniqueId: this.uniqueId
     }
 
     this.pub = `transcriber/out/${this.uniqueId}`;
-    this.subs = [`transcriber/in/${this.uniqueId}/#`, `scheduler/status`]
+    this.subs = [`transcriber/in/${this.uniqueId}/#`, `scheduler/status`, `system/out/sessions/#`]
 
     this.state = BrokerClient.states.CONNECTING;
-    this.emit("connecting");
     this.init(); // binds controllers
     this.connect();
   }
 
+  handleSessions(sessions) {
+    // Create a set of incoming session IDs for easy lookup
+    // called by controllers/MqttMessages.js uppon receiving system/out/sessions/statuses message
+    // only ready and active sessions are present in the incoming sessions (broker retained message only holds ready and active sessions)
+    const incomingSessionIds = new Set(sessions.map(session => session.id));
+
+    // Filter out sessions that are not present in the incoming sessions
+    this.sessions = this.sessions.filter(session => incomingSessionIds.has(session.id));
+
+    // Update existing sessions or add new ones
+    for (const session of sessions) {
+      const index = this.sessions.findIndex(s => s.id === session.id);
+      if (index === -1) {
+        // If the session is not found, add it
+        this.sessions.push(session);
+      } else {
+        // If the session is found, update it
+        this.sessions[index] = session;
+      }
+    }
+    // to be consumed by streaming server controller
+    this.emit("sessions", this.sessions)
+    debug(`Registered all ACTIVE and READY sessions: ${this.sessions.length}`);
+  }
+
+  activateSession(session, channelIndex) {
+    // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-start message
+    this.client.publish(`session`, { transcriber_id: this.uniqueId, id: session.id, status: 'active', channel: channelIndex }, 2, false, true);
+  }
+
+  deactivate(session, channelIndex) {
+    // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-stop message
+    this.client.publish(`session`, { transcriber_id: this.uniqueId, id: session.id, status: 'inactive', channel: channelIndex }, 2, false, true);
+  }
+
   async connect() {
-    const { DISCONNECTED, CONNECTING, WAITING_SCHEDULER, READY, ERROR, SESSION_BOUND } = this.constructor.states;
+    const { DISCONNECTED, WAITING_SCHEDULER, ERROR } = this.constructor.states;
     delete this.client;
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs });
     this.client.registerDomainSpecificValues(this.domainSpecificValues)
@@ -58,47 +88,9 @@ class BrokerClient extends Component {
       this.state = DISCONNECTED;
       debug(`${this.uniqueId} Disconnected from broker - BROKER OFFLINE`)
     })
-
     this.client.on("message", (topic, message) => {
       this.emit("message", topic, message);
     });
-  }
-  
-  async setSession(sessionInfo) {
-    const { sessionId, transcriberProfile } = sessionInfo;
-    this.bound_session = sessionId;
-    // MQTT status payload update
-    this.client.registerDomainSpecificValues({ bound_session: this.bound_session })
-    this.state = BrokerClient.states.SESSION_BOUND;
-    debug(`${this.uniqueId} Bound to session ${this.bound_session}`)
-    // publish will occur when streaming server component will change state upon configure method call, see Transcriber/components/StreamingServer/controllers/StreamingServer.js
-    if (this.app.components['StreamingServer'].state == 'initialized') {
-      this.app.components['ASR'].configure(transcriberProfile)
-    }
-    else {
-      this.app.components['StreamingServer'].once('initialized', () => {
-        this.app.components['ASR'].configure(transcriberProfile)
-      })
-    }
-  }
-
-  async start() {
-    debug(`${this.uniqueId} started from session`)
-    this.app.components['StreamingServer'].start()
-  }
-
-  async free() {
-    this.bound_session = null;
-    this.state = BrokerClient.states.READY;
-    debug(`${this.uniqueId} Freed from session`)
-    await this.app.components['StreamingServer'].initialize();
-    this.client.registerDomainSpecificValues({ bound_session: null })
-    this.client.publishStatus();
-  }
-
-  async reset() {
-    this.app.components['ASR'].sendResetMessage();
-    await this.free();
   }
 }
 

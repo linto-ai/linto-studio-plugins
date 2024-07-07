@@ -1,6 +1,5 @@
 const debug = require('debug')(`scheduler:BrokerClient`);
 const { MqttClient, Component, Model } = require('live-srt-lib')
-const { v4: uuidv4 } = require('uuid');
 
 class BrokerClient extends Component {
 
@@ -19,17 +18,18 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `session/out/+/#`, `transcriber/out/+/final`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/final`, `transcriber/out/+/session`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
+    this.transcribers = new Array(); // internal scheduler representation of system transcribers.
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
-    this.client.on("ready", () => {
+    this.client.on("ready", async () => {
       this.state = READY
-      this.client.publishStatus();
-      this.transcribers = new Array(); // internal scheduler representation of system transcribers. Gets published to broker on init as /transcribers/status
+      this.client.publishStatus(); // scheduler status (online)
+      await this.resetSessions(); // reset all active sessions / channels (stream_status) to ready/inactive state
     });
     this.client.on("error", (err) => {
       this.state = ERROR;
@@ -37,117 +37,11 @@ class BrokerClient extends Component {
     this.init(); // binds controllers, those will handle messages
   }
 
-  async updateChannel(transcriber) {
-    if (!transcriber.uniqueId) {
-      return
-    }
-
-    await Model.Channel.update({
-      stream_endpoint: transcriber.stream_endpoint,
-      transcriber_status: transcriber.streamingServerStatus
-      }, {
-      where: {
-        transcriber_id: transcriber.uniqueId
-      }
-    })
-  }
-
-  async debounceSyncSystem() {
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId)
-    }
-
-    this.timeoutId = setTimeout(async () => {
-      await this.syncSystem()
-      this.timeoutId = null
-    }, 3000)
-  }
-
-  async syncSystem() {
-    await this.detectErroredChannels()
-
-    // update channel in database
-    for (const transcriber of this.transcribers) {
-      await this.updateChannel(transcriber)
-    }
-
-    // try to bind transcriber to errored channel
-    await this.bindErroredChannels()
-  }
-
-  async detectErroredChannels() {
-    // stop channel with unexisting transcriber and add an entry in the erroredOn Session
-    const existingTranscriberIds = this.transcribers.map(transcriber => transcriber.uniqueId)
-    const where = {
-      transcriber_id: {
-        [Model.Op.notIn]: existingTranscriberIds
-      },
-      transcriber_status: {
-        [Model.Op.in]: ['initialized', 'ready', 'streaming']
-      }
-    }
-
-    // Update erroredOn
-    const erroredChannels = await Model.Channel.findAll({
-      include: [{
-        model: Model.Session
-      }],
-      where: where
-    })
-    for (const channel of erroredChannels) {
-      const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
-      const newError = {
-        date: new Date(),
-        channel_id: channel.id,
-        error: { code: 1, msg: "Transcriber unavailable" } // currently, there is only 1 error
-      }
-      await channel.session.update({errored_on: [...erroredOn, newError]})
-    }
-
-    // Update the channels
-    await Model.Channel.update({
-      transcriber_id: null,
-      stream_endpoint: null,
-      transcriber_status: 'errored'
-    }, { where: where })
-  }
-
-  async bindErroredChannels() {
-    const erroredChannels = await Model.Channel.findAll({
-      where: {
-        transcriber_status: 'errored'
-      },
-      include: [
-        { model: Model.Session },
-        { model: Model.TranscriberProfile }
-      ]
-    })
-
-    for (const channel of erroredChannels) {
-      try {
-        debug(`Enrolling errored channel ${channel.id}`);
-        const transcriber = await this.enrollTranscriber(channel.transcriber_profile, channel.session)
-        channel.transcriber_id = transcriber.uniqueId
-        channel.stream_endpoint = transcriber.stream_endpoint
-        channel.transcriber_status = transcriber.streamingServerStatus
-        await channel.save()
-
-        // if session is active, start the transcriber
-        if (channel.session.status == 'active') {
-          // let some time to the transcriber to init before starting it
-          setTimeout(() => {
-            this.client.publish(`transcriber/in/${channel.transcriber_id}/start`)
-          }, 3000)
-        }
-      } catch (error) {
-        debug(`No transcriber available for session ${channel.session.id}. ${error}`)
-      }
-    }
-  }
+  // ###### TRANSCRIPTION ######
 
   async saveTranscription(transcription, uniqueId) {
     try {
-      const channel = await Model.Channel.findOne({where: {transcriber_id: uniqueId}})
+      const channel = await Model.Channel.findOne({ where: { transcriber_id: uniqueId } })
       if (!channel) {
         throw new Error(`Channel with transcriber_id ${uniqueId} not found`)
       }
@@ -160,268 +54,151 @@ class BrokerClient extends Component {
     }
   }
 
-  async createSession(requestBody) {
-    const sessionId = uuidv4()
-    const channels = requestBody.channels;
-    let session;
-    //start Model transaction
-    const t = await Model.sequelize.transaction();
-    let enrolledTranscribers = [];
-    try {
-      // Create a new session with the specified session ID and status
-      session = await Model.Session.create({
-        id: sessionId,
-        status: 'pending_creation',
-        name: requestBody.name || 'New session',
-        start_time: null,
-        end_time: null,
-        errorred_on: null,
-        owner: requestBody.owner || null,
-        organizationId: requestBody.organizationId || null,
-        public: requestBody.public !== undefined ? requestBody.public : true,
-      }, { transaction: t });
-      // Create a new channel for each channel in the request body
-      let createdChannels = [];
-      for (const channel of channels) {
-        // Find the transcriber profile for the channel
-        let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction: t });
-        if (!transcriberProfile) {
-          throw new Error(`Transcriber profile with id ${channel.transcriberProfileId} not found`);
-        }
-        // Enroll a running transcriber into the session channel
-        let transcriber = await this.enrollTranscriber(transcriberProfile, session);
-        let createdChannel = await Model.Channel.create({
-          transcriber_id: transcriber.uniqueId,
-          transcriberProfileId: transcriberProfile.id,
-          languages: transcriberProfile.config.languages.map(language => language.candidate), //array of BCP47 language tags from transcriber profile
-          name: channel.name,
-          stream_endpoint: transcriber.stream_endpoint,
-          stream_status: 'inactive',
-          transcriber_status: transcriber.streamingServerStatus,
-          closed_captions: null,
-          closed_caption_live_delivery: uuidv4(),
-          closed_captions_file_delivery: null,
-          sessionId: session.id
-        }, { transaction: t });
-        createdChannels.push(createdChannel);
-        enrolledTranscribers.push(transcriber);
-      }
-      session = await session.update({ status: 'ready' }, { transaction: t });
-      await t.commit();
-      return session.id;
-    } catch (error) {
-      await t.rollback();
-      // free all enrolled transcribers
-      for (const transcriber of enrolledTranscribers) {
-        this.client.publish(`transcriber/in/${transcriber.uniqueId}/free`);
-      }
-      throw error;
-    }
-  }
+  // ###### SYSTEM STATUS ######
 
-  async execOnChannels(sessionId, callback) {
-    try {
-      const channels = await Model.Channel.findAll({
-        where: { sessionId: sessionId },
-        include: [
-          { model: Model.Session }
-        ]
-      })
-      for (const channel of channels) {
-        await callback(channel)
-      }
-    }
-    catch (error) {
-      const msg = `Error when retrieving channels: ${error}`
-      console.error(msg)
-      return msg
-    }
-  }
-
-  async startSession(sessionId) {
-    const error = await this.execOnChannels(sessionId, async (channel) => {
-        this.client.publish(`transcriber/in/${channel.transcriber_id}/start`)
-    })
-    if (error) {
-      return error
-    }
-
-    try {
-      await Model.Session.update({
-        status: 'active',
-        start_time: new Date()
-      }, {
-          where: {
-            'id': sessionId
-          }
-      })
-      await Model.Channel.update({
-        stream_status: 'active',
-      }, {
-          where: {
-            'sessionId': sessionId
-          }
-      })
-    } catch (err) {
-      const msg = `Error when updating sessions and channels: ${err}`
-      console.error(msg)
-      return msg
-    }
-  }
-
-  async resetSessionUpdateDb(transcriberId) {
-    try {
-      const channel = await Model.Channel.findOne({
-        where: {transcriber_id: transcriberId},
-        include: [
-          { model: Model.Session }
-        ]
-      })
-      if (!channel) {
-        throw new Error(`Channel with transcriber_id ${transcriberId} not found`)
-      }
-      const erroredOn = Array.isArray(channel.session.errored_on) ? channel.session.errored_on : []
-      const newError = {
-        date: new Date(),
-        channel_id: channel.id,
-        error: { code: 2, msg: "Transcriber reset" }
-      }
-      await channel.session.update({errored_on: [...erroredOn, newError]})
-      await channel.update({
-        transcriber_id: null,
-        stream_endpoint: null,
-        transcriber_status: 'errored'
-      })
-    } catch (err) {
-      console.error(`${new Date().toISOString()} [RESET_SESSION_UPDATE_DB]: ${err.message}`);
-    }
-  }
-
-  async resetSession(sessionId) {
-    // This function free all the session transcriber and enroll new transcribers
-    // In order to follow the good process, the channel are put in errored and will be automatically
-    // reaffected to others transcribers
-    const error = await this.execOnChannels(sessionId, async (channel) => {
-      debug(`Resetting channel ${channel.name} in session ${channel.session.id}`);
-      this.client.publish(`transcriber/in/${channel.transcriber_id}/reset`);
-    })
-
-    if (error) {
-      return error
-    }
-
-    await this.debounceSyncSystem()
-  }
-
-  async stopSession(sessionId) {
-    const error = await this.execOnChannels(sessionId, async (channel) => {
-        this.client.publish(`transcriber/in/${channel.transcriber_id}/free`);
-    })
-    if (error) {
-      return error
-    }
-
-    try {
-      await Model.Session.update({
-        status: 'terminated',
-        end_time: new Date()
-      }, {
-          where: {
-            'id': sessionId
-          }
-      })
-      await Model.Channel.update({
-        transcriber_id: null,
-        stream_status: 'inactive',
-        transcriber_status: 'closed'
-      }, {
-          where: {
-            'sessionId': sessionId
-          }
-      })
-    } catch (err) {
-      const msg = `Error when updating sessions and channels: ${err}`
-      console.error(msg)
-      return msg
-    }
-  }
-
-  async deleteSession(sessionId) {
-    const error = await this.stopSession(sessionId)
-    if (error) {
-      return error
-    }
-
-    try {
-      await Model.Session.destroy({where: {id: sessionId}})
-    }
-    catch (error) {
-      const msg = `Error when deleting session: ${error}`
-      console.error(msg)
-      return msg
-    }
-  }
-
-  async enrollTranscriber(transcriberProfile, session) {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`Transcriber enrollment timeout`));
-        this.removeListener(`transcriber_updated`, onTranscriberUpdated);
-      }, 10000);
-      const onTranscriberUpdated = (transcriber) => {
-        if (transcriber.bound_session === session.id) {
-          clearTimeout(timeout);
-          this.removeListener(`transcriber_updated`, onTranscriberUpdated);
-          resolve(transcriber);
-        }
-      }
-      this.on(`transcriber_updated`, onTranscriberUpdated);
-      //filter transcribers not enrolled in any session
-      const availableTranscribers = this.transcribers.filter(
-        t => !t.bound_session && (t.streamingServerStatus == 'ready' || t.streamingServerStatus == 'initialized')
-      );
-      if (availableTranscribers.length === 0) {
-        reject(new Error(`No available transcribers to enroll into session - ${this.transcribers.length} transcriber known by scheduler`));
-      }
-      const transcriber = availableTranscribers[0];
-      // Enroll the first available transcriber into the session
-      this.client.publish(`transcriber/in/${transcriber.uniqueId}/enroll`, { sessionId: session.id, transcriberProfile });
-    });
-  }
-
-
-  // Called on message from broker
+  // A transcriber has connected.
   async registerTranscriber(transcriber) {
-    const existingTranscriberIndex = this.transcribers.findIndex(t => t.uniqueId === transcriber.uniqueId);
-    if (existingTranscriberIndex !== -1) {
-      // merge the new transcriber with the existing one
-      const existingTranscriber = this.transcribers[existingTranscriberIndex];
-      const mergedTranscriber = { ...existingTranscriber, ...transcriber };
-      this.transcribers[existingTranscriberIndex] = mergedTranscriber;
-      const changedProperties = Object.keys(transcriber).reduce((acc, key) => {
-        if (existingTranscriber[key] !== transcriber[key]) {
-          acc[key] = mergedTranscriber[key];
-        }
-        return acc;
-      }, {});
-      // TODO : check if transcriber status is wrong, if so, enroll new transcriber into session (replace) and update session status for channels
-      debug(`updating transcriber ${transcriber.uniqueId} --> ${JSON.stringify(transcriber)}`);
-      // emit event to notify local listeners in method enrollTranscriber. 
-      this.emit('transcriber_updated', mergedTranscriber);
-    } else {
-      // add the new transcriber to the list
-      this.transcribers.push(transcriber);
-      debug(`registering transcriber ${transcriber.uniqueId}`);
-    }
-    await this.debounceSyncSystem()
+    this.transcribers.push(transcriber);
+    // new transcriber registered, publish the current list of sessions to broker
+    debug(`Transcriber ${transcriber.uniqueId} UP`);
+    await this.publishSessions();
+    debug(`Transcriber replicas: ${this.transcribers.length}`);
   }
 
+  // A transcriber goes offline. Cleanup channels associated with the transcriber. If a session has no active channels, set it to ready.
   async unregisterTranscriber(transcriber) {
-    //remove transcriber from list of transcribers, using transcriber.uniqueId
-    debug(`unregistering transcriber ${transcriber.uniqueId}`)
-    this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId)
-    await this.debounceSyncSystem()
+    this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId);
+    try {
+      // Update channels associated with the transcriber to set stream_status to 'inactive'
+      await Model.Channel.update(
+        { stream_status: 'inactive', transcriber_id: null },
+        { where: { transcriber_id: transcriber.uniqueId } }
+      );
+  
+      // Fetch sessions that had channels associated with the transcriber
+      const affectedSessions = await Model.Session.findAll({
+        include: [{
+          model: Model.Channel,
+          where: { transcriber_id: transcriber.uniqueId },
+          required: false
+        }]
+      });
+  
+      // Check each session for active channels and update status if necessary
+      for (const session of affectedSessions) {
+        const activeChannelsCount = await Model.Channel.count({
+          where: {
+            session_id: session.id,
+            stream_status: 'active'
+          }
+        });
+  
+        if (activeChannelsCount === 0) {
+          session.status = 'ready';
+          await session.save();
+        }
+      }
+  
+      debug(`Transcriber ${transcriber.uniqueId} DOWN`);
+      this.publishSessions();
+    } catch (error) {
+      console.error(`Error updating channels for transcriber ${transcriber.uniqueId}:`, error);
+    }
   }
+
+  async updateSession(transcriber_id, sessionId, channelIndex, newStreamStatus) {
+    debug(`Updating session activity: ${sessionId} --> channel index: ${channelIndex} stream_status ${newStreamStatus}`);
+    try {
+      // Fetch the session with its channels
+      const session = await Model.Session.findByPk(sessionId, {
+        include: [{ model: Model.Channel }]
+      });
+  
+      if (!session) {
+        console.error(`Session with ID ${sessionId} not found.`);
+        return;
+      }
+  
+      // Map through channels and prepare promises for updating them
+      const channelsUpdates = session.channels.map(channel => {
+        if (channel.index === channelIndex) {
+          channel.stream_status = newStreamStatus; // Update the specific channel's stream_status
+          if (newStreamStatus === 'active') {
+            channel.transcriber_id = transcriber_id; // Set the transcriber_id for the channel
+          } else {
+            channel.transcriber_id = null; // Reset the transcriber_id for the channel
+          }
+          return channel.save(); // Return promise for async operation
+        }
+      });
+  
+      // Wait for all channel updates to complete
+      await Promise.all(channelsUpdates);
+  
+      let hasActiveStream = session.channels.some(channel => channel.stream_status === 'active');
+  
+      // Update session status based on channels' stream statuses
+      if (hasActiveStream && session.status !== 'active') {
+        session.status = 'active';
+        if (!session.start_time) {
+          session.start_time = new Date();
+        }
+      } else if (!hasActiveStream && session.status !== 'ready') {
+        session.status = 'ready';
+      }
+  
+      await session.save();
+      await this.publishSessions();
+    } catch (error) {
+      console.error(`Error updating session ${sessionId}:`, error);
+    }
+  }
+
+  async resetSessions() {
+    const sessions = await Model.Session.findAll({
+      where: { status: 'active' }, // Only select active sessions
+      attributes: ['id', 'status'],
+      include: [
+        {
+          model: Model.Channel,
+          as: 'channels',
+          attributes: ['id', 'stream_status'],
+        }
+      ]
+    });
+    await Promise.all(sessions.map(async session => {
+      await Promise.all(session.channels.map(async channel => {
+        if (channel.stream_status === 'active') {
+          await channel.update({ stream_status: 'inactive' });
+        }
+      }));
+      session.status = 'ready'; // Update session status to inactive
+      await session.save();
+    }));
+  }
+
+  async publishSessions() {
+    const sessions = await Model.Session.findAll({
+      attributes: ['id', 'status'],
+      where: { status: ['active', 'ready'] },
+      include: [
+        {
+          model: Model.Channel,
+          as: 'channels', // Correct relation name
+          attributes: ['index', 'translations', 'stream_endpoints', 'stream_status'],
+          include: [{ // Correct the alias to match the association definition
+            model: Model.TranscriberProfile,
+            attributes: ['config'],
+            as: 'transcriber_profile' // Use the correct alias as defined in your association
+          }]
+        }
+      ]
+    });
+    debug('Publishing all ACTIVE and READY sessions on broker: ', sessions.length);
+    // Publish the sessions to the broker
+    this.client.publish('system/out/sessions/statuses', sessions, 1, true, true);
+  }
+
 }
 
 module.exports = app => new BrokerClient(app);

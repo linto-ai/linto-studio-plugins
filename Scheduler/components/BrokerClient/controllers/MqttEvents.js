@@ -21,6 +21,16 @@ module.exports = async function () {
             await this.resetSessionUpdateDb(uniqueId);
           }
         }
+        // Session updated by a transcriber (channel status change)
+        if (action === 'session'){
+          const {
+            transcriber_id: transcriber_id,
+            id: sessionId,
+            status: newStreamStatus,
+            channel: channelIndex
+          } = JSON.parse(message.toString());
+          this.updateSession(transcriber_id, sessionId, channelIndex, newStreamStatus);
+        }
         break;
       default:
         debug(`Received message for unknown type ${type}`);

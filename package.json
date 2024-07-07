@@ -30,12 +30,10 @@
   ],
   "main": "index.js",
   "scripts": {
-    "start": "concurrently --raw \"npm run start:transcriber\" \"npm run start:session-api\" \"npm run start:scheduler\" \"npm run start:delivery\" \"npm run start:front-end\"",
-    "start:session-api": "DEBUG=session-api:* ./node_modules/.bin/nodemon Session-API/Session-API.js",
-    "start:transcriber": "DEBUG=transcriber:* ./node_modules/.bin/nodemon Transcriber/transcriber.js",
-    "start:scheduler": "DEBUG=scheduler:* ./node_modules/.bin/nodemon Scheduler/scheduler.js",
-    "start:delivery": "DEBUG=delivery:* ./node_modules/.bin/nodemon Delivery/delivery.js",
-    "start:front-end": "cd front-end && npm start"
+    "start": "concurrently --raw \"npm run start:session-api\" \"npm run start:scheduler\" \"npm run start:transcriber\"",
+    "start:session-api": "DEBUG=session-api:* npx nodemon Session-API/Session-API.js",
+    "start:transcriber": "DEBUG=transcriber:* npx nodemon --exec \"bash -c 'while true; do node Transcriber/transcriber.js; sleep 1; done'\"",
+    "start:scheduler": "DEBUG=scheduler:* npx nodemon Scheduler/scheduler.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [

@@ -184,9 +184,9 @@ class BrokerClient extends Component {
       include: [
         {
           model: Model.Channel,
-          as: 'channels', // Correct relation name
-          attributes: ['index', 'translations', 'stream_endpoints', 'stream_status'],
-          include: [{ // Correct the alias to match the association definition
+          as: 'channels',
+          attributes: ['index', 'translations', 'stream_endpoints', 'stream_status', 'diarization', 'keepAudio'],
+          include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],
             as: 'transcriber_profile' // Use the correct alias as defined in your association

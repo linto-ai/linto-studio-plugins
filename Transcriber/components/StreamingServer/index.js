@@ -1,5 +1,7 @@
 const debug = require('debug')(`transcriber:StreamingServer`);
+const { AudioConfig, PropertyId, AudioInputStream, SpeechConfig, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
 const { Component, CustomErrors } = require("live-srt-lib");
+const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
 
 class StreamingServer extends Component {
@@ -15,6 +17,7 @@ class StreamingServer extends Component {
     super(app);
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.state = StreamingServer.states.CLOSED;
+    this.ASRs = new Map();
     this.init().then(async () => {
       // intialize the streaming servers
       this.initialize();
@@ -23,20 +26,37 @@ class StreamingServer extends Component {
 
   async initialize() {
     this.srtServer = new MultiplexedSRTServer(this.app)
-
-    this.srtServer.on('session-start', (session, channel) => {
-      debug(`Session ${session.id}, channel ${channel} started`);
-      this.emit('session-start', session, channel);
+    this.srtServer.on('session-start', (session, channelIndex) => {
+      // Start some ASR. session object holds everything required to start ASR (profile, keys...)
+      const asr = new ASR(session, channelIndex);
+      // Store the ASR instance in the map like :
+      // session.id_channelIndex -> ASR instance
+      this.ASRs.set(`${session.id}_${channelIndex}`, asr);
+      // pass to controllers/StreamingServer.js to forward to broker
+      this.emit('session-start', session, channelIndex);
+      debug(`Session ${session.id}, channel ${channelIndex} started`);
     })
 
-    this.srtServer.on('session-stop', (session, channel) => {
-      debug(`Session ${session.id}, channel ${channel} stopped`);
-      // pass to controllers/StreamingServer.js
-      this.emit('session-stop', session, channel);
+    this.srtServer.on('session-stop', (session, channelIndex) => {
+      debug(`Session ${session.id}, channel ${channelIndex} stopped`);
+      // Retrieve the ASR instance from the map
+      const asr = this.ASRs.get(`${session.id}_${channelIndex}`);
+      // Stop the ASR instance
+      asr.dispose()
+      // Remove the ASR instance from the map
+      this.ASRs.delete(`${session.id}_${channelIndex}`);
+      // pass to controllers/StreamingServer.js to forward to broker
+      this.emit('session-stop', session, channelIndex);
     })
 
-    this.srtServer.on('data', (data) => {
-      // TOOD: handle data
+    this.srtServer.on('data', (audio, sessionId, channelIndex) => {
+      const buffer = Buffer.from(audio.data);
+      const asr = this.ASRs.get(`${sessionId}_${channelIndex}`);
+      if (asr) {
+        asr.transcribe(buffer);
+      } else {
+        //debug(`No ASR found for session ${message.sessionId}, channel ${message.channelIndex}`);
+      }
     });
   }
 
@@ -44,14 +64,14 @@ class StreamingServer extends Component {
     if (!this.srtServer) {
       return
     }
-      this.srtServer.start();
+    this.srtServer.start();
   }
 
   async stopServers() {
     if (!this.srtServer) {
       return
     }
-      this.srtServer.stop();
+    this.srtServer.stop();
   }
 
   // called by controllers/BrokerClient.js uppon receiving system/out/sessions/statuses message

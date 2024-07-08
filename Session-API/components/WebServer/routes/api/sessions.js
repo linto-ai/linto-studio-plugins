@@ -177,6 +177,8 @@ module.exports = (webserver) => {
                     const translations = channel.translations
                     await Model.Channel.create({
                         index: channels.indexOf(channel),
+                        keepAudio: channel.keepAudio || false,
+                        diarization: channel.diarization || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         stream_status: 'inactive',

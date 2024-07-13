@@ -1,7 +1,6 @@
 const gstreamer = require("gstreamer-superficial");
 
-process.on('uncaughtException', (error) => {
-});
+
 
 let pipeline;
 
@@ -12,6 +11,9 @@ process.on('message', (message) => {
     } else if (message.type === 'data') {
         const chunks = message.chunks.map(chunk => Buffer.from(new Uint8Array(chunk)));
         sendDataToPipeline(chunks);
+    } else if (message.type === 'buffer') {
+        const buffer = Buffer.from(message.chunks); 
+        sendDataToPipeline([buffer]);
     } else if (message.type === 'terminate') {
         if (pipeline) {
             try {
@@ -71,7 +73,7 @@ function initializeWorker() {
                 }
                 break;
             case 'error':
-                process.send({ type: 'error', error: `GStreamer error: ${msg.error.message}` });
+                process.send({ type: 'error', error: `GStreamer error: ${msg.error}` });
                 process.exit(0);
             default:
                 break;
@@ -81,7 +83,7 @@ function initializeWorker() {
     // Send RAW audio data to the parent process (serialized Uint8Array chunks)
     const onData = (buf, caps) => {
         if (buf) {
-            process.send({ type: 'data', buf: buf});
+            process.send({ type: 'data', buf: buf });
         }
     };
 

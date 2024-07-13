@@ -3,7 +3,6 @@ const EventEmitter = require('eventemitter3');
 const { SRT, SRTServer, AsyncSRT } = require("linto-node-srt");
 const { fork } = require('child_process');
 const path = require('path');
-const { channel } = require('diagnostics_channel');
 
 // Silence uncaught exceptions to prevent the process from exiting on error. linto-lib-srt is not handling SRT break properly.
 // This is a temporary fix until the issue is resolved.

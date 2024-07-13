@@ -25,7 +25,7 @@ function transcodeToMp3(inputPath, outputPath) {
       .audioCodec('libmp3lame')
       .audioBitrate('64k')
       .on('end', () => {
-        console.log(`Transcoding to MP3 completed: ${outputPath}`);
+        debug(`Transcoding to MP3 completed: ${outputPath}`);
         resolve();
       })
       .on('error', (err) => {

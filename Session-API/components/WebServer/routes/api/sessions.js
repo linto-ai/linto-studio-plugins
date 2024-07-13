@@ -207,6 +207,24 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        path: '/sessions/:id/start-bot',
+        method: 'post',
+        controller: async (req, res, next) => {
+            const { id } = req.params;
+            const { url, channelIndex } = req.body;
+
+            if (!id || !url || channelIndex === undefined) {
+                return res.status(400).json({ error: "sessionId, url, and channelIndex are required" });
+            }
+
+            try {
+                webserver.emit('start-bot', id, channelIndex, url);
+                res.json({ success: true });
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
         path: '/sessions/:id',
         method: 'delete',
         controller: async (req, res, next) => {

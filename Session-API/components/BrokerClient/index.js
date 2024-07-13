@@ -52,6 +52,33 @@ class BrokerClient extends Component {
     debug('Session API update --> Publishing non terminated sessions on broker:  2: ', sessions.length);
     this.client.publish('statuses', sessions, 1, true, true);
   }
+
+  /**
+   * Initializes and starts a bot for a specific session and channel, publishing its start command to the MQTT broker.
+   * 
+   * @param {string} sessionId - The UUID of the session for which the bot is started.
+   * @param {number} channelIndex - The index of the channel within the session.
+   * @param {string} address - The URL address where the bot should operate.
+   */
+  async startBot(sessionId, channelIndex, address) {
+    // get the session
+    const session = await Model.Session.findOne({
+      where: { id: sessionId },
+      include: [
+        {
+          model: Model.Channel,
+          as: 'channels',
+          where: { index: channelIndex },
+          include: [{
+            model: Model.TranscriberProfile,
+            attributes: ['config'],
+            as: 'transcriber_profile' // Use the correct alias as defined in your association
+          }]
+        }
+      ]
+    });
+    this.client.publish('jitsi-bot-start', { session, channelIndex, address }, 1, false, true);
+  }
 }
 
 module.exports = app => new BrokerClient(app);

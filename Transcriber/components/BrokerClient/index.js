@@ -31,6 +31,10 @@ class BrokerClient extends Component {
     this.connect();
   }
 
+  handleStartBot(sessionId, channelIndex, address) {
+    this.emit("jitsi-bot-start", sessionId, channelIndex, address);
+  }
+
   handleSessions(sessions) {
     // Create a set of incoming session IDs for easy lookup
     // called by controllers/MqttMessages.js uppon receiving system/out/sessions/statuses message

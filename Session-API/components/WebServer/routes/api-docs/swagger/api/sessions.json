@@ -216,6 +216,83 @@
       }
     }
   },
+  "/sessions/{id}/start-bot": {
+    "post": {
+      "summary": "Starts a bot for a specific session",
+      "description": "This endpoint starts a bot for the given session ID with a specified channel index and URL.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "description": "The UUID of the session for which the bot is to be started.",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "description": "The URL address where the bot should operate."
+                },
+                "channelIndex": {
+                  "type": "integer",
+                  "description": "The index of the channel within the session."
+                }
+              },
+              "required": [
+                "url",
+                "channelIndex"
+              ]
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Bot successfully started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "success": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "description": "Bad request. sessionId, url, and channelIndex are required.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "error": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "500": {
+          "description": "Internal server error."
+        }
+      }
+    }
+  },
   "/sessions/{id}/start": {
     "put": {
       "tags": [

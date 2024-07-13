@@ -1,8 +1,8 @@
 const debug = require('debug')(`transcriber:StreamingServer`);
-const { AudioConfig, PropertyId, AudioInputStream, SpeechConfig, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
 const { Component, CustomErrors } = require("live-srt-lib");
 const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
+const JitsiBot = require('./jitsi');
 
 class StreamingServer extends Component {
   static states = {
@@ -58,6 +58,32 @@ class StreamingServer extends Component {
         //debug(`No ASR found for session ${message.sessionId}, channel ${message.channelIndex}`);
       }
     });
+  }
+  
+
+  // Create a bot and connect to Jitsi
+  async startJitsi(session, channelIndex, address) {
+    debug(`Starting Jitsi bot for session ${session.id}, channel ${channelIndex}`);
+    this.bot = new JitsiBot(session, channelIndex, address);
+    this.bot.init();
+    
+    this.bot.on('session-start', (session, channelIndex) => {
+      const asr = new ASR(session, channelIndex);
+      this.ASRs.set(`${session.id}_${channelIndex}`, asr);
+      // pass to controllers/StreamingServer.js to forward to broker
+      this.emit('session-start', session, channelIndex);
+      debug(`Session ${session.id}, channel ${channelIndex} started`);
+    })
+
+    this.bot.on('data', (audio, sessionId, channelIndex) => {
+      const buffer = Buffer.from(audio.data);
+      const asr = this.ASRs.get(`${sessionId}_${channelIndex}`);
+      if (asr) {
+        asr.transcribe(buffer);
+      } else {
+        //debug(`No ASR found for session ${message.sessionId}, channel ${message.channelIndex}`);
+      }
+    })
   }
 
   async startServers() {

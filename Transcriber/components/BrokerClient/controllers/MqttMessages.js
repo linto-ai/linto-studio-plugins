@@ -20,28 +20,33 @@ module.exports = function () {
           // Scheduler offline, deactivate streaming server
           this.app.components['StreamingServer'].stopServers();
           debug(`${this.uniqueId} scheduler offline, waiting...`);
-        }  
+        }
         break;
-        case 'system':
-          const [direction, ...subparts] = parts;
-          if (direction === 'out') {
-            const [systemType, ...systemParts] = subparts;
-            if (systemType === 'sessions') {
-              const action = systemParts.join('/');
-              switch (action) {
-                case 'statuses':
-                  // Handle system/out/sessions/statuses messages here
-                  const sessions = JSON.parse(message);
-                  this.handleSessions(sessions);
-                  break;
-                default:
-                  break;
-              }
-            } else {
-              debug(`Received message for unknown system type ${systemType}`);
+      case 'system':
+        const [direction, ...subparts] = parts;
+        if (direction === 'out') {
+          const [systemType, ...systemParts] = subparts;
+          if (systemType === 'sessions') {
+            const action = systemParts.join('/');
+            switch (action) {
+              case 'statuses':
+                // Handle system/out/sessions/statuses messages here
+                const sessions = JSON.parse(message);
+                this.handleSessions(sessions);
+                break;
+              case 'jitsi-bot-start':
+                // Handle system/out/sessions/jitsi-bot-start messages here
+                const { session, channelIndex, address } = JSON.parse(message);
+                this.handleStartBot(session, channelIndex, address);
+                break;
+              default:
+                break;
             }
+          } else {
+            debug(`Received message for unknown system type ${systemType}`);
           }
-          break;
+        }
+        break;
       default:
         debug(`Received message for unknown type ${type}`);
     }

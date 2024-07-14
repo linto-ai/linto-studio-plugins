@@ -6,7 +6,7 @@ NODE_ENV=production # used to load the appropriate migration config
 # App components registration (don't touch)
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separated list of components to run, they load in this order
 SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, they load in this order
-SESSION_API_COMPONENTS=BrokerClient,WebServer
+SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
 
 # Audio streaming configuration

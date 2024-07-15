@@ -36,7 +36,7 @@ function getEndpoints(sessionId, channelIndex) {
             srtMode = 'caller';
         }
         const srtString = `srt://${host}:${srtPort}?streamid=${sessionId},${channelIndex}&mode=${srtMode}` +
-            `${STREAMING_PASSPHRASE ? `,&passphrase=${STREAMING_PASSPHRASE}` : ''}`;
+            `${STREAMING_PASSPHRASE ? `&passphrase=${STREAMING_PASSPHRASE}` : ''}`;
         endpoints.srt = srtString;
     }
 
@@ -210,15 +210,67 @@ module.exports = (webserver) => {
         path: '/sessions/:id/start-bot',
         method: 'post',
         controller: async (req, res, next) => {
-            const { id } = req.params;
-            const { url, channelIndex } = req.body;
-
-            if (!id || !url || channelIndex === undefined) {
-                return res.status(400).json({ error: "sessionId, url, and channelIndex are required" });
-            }
-
             try {
-                webserver.emit('start-bot', id, channelIndex, url);
+                const { id } = req.params;
+                const { url, channelIndex, botType } = req.body;
+                if (!id || !url || channelIndex === undefined || !botType) {
+                    return res.status(400).json({ error: "sessionId, url, channelIndex, and botType are required" });
+                }
+                const session = await Model.Session.findByPk(id, {
+                    include: {
+                        model: Model.Channel,
+                        attributes: {
+                            exclude: ['id', 'sessionId']
+                        }
+                    }
+                });
+                if (!session) {
+                    return res.status(404).json({ error: "Session not found" });
+                }
+                const channel = session.channels.find(c => c.index === channelIndex);
+                if (!channel) {
+                    return res.status(404).json({ error: "Channel not found" });
+                }
+                // Check if the channel's stream_status is 'inactive'
+                if (channel.stream_status !== 'inactive') {
+                    return res.status(400).json({ error: "The channel must be inactive to start a bot" });
+                }
+                webserver.emit('startbot', id, channelIndex, url, botType);
+                res.json({ success: true });
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
+        path: '/sessions/:id/stop-bot',
+        method: 'post',
+        controller: async (req, res, next) => {
+            try {
+                const { id } = req.params;
+                const { channelIndex } = req.body;
+
+                if (!id || channelIndex === undefined) {
+                    return res.status(400).json({ error: "sessionId and channelIndex are required" });
+                }
+
+                const session = await Model.Session.findByPk(id, {
+                    include: {
+                        model: Model.Channel,
+                        attributes: {
+                            exclude: ['id', 'sessionId']
+                        }
+                    }
+                });
+
+                if (!session) {
+                    return res.status(404).json({ error: "Session not found" });
+                }
+
+                const channel = session.channels.find(c => c.index === channelIndex);
+                if (!channel) {
+                    return res.status(404).json({ error: "Channel not found" });
+                }
+                webserver.emit('stopbot', id, channelIndex);
                 res.json({ success: true });
             } catch (err) {
                 next(err);

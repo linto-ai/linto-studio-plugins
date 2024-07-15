@@ -17,9 +17,6 @@ module.exports = async function () {
         if (action === 'final') {
           const transcription = JSON.parse(message.toString());
           await this.saveTranscription(transcription, uniqueId); //save transcription to db using transcriber uniqueId
-          if (transcription.locutor == process.env.TRANSCRIBER_BOT_NAME && transcription.text == process.env.TRANSCRIBER_RESET_MESSAGE) {
-            await this.resetSessionUpdateDb(uniqueId);
-          }
         }
         // Session updated by a transcriber (channel status change)
         if (action === 'session'){
@@ -30,6 +27,18 @@ module.exports = async function () {
             channel: channelIndex
           } = JSON.parse(message.toString());
           this.updateSession(transcriber_id, sessionId, channelIndex, newStreamStatus);
+        }
+        break;
+      case 'scheduler':
+        if (direction === 'in') {
+          const { session, channelIndex, address, botType } = JSON.parse(message.toString());
+          if (action === 'startbot') {
+            await this.startBot(session, channelIndex, address, botType);
+          }
+          if (action === 'stopbot') {
+            const { sessionId } = JSON.parse(message.toString());
+            await this.stopBot(sessionId, channelIndex);
+          }
         }
         break;
       default:

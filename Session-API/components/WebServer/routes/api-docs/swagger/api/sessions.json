@@ -219,7 +219,7 @@
   "/sessions/{id}/start-bot": {
     "post": {
       "summary": "Starts a bot for a specific session",
-      "description": "This endpoint starts a bot for the given session ID with a specified channel index and URL.",
+      "description": "This endpoint starts a bot for the given session ID with a specified channel index, URL, and bot type. Available bot types are 'jitsi', 'youtube', and 'bigbluebutton'.",
       "parameters": [
         {
           "name": "id",
@@ -241,15 +241,72 @@
                 "url": {
                   "type": "string",
                   "format": "uri",
-                  "description": "The URL address where the bot should operate."
+                  "description": "The URL to start the bot."
                 },
                 "channelIndex": {
                   "type": "integer",
-                  "description": "The index of the channel within the session."
+                  "description": "The index of the channel."
+                },
+                "botType": {
+                  "type": "string",
+                  "description": "The type of bot to start.",
+                  "enum": [
+                    "jitsi",
+                    "youtube",
+                    "bigbluebutton"
+                  ]
                 }
               },
               "required": [
                 "url",
+                "channelIndex",
+                "botType"
+              ]
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Bot started successfully."
+        },
+        "400": {
+          "description": "Bad request. sessionId, url, channelIndex, and botType are required."
+        },
+        "404": {
+          "description": "Session or channel not found."
+        }
+      }
+    }
+  },
+  "/sessions/{id}/stop-bot": {
+    "post": {
+      "summary": "Stops a bot for a specific session",
+      "description": "This endpoint stops a bot for the given session ID with a specified channel index.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "description": "The UUID of the session for which the bot is to be stopped.",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "channelIndex": {
+                  "type": "integer",
+                  "description": "The index of the channel to stop the bot."
+                }
+              },
+              "required": [
                 "channelIndex"
               ]
             }
@@ -258,37 +315,13 @@
       },
       "responses": {
         "200": {
-          "description": "Bot successfully started.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "success": {
-                    "type": "boolean"
-                  }
-                }
-              }
-            }
-          }
+          "description": "Bot stopped successfully."
         },
         "400": {
-          "description": "Bad request. sessionId, url, and channelIndex are required.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "error": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
+          "description": "Bad request. sessionId and channelIndex are required."
         },
-        "500": {
-          "description": "Internal server error."
+        "404": {
+          "description": "Session or channel not found."
         }
       }
     }

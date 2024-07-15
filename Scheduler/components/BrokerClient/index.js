@@ -18,7 +18,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/final`, `transcriber/out/+/session`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/final`, `transcriber/out/+/session`, `scheduler/in/#`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
@@ -35,6 +35,81 @@ class BrokerClient extends Component {
       this.state = ERROR;
     });
     this.init(); // binds controllers, those will handle messages
+  }
+
+
+  // ###### Asked to schedule things ######
+
+  // Choose the least used transcriber to start a bot
+  // we do this cause bot handling needs to be scheduled on the instance with the least load
+  async startBot(session, channelIndex, address, botType) {
+    // search all channels with active stream_status
+    // count the number of active channels for each transcriber_id, choose the one with the least active channels
+    // ignore channels with transcriber_id = null or set to an id that is not in the transcribers array
+    // if no transcriber is found, use the first transcriber in the transcribers array
+    // publish the startbot command to the chosen transcriber
+
+    try {
+      // Fetch active channels and count them by transcriber_id
+      const activeChannelsCount = await Model.Channel.findAll({
+        where: {
+          stream_status: 'active',
+          transcriber_id: {
+            [Model.Op.not]: null, // Exclude channels with null transcriber_id
+          }
+        },
+        attributes: [
+          'transcriber_id',
+          [Model.sequelize.fn('COUNT', Model.sequelize.col('transcriber_id')), 'activeCount']
+        ],
+        group: 'transcriber_id',
+        raw: true
+      });
+
+      // Filter to include only those transcribers currently registered and online
+      const validTranscriberCounts = activeChannelsCount.filter(c =>
+        this.transcribers.find(t => t.uniqueId === c.transcriber_id && t.online)
+      );
+
+      // Sort to find the least used transcriber that is online
+      let chosenTranscriber = null;
+      let leastActiveCount = Infinity;
+      validTranscriberCounts.forEach(c => {
+        const transcriber = this.transcribers.find(t => t.uniqueId === c.transcriber_id && t.online);
+        if (transcriber && c.activeCount < leastActiveCount) {
+          chosenTranscriber = transcriber;
+          leastActiveCount = c.activeCount;
+        }
+      });
+
+      // Use the first online transcriber if none found by active channel count
+      if (!chosenTranscriber) {
+        chosenTranscriber = this.transcribers.find(t => t.online);
+      }
+
+      if (chosenTranscriber) {
+        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, { session, channelIndex, address, botType }, 2, false, true);
+        debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${session.id}, channel ${channelIndex}`);
+      } else {
+        console.error('No transcriber available to start bot.');
+      }
+    } catch (error) {
+      console.error('Failed to start bot:', error);
+    }
+  }
+
+  async stopBot(sessionId, channelIndex) {
+    // find the transcriber_id for the channel
+    // publish the stopbot command to the transcriber
+    try {
+      const channel = await Model.Channel.findOne({ where: { session_id: sessionId, index: channelIndex } });
+      if (!channel?.transcriber_id) {
+        return;
+      }
+      this.client.publish(`transcriber/in/${channel.transcriber_id}/stopbot`, { sessionId, channelIndex }, 2, false, true);
+    } catch (error) {
+      console.error('Failed to stop bot:', error);
+    }
   }
 
   // ###### TRANSCRIPTION ######
@@ -74,7 +149,7 @@ class BrokerClient extends Component {
         { stream_status: 'inactive', transcriber_id: null },
         { where: { transcriber_id: transcriber.uniqueId } }
       );
-  
+
       // Fetch sessions that had channels associated with the transcriber
       const affectedSessions = await Model.Session.findAll({
         include: [{
@@ -83,7 +158,7 @@ class BrokerClient extends Component {
           required: false
         }]
       });
-  
+
       // Check each session for active channels and update status if necessary
       for (const session of affectedSessions) {
         const activeChannelsCount = await Model.Channel.count({
@@ -92,13 +167,13 @@ class BrokerClient extends Component {
             stream_status: 'active'
           }
         });
-  
+
         if (activeChannelsCount === 0) {
           session.status = 'ready';
           await session.save();
         }
       }
-  
+
       debug(`Transcriber ${transcriber.uniqueId} DOWN`);
       this.publishSessions();
     } catch (error) {
@@ -113,12 +188,12 @@ class BrokerClient extends Component {
       const session = await Model.Session.findByPk(sessionId, {
         include: [{ model: Model.Channel }]
       });
-  
+
       if (!session) {
         console.error(`Session with ID ${sessionId} not found.`);
         return;
       }
-  
+
       // Map through channels and prepare promises for updating them
       const channelsUpdates = session.channels.map(channel => {
         if (channel.index === channelIndex) {
@@ -131,12 +206,12 @@ class BrokerClient extends Component {
           return channel.save(); // Return promise for async operation
         }
       });
-  
+
       // Wait for all channel updates to complete
       await Promise.all(channelsUpdates);
-  
+
       let hasActiveStream = session.channels.some(channel => channel.stream_status === 'active');
-  
+
       // Update session status based on channels' stream statuses
       if (hasActiveStream && session.status !== 'active') {
         session.status = 'active';
@@ -146,7 +221,7 @@ class BrokerClient extends Component {
       } else if (!hasActiveStream && session.status !== 'ready') {
         session.status = 'ready';
       }
-  
+
       await session.save();
       await this.publishSessions();
     } catch (error) {

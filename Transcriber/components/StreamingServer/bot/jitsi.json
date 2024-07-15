@@ -1,0 +1,11 @@
+[
+  {
+    "action": "type",
+    "selector": "input.css-hh0z88-input",
+    "value": "LinTO Bot"
+  },
+  {
+    "action": "click",
+    "selector": "div.css-1hbmoh1-actionButton.primary"
+  }
+]

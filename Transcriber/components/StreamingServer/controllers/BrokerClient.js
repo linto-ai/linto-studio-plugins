@@ -5,9 +5,4 @@ module.exports = function () {
     this.app.components['BrokerClient'].on("sessions", async (sessions) => {
         this.setSessions(sessions);
     });
-
-    // handle jitsi-bot message from broker
-    this.app.components['BrokerClient'].on("jitsi-bot-start", async (session, channelIndex, address) => {
-        this.startJitsi(session, channelIndex, address);
-    });
 }

@@ -119,7 +119,15 @@ class ASR extends eventEmitter {
       if (this.audioFile) {
         this.audioFile.close();
         const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.pcm`);
-        const mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.mp3`);
+        let mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.mp3`); // Use let for reassignment
+        // if mp3 file already exists, add an index to the filename to be saved
+        if (fs.existsSync(mp3FilePath)) {
+          let index = 1;
+          while (fs.existsSync(mp3FilePath)) {
+            mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}_${index}.mp3`);
+            index++;
+          }
+        }
         await transcodeToMp3(pcmFilePath, mp3FilePath);
         debug(`Audio file saved as ${mp3FilePath}`);
         fs.unlinkSync(pcmFilePath);
@@ -128,15 +136,14 @@ class ASR extends eventEmitter {
         this.provider.removeAllListeners();
         await this.provider.stop();
       }
-
     } catch (error) {
       this.emit('error', error);
-      return false
+      return false;
     }
     this.audioBuffer = null;
     this.provider = null;
     this.removeAllListeners();
-    return true
+    return true;
   }
 
   transcribe(buffer) {

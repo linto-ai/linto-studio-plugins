@@ -106,7 +106,7 @@ class ASR extends eventEmitter {
       this.state = ASR.states.CLOSED;
     });
     this.provider.on('transcribing', (transcription) => {
-      this.state = TRANSCRIBING;
+      this.state = ASR.states.TRANSCRIBING;
       this.emit('partial', transcription);
     });
     this.provider.on('transcribed', (transcription) => {

@@ -83,6 +83,12 @@ class StreamingServer extends Component {
       bot.on('session-start', (session, channelIndex) => {
         debug(`Session ${session.id}, channel ${channelIndex} started`);
         const asr = new ASR(session, channelIndex);
+        asr.on('partial', (transcription) => {
+          bot.updateCaptions(transcription, false);
+        });
+        asr.on('final', (transcription) => {
+          bot.updateCaptions(transcription.text, true);
+        });
         this.ASRs.set(`${session.id}_${channelIndex}`, asr);
         // pass to controllers/StreamingServer.js to forward to broker and mark the session as active / set channel status in database
         this.emit('session-start', session, channelIndex);
@@ -124,6 +130,7 @@ class StreamingServer extends Component {
       // Also stop and remove the associated ASR instance if it exists
       const asr = this.ASRs.get(botKey);
       if (asr) {
+        asr.removeAllListeners();
         asr.dispose();
         this.ASRs.delete(botKey);
       }

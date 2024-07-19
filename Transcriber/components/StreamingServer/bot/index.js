@@ -48,13 +48,18 @@ class Bot extends EventEmitter {
       this.browser = await launch({
         headless: 'new',
         executablePath: '/usr/bin/google-chrome-stable',
-        args: [], // Required args for some environments
+        //args: ["--mute-audio", "--auto-accept-camera-and-microphone-capture", '--use-fake-device-for-media-stream', '--allow-file-access', '--use-file-for-fake-audio-capture=/tmp/silence.wav'],
+        args: [
+          "--mute-audio",
+          "--auto-accept-camera-and-microphone-capture",
+          '--allow-file-access',
+          `--disable-extensions-except=${path.resolve(__dirname, 'webcam')}`,
+          `--load-extension=${path.resolve(__dirname, 'webcam')}`
+        ],
       });
       debug('Browser launched');
-     
+
       const context = this.browser.defaultBrowserContext();
-      context.clearPermissionOverrides();
-      context.overridePermissions(this.address, ['microphone', 'camera']);
       this.page = await context.newPage();
       debug(`Joining ${this.address}`);
 
@@ -188,6 +193,20 @@ class Bot extends EventEmitter {
     }
     debug('Bot Initialization complete');
     return true
+  }
+
+  async updateCaptions(newText, final) {
+    if (this.page) {
+      await this.page.evaluate((text) => {
+        const canvasStream = window.fakeWebcam;
+        if (canvasStream) {
+          canvasStream.setText(text);
+        }
+      }, newText);
+      debug(`Updated text to: ${newText}`);
+    } else {
+      debug('Page is not initialized');
+    }
   }
 
   async dispose() {

@@ -9,17 +9,61 @@ module.exports = {
         primaryKey: true,
         type: Sequelize.INTEGER,
       },
-      transcriber_id: {
-        type: Sequelize.STRING,
-        allowNull: true,
+      keepAudio: {
+          type: Sequelize.BOOLEAN,
+          allowNull: true,
+      },
+      diarization: {
+          type: Sequelize.BOOLEAN,
+          allowNull: true,
+      },
+      index: {
+          type: Sequelize.INTEGER,
+          allowNull: false
       },
       languages: {
+        type: Sequelize.ARRAY(Sequelize.STRING),
+        allowNull: true,
+      },
+      translations: {
         type: Sequelize.ARRAY(Sequelize.STRING),
         allowNull: true,
       },
       name: {
         type: Sequelize.STRING,
         allowNull: true,
+      },
+      stream_endpoints: {
+        type: Sequelize.JSON,
+        allowNull: true,
+      },
+      stream_status: {
+        type: Sequelize.ENUM('active', 'inactive', 'errored'),
+        allowNull: true,
+      },
+      transcriber_id: {
+        type: Sequelize.UUID,
+        allowNull: true,
+      },
+      closed_captions: {
+        type: Sequelize.ARRAY(Sequelize.JSON),
+        allowNull: true,
+      },
+      translated_closed_captions: {
+        type: Sequelize.ARRAY(Sequelize.JSON),
+        allowNull: true,
+      },
+      audioFile: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      createdAt: {
+        allowNull: false,
+        type: Sequelize.DATE
+      },
+      updatedAt: {
+        allowNull: false,
+        type: Sequelize.DATE
       },
       transcriberProfileId: {
         type: Sequelize.INTEGER,
@@ -38,38 +82,6 @@ module.exports = {
             key: 'id',
         },
       },
-      stream_endpoint: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
-      stream_status: {
-        type: Sequelize.ENUM('active', 'inactive', 'errored'),
-        allowNull: true,
-      },
-      transcriber_status: {
-        type: Sequelize.ENUM('ready', 'streaming', 'closed', 'errored', 'initialized', 'eos'),
-        allowNull: true,
-      },
-      closed_captions: {
-        type: Sequelize.ARRAY(Sequelize.JSON),
-        allowNull: true,
-      },
-      closed_caption_live_delivery: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
-      closed_captions_file_delivery: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
-      createdAt: {
-        allowNull: false,
-        type: Sequelize.DATE
-      },
-      updatedAt: {
-        allowNull: false,
-        type: Sequelize.DATE
-      }
     });
   },
   async down(queryInterface, Sequelize) {

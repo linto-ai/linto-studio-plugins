@@ -9,7 +9,7 @@ module.exports = {
         type: Sequelize.UUID,
       },
       status: {
-        type: Sequelize.ENUM('pending_creation', 'ready', 'active', 'errored', 'terminated'),
+        type: Sequelize.ENUM( 'ready', 'active', 'terminated'),
         allowNull: false,
       },
       name: {

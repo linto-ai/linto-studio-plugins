@@ -22,12 +22,6 @@ services:
   database:
     restart: always
 
-  delivery:
-    restart: always
-    labels:
-      - "traefik.http.routers.delivery.entrypoints=websecure"
-      - "traefik.http.routers.delivery.tls.certresolver=letsencrypt"
-
   transcriber:
     restart: always
 
@@ -42,10 +36,3 @@ services:
     labels:
       - "traefik.http.routers.scheduler.entrypoints=websecure"
       - "traefik.http.routers.scheduler.tls.certresolver=letsencrypt"
-
-  frontend:
-    restart: always
-    labels:
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
-

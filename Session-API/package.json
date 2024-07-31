@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node Session-API.js",
-    "start-live": "npx nodemon Session-API.js"
+    "start-live": "npx -y nodemon Session-API.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [

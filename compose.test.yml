@@ -1,11 +1,4 @@
 services:
-  delivery:
-    healthcheck:
-      disable: true
-    env_file:
-      - .envdefault
-      - .envtest
-  
   migration:
     healthcheck:
       disable: true
@@ -33,11 +26,3 @@ services:
     env_file:
       - .envdefault
       - .envtest
-
-  frontend:
-    healthcheck:
-      disable: true
-    env_file:
-      - .envdefault
-      - .envtest
-

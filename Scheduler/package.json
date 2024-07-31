@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node scheduler.js",
-    "start-live": "npx nodemon scheduler.js"
+    "start-live": "npx -y nodemon scheduler.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [

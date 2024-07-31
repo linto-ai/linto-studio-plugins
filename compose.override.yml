@@ -1,16 +1,10 @@
 services:
-  delivery:
-    healthcheck:
-      disable: true
-    volumes:
-      - ./Delivery:/usr/src/app/delivery
-    command: ["npm run start-live"]
-
   transcriber:
     healthcheck:
       disable: true
     volumes:
       - ./Transcriber:/usr/src/app/transcriber
+      - /usr/src/app/transcriber/node_modules
     command: ["npm run start-live"]
 
   sessionapi:
@@ -18,6 +12,7 @@ services:
       disable: true
     volumes:
       - ./Session-API:/usr/src/app/sessionapi
+      - /usr/src/app/sessionapi/node_modules
     command: ["npm run start-live"]
 
   scheduler:
@@ -25,8 +20,5 @@ services:
       disable: true
     volumes:
       - ./Scheduler:/usr/src/app/scheduler
+      - /usr/src/app/scheduler/node_modules
     command: ["npm run start-live"]
-
-  frontend:
-    healthcheck:
-      disable: true

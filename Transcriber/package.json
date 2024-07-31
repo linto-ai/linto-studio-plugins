@@ -6,7 +6,7 @@
   "scripts": {
     "test": "./node_modules/.bin/mocha --require esm tests.js",
     "start": "node transcriber.js",
-    "start-live": "npx nodemon transcriber.js"
+    "start-live": "npx -y nodemon transcriber.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [

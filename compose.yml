@@ -50,27 +50,6 @@ services:
     depends_on:
       - database
 
-  delivery:
-    build:
-      context: .
-      dockerfile: Delivery/Dockerfile
-    env_file:
-      - .envdefault
-      - .env
-    environment:
-      - BROKER_HOST=broker
-      - DEBUG=delivery:*
-    ports:
-      - "${DELIVERY_WEBSERVER_HTTP_PORT}:${DELIVERY_WEBSERVER_HTTP_PORT}"
-    depends_on:
-      - broker
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.delivery.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/delivery`)"
-      - "traefik.http.routers.delivery.middlewares=delivery-strip"
-      - "traefik.http.middlewares.delivery-strip.stripprefix.prefixes=/delivery"
-      - "traefik.http.middlewares.delivery-strip.stripprefix.forceslash=false"
-
   transcriber:
     build:
       context: .
@@ -138,21 +117,3 @@ services:
       - "traefik.http.routers.scheduler.middlewares=scheduler-strip"
       - "traefik.http.middlewares.scheduler-strip.stripprefix.prefixes=/scheduler"
       - "traefik.http.middlewares.scheduler-strip.stripprefix.forceslash=false"
-
-  frontend:
-    build:
-      context: .
-      dockerfile: front-end/Dockerfile
-    ports:
-      - "${FRONT_END_PORT}:${FRONT_END_PORT}"
-    expose:
-      - "${FRONT_END_PORT}"
-    env_file:
-      - .envdefault
-      - .env
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/frontend`)"
-      - "traefik.http.routers.frontend.middlewares=frontend-strip"
-      - "traefik.http.middlewares.frontend-strip.stripprefix.prefixes=/frontend"
-      - "traefik.http.middlewares.frontend-strip.stripprefix.forceslash=false"

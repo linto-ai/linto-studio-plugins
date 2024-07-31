@@ -73,7 +73,7 @@ function initializeWorker() {
                 }
                 break;
             case 'error':
-                process.send({ type: 'error', error: `GStreamer error: ${msg.error}` });
+                process.send({ type: 'error', error: `GStreamer error: ${msg.message}` });
                 process.exit(0);
             default:
                 break;

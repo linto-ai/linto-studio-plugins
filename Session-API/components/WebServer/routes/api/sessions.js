@@ -1,4 +1,4 @@
-const debug = require('debug')('session-api:router:api:transcriber_profiles')
+const debug = require('debug')('session-api:router:api:sessions')
 const { Model } = require("live-srt-lib")
 const bcp47 = require('language-tags');
 class ApiError extends Error {
@@ -183,7 +183,7 @@ module.exports = (webserver) => {
                         translations: translations, //array of BCP47 language tags
                         stream_status: 'inactive',
                         stream_endpoints: getEndpoints(session.id, channels.indexOf(channel)),
-                        session_id: session.id,
+                        sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
                         name: channel.name
                     }, { transaction: t });

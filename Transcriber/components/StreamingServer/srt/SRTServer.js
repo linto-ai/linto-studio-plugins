@@ -112,7 +112,6 @@ class MultiplexedSRTServer extends EventEmitter {
         };
         // Start a new worker for this connection
         const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), [], {
-            env: { WORKER_ID: fd.sessionId }
         });
         this.workers.push(worker);
         // Start gstreamer pipeline

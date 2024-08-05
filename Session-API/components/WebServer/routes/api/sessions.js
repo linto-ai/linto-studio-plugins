@@ -48,7 +48,7 @@ function getEndpoints(sessionId, channelIndex) {
 
     if (protocols.includes('WS')) {
         const wsPort = STREAMING_PROXY_WS_TCP_PORT && STREAMING_PROXY_WS_TCP_PORT !== 'false' ? STREAMING_PROXY_WS_TCP_PORT : STREAMING_WS_TCP_PORT;
-        const wsString = `ws://${host}:${wsPort}/${sessionId}/${channelIndex}`;
+        const wsString = `ws://${host}:${wsPort}/${sessionId},${channelIndex}`;
         endpoints.ws = wsString;
     }
     return endpoints;

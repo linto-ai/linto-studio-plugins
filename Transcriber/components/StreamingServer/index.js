@@ -2,7 +2,14 @@ const debug = require('debug')(`transcriber:StreamingServer`);
 const { Component, CustomErrors } = require("live-srt-lib");
 const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
+const MultiplexedWebsocketServer = require('./websocket/WebsocketServer.js');
 const Bot = require('./bot');
+
+
+const SERVER_MAPPING = {
+  "SRT": MultiplexedSRTServer,
+  "WS": MultiplexedWebsocketServer
+}
 
 class StreamingServer extends Component {
   static states = {
@@ -19,6 +26,7 @@ class StreamingServer extends Component {
     this.state = StreamingServer.states.CLOSED;
     this.ASRs = new Map();
     this.bots = new Map();
+    this.servers = [];
     this.init().then(async () => {
       // intialize the streaming servers
       this.initialize();
@@ -28,9 +36,19 @@ class StreamingServer extends Component {
   // Launch servers defined in prcess.env STREAMING_PROTOCOLS
   //@TODO: reimplemented SRT. Still need to reimplement other protocols
   async initialize() {
+    const protocols = process.env.STREAMING_PROTOCOL.split(',').map(protocol => protocol.trim());
+    for (const protocol of protocols) {
+      await this.initServer(protocol);
+    }
+  }
+
+  async initServer(protocol) {
     try {
-      this.srtServer = new MultiplexedSRTServer(this.app);
-      this.srtServer.on('session-start', (session, channelIndex) => {
+      const serverClass = SERVER_MAPPING[protocol]
+      const server = new serverClass(this.app);
+      this.servers.push(server);
+
+      server.on('session-start', (session, channelIndex) => {
         try {
           const asr = new ASR(session, channelIndex);
           this.ASRs.set(`${session.id}_${channelIndex}`, asr);
@@ -41,7 +59,7 @@ class StreamingServer extends Component {
         }
       });
 
-      this.srtServer.on('session-stop', (session, channelIndex) => {
+      server.on('session-stop', (session, channelIndex) => {
         try {
           debug(`Session ${session.id}, channel ${channelIndex} stopped`);
           const asr = this.ASRs.get(`${session.id}_${channelIndex}`);
@@ -54,7 +72,7 @@ class StreamingServer extends Component {
         }
       });
 
-      this.srtServer.on('data', (audio, sessionId, channelIndex) => {
+      server.on('data', (audio, sessionId, channelIndex) => {
         try {
           const buffer = Buffer.from(audio.data);
           const asr = this.ASRs.get(`${sessionId}_${channelIndex}`);
@@ -68,7 +86,7 @@ class StreamingServer extends Component {
         }
       });
     } catch (error) {
-      debug(`Error initializing SRT server: ${error}`);
+      debug(`Error initializing ${protocol} server: ${error}`);
     }
   }
 
@@ -143,23 +161,23 @@ class StreamingServer extends Component {
   }
 
   async startServers() {
-    if (!this.srtServer) {
-      return
+    for(const server of this.servers) {
+      server.start();
     }
-    this.srtServer.start();
   }
 
   async stopServers() {
-    if (!this.srtServer) {
-      return
+    for(const server of this.servers) {
+      server.stop();
     }
-    this.srtServer.stop();
   }
 
   // called by controllers/BrokerClient.js uppon receiving system/out/sessions/statuses message
   //@TODO: reimplement this method for other protocols
   setSessions(sessions) {
-    this.srtServer.setSessions(sessions);
+    for(const server of this.servers) {
+      server.setSessions(sessions);
+    }
   }
 
 }

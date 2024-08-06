@@ -3,12 +3,14 @@ const { Component, CustomErrors } = require("live-srt-lib");
 const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
 const MultiplexedWebsocketServer = require('./websocket/WebsocketServer.js');
+const MultiplexedRTMPServer = require('./rtmp/RTMPServer.js');
 const Bot = require('./bot');
 
 
 const SERVER_MAPPING = {
   "SRT": MultiplexedSRTServer,
-  "WS": MultiplexedWebsocketServer
+  "WS": MultiplexedWebsocketServer,
+  "RTMP": MultiplexedRTMPServer,
 }
 
 class StreamingServer extends Component {
@@ -74,7 +76,7 @@ class StreamingServer extends Component {
 
       server.on('data', (audio, sessionId, channelIndex) => {
         try {
-          const buffer = Buffer.from(audio.data);
+          const buffer = Buffer.from(audio);
           const asr = this.ASRs.get(`${sessionId}_${channelIndex}`);
           if (asr) {
             asr.transcribe(buffer);

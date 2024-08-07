@@ -7,7 +7,7 @@ COPY .envdefault /usr/src/app/
 COPY Scheduler/ /usr/src/app/scheduler
 
 RUN cd /usr/src/app/lib && npm install
-RUN cd /usr/src/app/scheduler && npm install && npm cache clean --force  
+RUN cd /usr/src/app/scheduler && npm install && npm cache clean --force
 
 COPY wait-for-it.sh /
 COPY Scheduler/docker-entrypoint.sh /

@@ -1,5 +1,6 @@
 services:
   reverse-proxy:
+    image: traefik:v2.10
     command:
       - --api.insecure=true
       - --providers.docker=true
@@ -11,8 +12,14 @@ services:
       - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     ports:
+      - "80:80"
+      - "8080:8080"
       - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./letsencrypt:/letsencrypt
     labels:
+      - "traefik.enable=true"
       - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
       - "traefik.http.routers.traefik.rule=Host(`${DOMAIN_NAME}`)"
 
@@ -28,11 +35,13 @@ services:
   sessionapi:
     restart: always
     labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sessionapi.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/sessionapi`)"
+      - "traefik.http.routers.sessionapi.middlewares=sessionapi-strip"
+      - "traefik.http.middlewares.sessionapi-strip.stripprefix.prefixes=/sessionapi"
+      - "traefik.http.middlewares.sessionapi-strip.stripprefix.forceslash=false"
       - "traefik.http.routers.sessionapi.entrypoints=websecure"
       - "traefik.http.routers.sessionapi.tls.certresolver=letsencrypt"
 
   scheduler:
     restart: always
-    labels:
-      - "traefik.http.routers.scheduler.entrypoints=websecure"
-      - "traefik.http.routers.scheduler.tls.certresolver=letsencrypt"

@@ -2,22 +2,6 @@ services:
   #---------- optional services
   # Convenient rapid mosquitto and posgres startup configuration
   # You will need to configure it depending on your need for custom deployments
-  reverse-proxy:
-    image: traefik:v2.10
-    command:
-      - --api.insecure=true
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-    ports:
-      - "80:80"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./letsencrypt:/letsencrypt
-    labels:
-      - "traefik.enable=true"
-
   broker:
     image: eclipse-mosquitto:latest
     expose:
@@ -86,12 +70,6 @@ services:
         condition: service_started
       migration:
         condition: service_completed_successfully
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.sessionapi.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/sessionapi`)"
-      - "traefik.http.routers.sessionapi.middlewares=sessionapi-strip"
-      - "traefik.http.middlewares.sessionapi-strip.stripprefix.prefixes=/sessionapi"
-      - "traefik.http.middlewares.sessionapi-strip.stripprefix.forceslash=false"
 
   scheduler:
     build:
@@ -111,9 +89,3 @@ services:
         condition: service_started
       migration:
         condition: service_completed_successfully
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.scheduler.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/scheduler`)"
-      - "traefik.http.routers.scheduler.middlewares=scheduler-strip"
-      - "traefik.http.middlewares.scheduler-strip.stripprefix.prefixes=/scheduler"
-      - "traefik.http.middlewares.scheduler-strip.stripprefix.forceslash=false"

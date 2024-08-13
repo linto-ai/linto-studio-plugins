@@ -27,19 +27,14 @@ class LintoTranscriber extends EventEmitter {
         const { transcriber_profile } = this.channel;
 
         if (!transcriber_profile) {
-            this.transcriber_profile = {
-                config: {
-                    type: 'linto',
-                    languages: [{ candidate: process.env.ASR_LANGUAGE, endpoint: process.env.ASR_ENDPOINT || null }]
-                }
-            };
+            return;
         }
 
         this.startTime = null;
         this.lastEndTime = 0;
         this.emit('connecting');
 
-        const endpoint = this.transcriber_profile.config.languages[0].endpoint;
+        const endpoint = transcriber_profile.config.languages[0].endpoint;
         this.ws = new WebSocket(endpoint);
 
         this.ws.on('open', () => {
@@ -66,7 +61,7 @@ class LintoTranscriber extends EventEmitter {
                 if (!this.startTime) {
                     this.startTime = Date.now();
                 }
-                this.emit('transcribing', data);
+                this.emit('transcribing', data.partial);
                 debug(`ASR partial transcription: ${data.partial}`);
             }
         });

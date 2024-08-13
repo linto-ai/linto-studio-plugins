@@ -2,15 +2,6 @@
 
 # To launch the test, you must create a file named .envtest with the following content:
 #
-# ASR_ENDPOINT=[MICROSOFT ASR ENDPOINT]
-# ASR_REGION=[MICROSOFT ASR REGION]
-# ASR_API_KEY=[MICROSOFT ASR API KEY]
-#
-# ASR_PROVIDER=microsoft
-# ASR_LANGUAGE=fr-FR
-# ASR_USERNAME=
-# ASR_PASSWORD=
-#
 # DB_USER=myuser
 # DB_PASSWORD=mypass
 # DB_NAME=mydb
@@ -20,24 +11,8 @@
 # STREAMING_PROXY_HOST=127.0.0.1
 # SESSION_API_HOST=http://localhost
 # BROKER_PORT=1883
-# DELIVERY_WEBSERVER_HTTP_PORT=8001
 # SESSION_API_WEBSERVER_HTTP_PORT=8002
-# SESSION_API_BASE_PATH=/sessionapi
-# FRONT_END_ADMIN_USERNAME=admin
-# FRONT_END_ADMIN_PASSWORD=admin
-# FRONT_END_PORT=8000
-# FRONT_END_PUBLIC_URL=http://localhost/frontend
-# DELIVERY_WS_BASE_PATH=/delivery
-# SESSION_API_PUBLIC_URL=http://localhost/sessionapi
-# DELIVERY_WS_PUBLIC_URL=ws://localhost
-# DELIVERY_PUBLIC_URL=http://localhost/delivery
-# DELIVERY_SESSION_URL=http://sessionapi:8002
-# UDP_RANGE=8889-8999
-# LETS_ENCRYPT_EMAIL=fake@fake.com
-# DOMAIN_NAME=localhost
 # TRANSCRIBER_REPLICAS=2
-# SESSION_SCHEDULER_URL=http://scheduler:8003
-# SCHEDULER_WEBSERVER_HTTP_PORT=8003
 
 # This script test from end to end the service
 # To start this test, the following env var must be set

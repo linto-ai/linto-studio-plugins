@@ -43,38 +43,18 @@ DB_PASSWORD=mypass
 DB_NAME=mydb
 DB_PORT=5433
 
-STREAMING_PASSPHRASE=false
+STREAMING_PASSPHRASE=test
 STREAMING_USE_PROXY=false
-STREAMING_PROXY_HOST=127.0.0.1
+STREAMING_PROXY_HOST=localhost
+STREAMING_PROTOCOL=SRT,WS,RTMP
+STREAMING_WS_TCP_PORT=9012
+STREAMING_PROXY_WS_TCP_PORT=9012
+STREAMING_RTMP_TCP_PORT=9013
+STREAMING_PROXY_RTMP_TCP_PORT=9013
 
-ASR_PROVIDER=microsoft
-ASR_LANGUAGE=fr-FR
-ASR_ENDPOINT=
-ASR_USERNAME=
-ASR_REGION=
-ASR_PASSWORD=
-ASR_API_KEY=
-
-SESSION_API_HOST=http://localhost
 BROKER_PORT=1883
-DELIVERY_WEBSERVER_HTTP_PORT=8001
 SESSION_API_WEBSERVER_HTTP_PORT=8002
-SESSION_API_BASE_PATH=/sessionapi
-FRONT_END_ADMIN_USERNAME=admin
-FRONT_END_ADMIN_PASSWORD=admin
-FRONT_END_PORT=8000
-FRONT_END_PUBLIC_URL=http://localhost/frontend
-DELIVERY_WS_BASE_PATH=/delivery
-SESSION_API_PUBLIC_URL=http://localhost/sessionapi
-DELIVERY_WS_PUBLIC_URL=ws://localhost
-DELIVERY_PUBLIC_URL=http://localhost/delivery
-DELIVERY_SESSION_URL=http://sessionapi:8002
-UDP_RANGE=8889-8999
-LETS_ENCRYPT_EMAIL=fake@fake.com
-DOMAIN_NAME=localhost
-TRANSCRIBER_REPLICAS=2
-SESSION_SCHEDULER_URL=http://scheduler:8003
-SCHEDULER_WEBSERVER_HTTP_PORT=8003
+TRANSCRIBER_REPLICAS=1
 ```
 
 2. Run the docker-compose command:
@@ -91,7 +71,7 @@ This will allow you to test the API and transcription.
 
 1. Add a transcriber profile:
 
-Log in to the session API available here: http://localhost/sessionapi/api-docs/
+Log in to the session API available here: http://localhost:8002/api-docs/
 In the POST /transcriber_profiles section, add the following json:
 
 ```
@@ -130,16 +110,9 @@ In the POST /transcriber_profiles section, add the following json:
 ```
 
 - Retrieve the session id from the request return
-- Start the session using the PUT sessions/IP/start endpoint specifying the session id
 - Retrieve your channel's streaming endpoint via GET sessions/ID
 
-3. Connect to the web interface:
-
-- Go to: http://localhost/frontend/admin.html
-- The user/password combination will be admin/admin (as indicated in the .env file).
-- Now select your session
-
-4. Stream
+3. Stream
 
 You are now ready to receive real-time transcription. For this, send your SRT stream to the streaming endpoint.
 You can use a command like this:
@@ -154,29 +127,26 @@ Or like this for RTMP:
 gst-launch-1.0 -v filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_aac ! flvmux ! rtmpsink location=rtmp://localhost:1935/live/STREAM_NAME
 ```
 
-You should now see the transcriptions appearing in real time.
+**The streaming URL is the one provided by the session API.**
+
+
+You should now see the transcriptions appearing in real time in the log and they are now accessible in the broker.
 
 
 ## Routes
 
 Once the service is launched, several routes are accessible:
 
-### Frontend
-- http://localhost/frontend/admin.html -> The frontend URL allows viewing of the sessions and receiving transcriptions.
-- http://localhost/frontend/user.html -> This frontend URL is similar to the admin one but only allows viewing a single session. The URL for this view is generated from the admin view.
-
 ### Session API
 
-- http://localhost/sessionapi/api-docs/ -> This route allows access to the Swagger interface for configuring sessions.
+- http://localhost:8002/api-docs/ -> This route allows access to the Swagger interface for configuring sessions.
 
 ## Structure
 
 The project structure includes the following modules:
-- `front-end`: a front-end application to use sessions, download transcripts and consume live closed-captions
-- `session-manager`: an API to manage transcription sessions, also serves a front-end using Swagger client (Open API spec)
-- `transcriber`: a transcription service (streaming endpoint & relay to ASR services)
-- `scheduler`: a scheduling service that bridges the transcribers & subtitle-delivery with session manager, database, and message broker
-- `subtitle-delivery`: linguistic components used to generate and serve subtitles (Websocket API) or downloadble transcripts (HTTP API for multiple formats including VTT, SRT, TXT, Docx)
+- `Session-API`: an API to manage transcription sessions, also serves a front-end using Swagger client (Open API spec)
+- `Transcriber`: a transcription service (streaming endpoint & relay to ASR services)
+- `Scheduler`: a scheduling service that bridges the transcribers & subtitle-delivery with session manager, database, and message broker
 - The `lib` folder contains generic tooling for the project as a whole and is treated as another Node.js package. It is required from the modules using the package.json local file API. This allows the modules to access the tools provided by the `lib` package and use them in their implementation.
 
 See `doc` folder (developer informations) or specific READMEs within modules folders for more infos.
@@ -223,11 +193,9 @@ docker build -f Transcriber/Dockerfile .
 
 You can compile images in this way for the following components:
 
-- Delivery
 - Scheduler
 - Session-API
 - Transcriber
-- front-end
 - migration
 
 In practice, for local testing, there is no need to manually compile these images because Docker Compose will do it for you.
@@ -236,9 +204,10 @@ In practice, for local testing, there is no need to manually compile these image
 ## Docker: How to run
 
 In order to launch the Docker containers, 3 Docker Compose files are provided:
-- docker-compose.yml -> It is used for a secure HTTPS production deployment.
-- docker-compose-dev.yml -> It is used for local deployment in order to perform manual tests.
-- docker-compose-test.yml -> It is specifically used in integration tests launched by the integration-test.sh script.
+- compose.yml -> This is the base compose file defining the common properties of the different services.
+- compose.prod.yml -> It is used for a secure HTTPS production deployment.
+- compose.override.yml -> It is used for local deployment in order to perform manual tests.
+- compose.test.yml -> It is specifically used in integration tests launched by the integration-test.sh script.
 
 To make use of Docker Compose, it is recommended to refer to the quickstart section which guides you step by step through the complete launch of the service.
 
@@ -319,20 +288,6 @@ const data = {
 
 ## Some useful documentation below
 
-### FFMPEG COMMANDS
-
-ffmpeg -re -i testfile.mp3 -c:a libmp3lame -b:a 128k -f mp3 "srt://127.0.0.1:1234?pkt_size=1316" --> Sends as MP3
-
-ffmpeg -re -i testfile.mp3 -c:a libmp3lame -b:a 128k -f mpegts "srt://127.0.0.1:1234?pkt_size=1316" --> Sends as TS (streaming)
-
-ffmpeg -f lavfi -re -i smptebars=duration=30:size=1280x720:rate=30 -f lavfi -re -i sine=frequency=1000:duration=60:sample_rate=44100 -pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 30 -keyint_min 120 -profile:v baseline -preset veryfast -f mpegts "srt://127.0.0.1:1234?pkt_size=1316" --> Sine test
-
-
-### Binaries installer --> FFMPEG FFPLAY, FFPROBE, FFSERVER...
-
-https://www.npmjs.com/package/ffbinaries
-
-
 ### GSTREAMER SRT CHEAT SHEET
 
 https://github.com/matthew1000/gstreamer-cheat-sheet/blob/master/srt.md
@@ -353,19 +308,3 @@ Using tools like gst-launch, it's very easy to prototype SRT and it's integratio
 gst-launch-1.0 audiotestsrc ! audioconvert ! audioresample ! srtclientsink uri=srt://:8889
 
 gst-launch-1.0 filesrc location=test.wav ! wavparse ! audioconvert ! audioresample  ! srtclientsink uri=srt://:8889
-
-
-### Some testing commands using Gstreamer / FF Mpeg to generate SRT streams.
-
-      gst-launch-1.0 audiotestsrc ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtclientsink uri=srt://:8889
-
-      gst-launch-1.0 filesrc location=./test.wav ! decodebin ! audioconvert ! audioresample ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtclientsink uri=srt://:8889
-
-      gst-launch-1.0 filesrc location=./testfile.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtclientsink uri=srt://127.0.0.1:8889
-
-      - using passphrase -
-      gst-launch-1.0 filesrc location=./fr.wav ! decodebin ! audioconvert ! audioresample ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtsink uri="srt://127.0.0.1:8889?mode=caller&passphrase=0123456789"
-
-      ffmpeg -f lavfi -re -i sine=frequency=1000:duration=60:sample_rate=44100 -c:a pcm_s16le -f s16le -ar 44100 -ac 1 - | ffmpeg -f s16le -ar 44100 -ac 1 -i - -c:a aac -b:a 128k -f mpegts "srt://127.0.0.1:8889?mode=caller&pkt_size=1316"
-
-      ffmpeg -re -i test.mp3 -c copy -f mp3 "srt://127.0.0.1:8889?mode=caller&pkt_size=5000"

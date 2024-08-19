@@ -82,8 +82,6 @@ services:
       - BROKER_HOST=broker
       - DB_HOST=database
       - DEBUG=scheduler:*
-    expose:
-      - "${SCHEDULER_WEBSERVER_HTTP_PORT}"
     depends_on:
       broker:
         condition: service_started

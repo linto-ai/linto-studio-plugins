@@ -37,7 +37,6 @@ set -e
 # DOMAIN_NAME=localhost
 # TRANSCRIBER_REPLICAS=2
 # SESSION_SCHEDULER_URL=http://scheduler:8003
-# SCHEDULER_WEBSERVER_HTTP_PORT=8003
 
 # This script test from end to end the service
 # To start this test, the following env var must be set
@@ -78,8 +77,7 @@ UDP_RANGE=8889-8999
 LETS_ENCRYPT_EMAIL=jsbevilacqua@linagora.com
 DOMAIN_NAME=localhost
 TRANSCRIBER_REPLICAS=1
-SESSION_SCHEDULER_URL=http://scheduler:8003
-SCHEDULER_WEBSERVER_HTTP_PORT=8003" > .envtest
+SESSION_SCHEDULER_URL=http://scheduler:8003 " > .envtest
 source .envtest
 fi
 

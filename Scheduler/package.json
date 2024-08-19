@@ -25,11 +25,6 @@
   "license": "EUPL",
   "dependencies": {
     "debug": "^4.3.4",
-    "live-srt-lib": "file:../lib",
-    "express": "^4.18.2",
-    "express-session": "^1.17.3",
-    "cookie-parser": "^1.4.6",
-    "cors": "^2.8.5",
-    "uuid": "10.0.0"
+    "live-srt-lib": "file:../lib"
   }
 }

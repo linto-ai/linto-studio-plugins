@@ -15,8 +15,8 @@ module.exports = async function () {
           }
         }
         if (action === 'final') {
-          const transcription = JSON.parse(message.toString());
-          await this.saveTranscription(transcription, uniqueId); //save transcription to db using transcriber uniqueId
+          const {transcription, sessionId, channelIndex} = JSON.parse(message.toString());
+          await this.saveTranscription(transcription, sessionId, channelIndex);
         }
         // Session updated by a transcriber (channel status change)
         if (action === 'session'){

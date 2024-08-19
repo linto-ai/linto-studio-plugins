@@ -53,6 +53,12 @@ class StreamingServer extends Component {
       server.on('session-start', (session, channelIndex) => {
         try {
           const asr = new ASR(session, channelIndex);
+          asr.on('partial', (transcription) => {
+            this.emit('partial', transcription, session.id, channelIndex);
+          });
+          asr.on('final', (transcription) => {
+            this.emit('final', transcription, session.id, channelIndex);
+          });
           this.ASRs.set(`${session.id}_${channelIndex}`, asr);
           this.emit('session-start', session, channelIndex);
           debug(`Session ${session.id}, channel ${channelIndex} started`);
@@ -65,6 +71,7 @@ class StreamingServer extends Component {
         try {
           debug(`Session ${session.id}, channel ${channelIndex} stopped`);
           const asr = this.ASRs.get(`${session.id}_${channelIndex}`);
+          asr.removeAllListeners();
           asr.dispose();
           this.ASRs.delete(`${session.id}_${channelIndex}`);
           // pass to controllers/StreamingServer.js to forward to broker and mark the session as "ready"" / set channel status in database

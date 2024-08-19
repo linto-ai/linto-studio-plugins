@@ -114,11 +114,11 @@ class BrokerClient extends Component {
 
   // ###### TRANSCRIPTION ######
 
-  async saveTranscription(transcription, uniqueId) {
+  async saveTranscription(transcription, sessionId, channelIndex) {
     try {
-      const channel = await Model.Channel.findOne({ where: { transcriber_id: uniqueId } })
+      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, index: channelIndex } });
       if (!channel) {
-        throw new Error(`Channel with transcriber_id ${uniqueId} not found`)
+        throw new Error(`Channel with session ${sessionId} and index ${channelIndex} not found`)
       }
       const closedCaptions = Array.isArray(channel.closed_captions) ? channel.closed_captions : [];
       await channel.update({

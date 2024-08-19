@@ -49,6 +49,7 @@ class LintoTranscriber extends EventEmitter {
                 const result = {
                     astart: this.startedAt,
                     text: data.text,
+                    translations: {},
                     start: this.lastEndTime,
                     end: (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER / 1000)) / 1000,
                     lang: process.env.ASR_LANGUAGE,
@@ -61,7 +62,7 @@ class LintoTranscriber extends EventEmitter {
                 if (!this.startTime) {
                     this.startTime = Date.now();
                 }
-                this.emit('transcribing', data.partial);
+                this.emit('transcribing', {transcription: data.partial, translations: {}});
                 debug(`ASR partial transcription: ${data.partial}`);
             }
         });

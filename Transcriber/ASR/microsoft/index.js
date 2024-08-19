@@ -1,4 +1,4 @@
-const { AudioConfig, PropertyId, AudioInputStream, SpeechConfig, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
+const { AudioConfig, PropertyId, AudioInputStream, SpeechConfig, SpeechTranslationConfig, TranslationRecognizer, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
 const debug = require('debug')(`transcriber:microsoft`);
 const EventEmitter = require('eventemitter3');
 
@@ -29,11 +29,21 @@ class MicrosoftTranscriber extends EventEmitter {
 
         if (transcriber_profile) {
             if (transcriber_profile.config.languages.length === 1) {
-                this.startMono();
+                if (transcriber_profile.config.targetLanguages) {
+                    this.startMonoTranslation();
+                }
+                else {
+                    this.startMono();
+                }
             } else {
-                this.startMulti();
+                if (transcriber_profile.config.targetLanguages) {
+                    this.startMultiTranslation();
+                }
+                else {
+                    this.startMulti();
+                }
             }
-        } 
+        }
 
         this.recognizer.canceled = (s, e) => {
             debug(`Microsoft ASR canceled: ${e.errorDetails}`);
@@ -59,7 +69,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
         this.recognizer.recognizing = (s, e) => {
             debug(`Microsoft ASR partial transcription: ${e.result.text}`);
-            this.emit('transcribing', e.result.text);
+            this.emit('transcribing', {transcription: e.result.text, translations: {}});
         };
 
         this.recognizer.recognized = (s, e) => {
@@ -68,6 +78,134 @@ class MicrosoftTranscriber extends EventEmitter {
                 const result = {
                     "astart": this.startedAt,
                     "text": e.result.text,
+                    "translations": {},
+                    "start": e.result.offset / 10000000,
+                    "end": (e.result.offset + e.result.duration) / 10000000,
+                    "lang": config.languages[0].candidate,
+                    "locutor": null // TODO: might use speaker diarization
+                };
+                this.emit('transcribed', result);
+            }
+        };
+
+        this.recognizer.startContinuousRecognitionAsync(() => {
+            debug("Microsoft ASR recognition started");
+            this.emit('ready');
+        });
+    }
+
+    startMonoTranslation() {
+        debug("Microsoft ASR starting mono transcription with translation");
+        const { config } = this.channel.transcriber_profile;
+        const speechConfig = SpeechTranslationConfig.fromSubscription(config.key, config.region);
+        speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
+        speechConfig.endpointId = config.languages[0]?.endpoint;
+
+        const targetLanguages = config.targetLanguages;
+        for (const targetLanguage of targetLanguages) {
+            speechConfig.addTargetLanguage(targetLanguage);
+        }
+
+        const audioConfig = AudioConfig.fromStreamInput(this.pushStream);
+        this.recognizer = new TranslationRecognizer(speechConfig, audioConfig);
+        this.emit('connecting');
+
+        this.recognizer.recognizing = (s, e) => {
+            debug(`Microsoft ASR partial transcription: ${e.result.text}`);
+            for(const targetLanguage of targetLanguages) {
+                debug(`Microsoft ASR partial translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
+            }
+            const transcription = e.result.text;
+            const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
+            const result = {
+                transcription, translations
+            };
+            this.emit('transcribing', result);
+        };
+
+        this.recognizer.recognized = (s, e) => {
+            if (e.result.reason === ResultReason.TranslatedSpeech) {
+                debug(`Microsoft ASR final transcription: ${e.result.text}`);
+                for(const targetLanguage of targetLanguages) {
+                    debug(`Microsoft ASR final translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
+                }
+                const transcription = e.result.text;
+                const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
+                const result = {
+                    "astart": this.startedAt,
+                    "text": transcription,
+                    "translations": translations,
+                    "start": e.result.offset / 10000000,
+                    "end": (e.result.offset + e.result.duration) / 10000000,
+                    "lang": config.languages[0].candidate,
+                    "locutor": null // TODO: might use speaker diarization
+                };
+                this.emit('transcribed', result);
+            }
+        };
+
+        this.recognizer.startContinuousRecognitionAsync(() => {
+            debug("Microsoft ASR recognition started");
+            this.emit('ready');
+        });
+    }
+
+    startMultiTranslation() {
+        debug("Microsoft ASR starting multi transcription with translation");
+        const { config } = this.channel.transcriber_profile;
+
+        // Speech config
+        const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
+        const speechConfig = SpeechTranslationConfig.fromEndpoint(new URL(universalEndpoint), config.key);
+        speechConfig.speechRecognitionLanguage = config.languages[0].candidate;
+        speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
+        speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
+
+        // Auto detect source language
+        const candidates = config.languages.map(language => {
+            return language.endpoint ? SourceLanguageConfig.fromLanguage(language.candidate, language.endpoint) : SourceLanguageConfig.fromLanguage(language.candidate);
+        });
+        const autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig.fromSourceLanguageConfigs(candidates);
+
+        // Target language
+        const targetLanguages = config.targetLanguages;
+        for (const targetLanguage of targetLanguages) {
+            speechConfig.addTargetLanguage(targetLanguage);
+        }
+
+        // Audio config
+        const audioConfig = AudioConfig.fromStreamInput(this.pushStream);
+
+        // Translation Recognizer
+        this.recognizer = TranslationRecognizer.FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
+
+        this.emit('connecting');
+
+        this.recognizer.recognizing = (s, e) => {
+            debug(`Microsoft ASR partial transcription: ${e.result.text}`);
+            for(const targetLanguage of targetLanguages) {
+                debug(`Microsoft ASR partial translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
+            }
+            const transcription = e.result.text;
+            const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
+            const result = {
+                transcription, translations
+            };
+            this.emit('transcribing', result);
+        };
+
+        this.recognizer.recognized = (s, e) => {
+            if (e.result.reason === ResultReason.TranslatedSpeech) {
+                debug(`Microsoft ASR final transcription: ${e.result.text}`);
+                for(const targetLanguage of targetLanguages) {
+                    debug(`Microsoft ASR final translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
+                }
+                const transcription = e.result.text;
+                const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
+                const result = {
+                    "astart": this.startedAt,
+                    "text": transcription,
+                    "translations": translations,
                     "start": e.result.offset / 10000000,
                     "end": (e.result.offset + e.result.duration) / 10000000,
                     "lang": config.languages[0].candidate,
@@ -100,7 +238,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
         this.recognizer.recognizing = (s, e) => {
             debug(`Microsoft ASR partial transcription ${e.result.language}: ${e.result.text}`);
-            this.emit('transcribing', e.result.text);
+            this.emit('transcribing', {transcription: e.result.text, translations: {}});
         };
 
         this.recognizer.recognized = (s, e) => {
@@ -109,6 +247,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 const result = {
                     "astart": this.startedAt,
                     "text": e.result.text,
+                    "translations": {},
                     "start": e.result.offset / 10000000,
                     "end": (e.result.offset + e.result.duration) / 10000000,
                     "lang": e.result.language,

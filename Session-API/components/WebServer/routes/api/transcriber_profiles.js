@@ -1,6 +1,16 @@
 const debug = require('debug')('session-api:router:api-docs:transcriber_profiles');
 const { Model } = require("live-srt-lib");
 
+function isValidLocale(locale) {
+    const pattern = /^[a-z]{2}-[A-Z]{2}$/;
+    return pattern.test(locale);
+}
+
+function isValidISO6391(code) {
+    const pattern = /^[a-z]{2}$/;
+    return pattern.test(code);
+}
+
 const validateTranscriberProfile = (body) => {
     const config = body.config;
     if (!config) {
@@ -12,8 +22,11 @@ const validateTranscriberProfile = (body) => {
     if (config.type === 'linto' && (!config.languages.every(lang => lang.candidate && lang.endpoint))) {
         return { error: 'Invalid Linto TranscriberProfile endpoint or languages', status: 400 };
     }
-    if (config.type === 'microsoft' && (!config.languages.every(lang => lang.candidate) || !config.region || !config.key)) {
+    if (config.type === 'microsoft' && (!config.languages.every(lang => isValidLocale(lang.candidate)) || !config.region || !config.key)) {
         return { error: 'Invalid Microsoft TranscriberProfile languages, region, or key', status: 400 };
+    }
+    if (config.type === 'microsoft' && config.targetLanguages && (!config.targetLanguages.every(lang => isValidISO6391(lang)))) {
+        return { error: 'Invalid Microsoft targetLanguage. Must be ISO6391 format', status: 400 };
     }
     if (config.languages.some(lang => typeof lang !== 'object')) {
         return { error: 'Invalid TranscriberProfile languages', status: 400 };

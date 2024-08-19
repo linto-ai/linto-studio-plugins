@@ -325,7 +325,7 @@ module.exports = (webserver) => {
                     stream_status: 'inactive'
                 }, {
                     where: {
-                        'session_id': sessionId
+                        'sessionId': sessionId
                     }
                 });
                 webserver.emit('session-update');

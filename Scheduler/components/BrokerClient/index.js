@@ -102,7 +102,7 @@ class BrokerClient extends Component {
     // find the transcriber_id for the channel
     // publish the stopbot command to the transcriber
     try {
-      const channel = await Model.Channel.findOne({ where: { session_id: sessionId, index: channelIndex } });
+      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, index: channelIndex } });
       if (!channel?.transcriber_id) {
         return;
       }
@@ -163,7 +163,7 @@ class BrokerClient extends Component {
       for (const session of affectedSessions) {
         const activeChannelsCount = await Model.Channel.count({
           where: {
-            session_id: session.id,
+            sessionId: session.id,
             stream_status: 'active'
           }
         });

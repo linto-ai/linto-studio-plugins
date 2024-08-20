@@ -329,7 +329,16 @@ module.exports = (webserver) => {
                     }
                 });
                 webserver.emit('session-update');
-                res.json({ 'success': true });
+
+                const result = await Model.Session.findByPk(session.id, {
+                    include: {
+                        model: Model.Channel,
+                        attributes: {
+                            exclude: ['id', 'session_id']
+                        }
+                    }
+                });
+                res.json(result);
             } catch (err) {
                 next(err);
             }

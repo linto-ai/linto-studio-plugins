@@ -67,13 +67,6 @@
             "required": ["candidate"]
           }
         },
-        "targetLanguages": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "description": "Language code ISO6391"
-          }
-        },
         "key": {
           "type": "string"
         },

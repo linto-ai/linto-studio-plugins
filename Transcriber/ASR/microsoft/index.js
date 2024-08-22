@@ -23,20 +23,29 @@ class MicrosoftTranscriber extends EventEmitter {
         this.emit('closed');
     }
 
+    getTargetLanguages() {
+        const { translations } = this.channel;
+        if (!translations || !translations.length) {
+            return;
+        }
+
+        return translations.map(lang => lang.split('-')[0]);
+    }
+
     start() {
         this.startedAt = new Date().toISOString();
-        const { transcriberProfile } = this.channel;
+        const { transcriberProfile, translations } = this.channel;
 
         if (transcriberProfile) {
             if (transcriberProfile.config.languages.length === 1) {
-                if (transcriberProfile.config.targetLanguages) {
+                if (translations && translations.length) {
                     this.startMonoTranslation();
                 }
                 else {
                     this.startMono();
                 }
             } else {
-                if (transcriberProfile.config.targetLanguages) {
+                if (translations && translations.length) {
                     this.startMultiTranslation();
                 }
                 else {
@@ -101,7 +110,7 @@ class MicrosoftTranscriber extends EventEmitter {
         speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
         speechConfig.endpointId = config.languages[0]?.endpoint;
 
-        const targetLanguages = config.targetLanguages;
+        const targetLanguages = this.getTargetLanguages();
         for (const targetLanguage of targetLanguages) {
             speechConfig.addTargetLanguage(targetLanguage);
         }
@@ -168,7 +177,7 @@ class MicrosoftTranscriber extends EventEmitter {
         const autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig.fromSourceLanguageConfigs(candidates);
 
         // Target language
-        const targetLanguages = config.targetLanguages;
+        const targetLanguages = this.getTargetLanguages();
         for (const targetLanguage of targetLanguages) {
             speechConfig.addTargetLanguage(targetLanguage);
         }

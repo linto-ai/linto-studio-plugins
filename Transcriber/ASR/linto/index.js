@@ -22,6 +22,18 @@ class LintoTranscriber extends EventEmitter {
         this.emit('closed');
     }
 
+    getMqttPayload(text) {
+        return {
+            "astart": this.startedAt,
+            "text": text,
+            "translations": {},
+            "start": this.lastEndTime,
+            "end": (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER / 1000)) / 1000,
+            "lang": process.env.ASR_LANGUAGE,
+            "locutor": null
+        };
+    }
+
     start() {
         this.startedAt = new Date().toISOString();
         const { transcriberProfile } = this.channel;
@@ -46,15 +58,7 @@ class LintoTranscriber extends EventEmitter {
         this.ws.on('message', (message) => {
             const data = JSON.parse(message);
             if (data.text) {
-                const result = {
-                    astart: this.startedAt,
-                    text: data.text,
-                    translations: {},
-                    start: this.lastEndTime,
-                    end: (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER / 1000)) / 1000,
-                    lang: process.env.ASR_LANGUAGE,
-                    locutor: null
-                };
+                const result = this.getMqttPayload(data.text);
                 this.lastEndTime = result.end;
                 this.emit('transcribed', result);
                 debug(`ASR transcription: ${data.text}`);
@@ -62,7 +66,8 @@ class LintoTranscriber extends EventEmitter {
                 if (!this.startTime) {
                     this.startTime = Date.now();
                 }
-                this.emit('transcribing', {transcription: data.partial, translations: {}});
+                const result = this.getMqttPayload(data.partial);
+                this.emit('transcribing', result);
                 debug(`ASR partial transcription: ${data.partial}`);
             }
         });

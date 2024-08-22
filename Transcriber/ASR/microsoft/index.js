@@ -32,6 +32,23 @@ class MicrosoftTranscriber extends EventEmitter {
         return translations.map(lang => lang.split('-')[0]);
     }
 
+    getMqttPayload(result) {
+        let translations = {};
+        if (result.translations) {
+            translations = Object.fromEntries(this.getTargetLanguages().map((key, i) => [key, result.translations.get(key)]));
+        }
+        const lang = result.language ? result.language : this.channel.transcriberProfile.config.languages[0].candidate;
+        return {
+            "astart": this.startedAt,
+            "text": result.text,
+            "translations": translations,
+            "start": result.offset / 10000000,
+            "end": (result.offset + result.duration) / 10000000,
+            "lang": lang,
+            "locutor": null // TODO: might use speaker diarization
+        };
+    }
+
     start() {
         this.startedAt = new Date().toISOString();
         const { transcriberProfile, translations } = this.channel;
@@ -78,22 +95,13 @@ class MicrosoftTranscriber extends EventEmitter {
 
         this.recognizer.recognizing = (s, e) => {
             debug(`Microsoft ASR partial transcription: ${e.result.text}`);
-            this.emit('transcribing', {transcription: e.result.text, translations: {}});
+            this.emit('transcribing', this.getMqttPayload(e.result));
         };
 
         this.recognizer.recognized = (s, e) => {
             if (e.result.reason === ResultReason.RecognizedSpeech) {
                 debug(`Microsoft ASR final transcription: ${e.result.text}`);
-                const result = {
-                    "astart": this.startedAt,
-                    "text": e.result.text,
-                    "translations": {},
-                    "start": e.result.offset / 10000000,
-                    "end": (e.result.offset + e.result.duration) / 10000000,
-                    "lang": config.languages[0].candidate,
-                    "locutor": null // TODO: might use speaker diarization
-                };
-                this.emit('transcribed', result);
+                this.emit('transcribed', this.getMqttPayload(e.result));
             }
         };
 
@@ -124,12 +132,7 @@ class MicrosoftTranscriber extends EventEmitter {
             for(const targetLanguage of targetLanguages) {
                 debug(`Microsoft ASR partial translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
             }
-            const transcription = e.result.text;
-            const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
-            const result = {
-                transcription, translations
-            };
-            this.emit('transcribing', result);
+            this.emit('transcribing', this.getMqttPayload(e.result));
         };
 
         this.recognizer.recognized = (s, e) => {
@@ -138,18 +141,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 for(const targetLanguage of targetLanguages) {
                     debug(`Microsoft ASR final translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
                 }
-                const transcription = e.result.text;
-                const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
-                const result = {
-                    "astart": this.startedAt,
-                    "text": transcription,
-                    "translations": translations,
-                    "start": e.result.offset / 10000000,
-                    "end": (e.result.offset + e.result.duration) / 10000000,
-                    "lang": config.languages[0].candidate,
-                    "locutor": null // TODO: might use speaker diarization
-                };
-                this.emit('transcribed', result);
+                this.emit('transcribed', this.getMqttPayload(e.result));
             }
         };
 
@@ -195,12 +187,7 @@ class MicrosoftTranscriber extends EventEmitter {
             for(const targetLanguage of targetLanguages) {
                 debug(`Microsoft ASR partial translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
             }
-            const transcription = e.result.text;
-            const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
-            const result = {
-                transcription, translations
-            };
-            this.emit('transcribing', result);
+            this.emit('transcribing', this.getMqttPayload(e.result));
         };
 
         this.recognizer.recognized = (s, e) => {
@@ -209,18 +196,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 for(const targetLanguage of targetLanguages) {
                     debug(`Microsoft ASR final translation: ${targetLanguage} -> ${e.result.translations.get(targetLanguage)}`);
                 }
-                const transcription = e.result.text;
-                const translations = Object.fromEntries(targetLanguages.map((key, i) => [key, e.result.translations.get(key)]));
-                const result = {
-                    "astart": this.startedAt,
-                    "text": transcription,
-                    "translations": translations,
-                    "start": e.result.offset / 10000000,
-                    "end": (e.result.offset + e.result.duration) / 10000000,
-                    "lang": config.languages[0].candidate,
-                    "locutor": null // TODO: might use speaker diarization
-                };
-                this.emit('transcribed', result);
+                this.emit('transcribed', this.getMqttPayload(e.result));
             }
         };
 
@@ -247,22 +223,13 @@ class MicrosoftTranscriber extends EventEmitter {
 
         this.recognizer.recognizing = (s, e) => {
             debug(`Microsoft ASR partial transcription ${e.result.language}: ${e.result.text}`);
-            this.emit('transcribing', {transcription: e.result.text, translations: {}});
+            this.emit('transcribing', this.getMqttPayload(e.result));
         };
 
         this.recognizer.recognized = (s, e) => {
             if (e.result.reason === ResultReason.RecognizedSpeech) {
                 debug(`Microsoft ASR final transcription ${e.result.language}: ${e.result.text}`);
-                const result = {
-                    "astart": this.startedAt,
-                    "text": e.result.text,
-                    "translations": {},
-                    "start": e.result.offset / 10000000,
-                    "end": (e.result.offset + e.result.duration) / 10000000,
-                    "lang": e.result.language,
-                    "locutor": null // TODO: might use speaker diarization
-                };
-                this.emit('transcribed', result);
+                this.emit('transcribed', this.getMqttPayload(e.result));
             }
         };
 

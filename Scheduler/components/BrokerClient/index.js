@@ -18,7 +18,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/final`, `transcriber/out/+/session`, `scheduler/in/#`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/session`, `scheduler/in/#`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");

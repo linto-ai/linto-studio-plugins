@@ -29,7 +29,7 @@ class BrokerClient extends Component {
     this.client.on("ready", async () => {
       this.state = READY
       this.client.publishStatus(); // scheduler status (online)
-      await this.resetSessions(); // reset all active sessions / channels (stream_status) to ready/inactive state
+      await this.resetSessions(); // reset all active sessions / channels (streamStatus) to ready/inactive state
     });
     this.client.on("error", (err) => {
       this.state = ERROR;
@@ -43,39 +43,39 @@ class BrokerClient extends Component {
   // Choose the least used transcriber to start a bot
   // we do this cause bot handling needs to be scheduled on the instance with the least load
   async startBot(session, channelIndex, address, botType) {
-    // search all channels with active stream_status
-    // count the number of active channels for each transcriber_id, choose the one with the least active channels
-    // ignore channels with transcriber_id = null or set to an id that is not in the transcribers array
+    // search all channels with active streamStatus
+    // count the number of active channels for each transcriberId, choose the one with the least active channels
+    // ignore channels with transcriberId = null or set to an id that is not in the transcribers array
     // if no transcriber is found, use the first transcriber in the transcribers array
     // publish the startbot command to the chosen transcriber
 
     try {
-      // Fetch active channels and count them by transcriber_id
+      // Fetch active channels and count them by transcriberId
       const activeChannelsCount = await Model.Channel.findAll({
         where: {
-          stream_status: 'active',
-          transcriber_id: {
-            [Model.Op.not]: null, // Exclude channels with null transcriber_id
+          streamStatus: 'active',
+          transcriberId: {
+            [Model.Op.not]: null, // Exclude channels with null transcriberId
           }
         },
         attributes: [
-          'transcriber_id',
-          [Model.sequelize.fn('COUNT', Model.sequelize.col('transcriber_id')), 'activeCount']
+          'transcriberId',
+          [Model.sequelize.fn('COUNT', Model.sequelize.col('transcriberId')), 'activeCount']
         ],
-        group: 'transcriber_id',
+        group: 'transcriberId',
         raw: true
       });
 
       // Filter to include only those transcribers currently registered and online
       const validTranscriberCounts = activeChannelsCount.filter(c =>
-        this.transcribers.find(t => t.uniqueId === c.transcriber_id && t.online)
+        this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online)
       );
 
       // Sort to find the least used transcriber that is online
       let chosenTranscriber = null;
       let leastActiveCount = Infinity;
       validTranscriberCounts.forEach(c => {
-        const transcriber = this.transcribers.find(t => t.uniqueId === c.transcriber_id && t.online);
+        const transcriber = this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online);
         if (transcriber && c.activeCount < leastActiveCount) {
           chosenTranscriber = transcriber;
           leastActiveCount = c.activeCount;
@@ -99,14 +99,14 @@ class BrokerClient extends Component {
   }
 
   async stopBot(sessionId, channelIndex) {
-    // find the transcriber_id for the channel
+    // find the transcriberId for the channel
     // publish the stopbot command to the transcriber
     try {
       const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, index: channelIndex } });
-      if (!channel?.transcriber_id) {
+      if (!channel?.transcriberId) {
         return;
       }
-      this.client.publish(`transcriber/in/${channel.transcriber_id}/stopbot`, { sessionId, channelIndex }, 2, false, true);
+      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId, channelIndex }, 2, false, true);
     } catch (error) {
       console.error('Failed to stop bot:', error);
     }
@@ -120,9 +120,9 @@ class BrokerClient extends Component {
       if (!channel) {
         throw new Error(`Channel with session ${sessionId} and index ${channelIndex} not found`)
       }
-      const closedCaptions = Array.isArray(channel.closed_captions) ? channel.closed_captions : [];
+      const closedCaptions = Array.isArray(channel.closedCaptions) ? channel.closedCaptions : [];
       await channel.update({
-        closed_captions: [...closedCaptions, transcription]
+        closedCaptions: [...closedCaptions, transcription]
       });
     } catch (err) {
       console.error(`${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`, JSON.stringify(transcription));
@@ -144,17 +144,17 @@ class BrokerClient extends Component {
   async unregisterTranscriber(transcriber) {
     this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId);
     try {
-      // Update channels associated with the transcriber to set stream_status to 'inactive'
+      // Update channels associated with the transcriber to set streamStatus to 'inactive'
       await Model.Channel.update(
-        { stream_status: 'inactive', transcriber_id: null },
-        { where: { transcriber_id: transcriber.uniqueId } }
+        { streamStatus: 'inactive', transcriberId: null },
+        { where: { transcriberId: transcriber.uniqueId } }
       );
 
       // Fetch sessions that had channels associated with the transcriber
       const affectedSessions = await Model.Session.findAll({
         include: [{
           model: Model.Channel,
-          where: { transcriber_id: transcriber.uniqueId },
+          where: { transcriberId: transcriber.uniqueId },
           required: false
         }]
       });
@@ -164,7 +164,7 @@ class BrokerClient extends Component {
         const activeChannelsCount = await Model.Channel.count({
           where: {
             sessionId: session.id,
-            stream_status: 'active'
+            streamStatus: 'active'
           }
         });
 
@@ -181,8 +181,8 @@ class BrokerClient extends Component {
     }
   }
 
-  async updateSession(transcriber_id, sessionId, channelIndex, newStreamStatus) {
-    debug(`Updating session activity: ${sessionId} --> channel index: ${channelIndex} stream_status ${newStreamStatus}`);
+  async updateSession(transcriberId, sessionId, channelIndex, newStreamStatus) {
+    debug(`Updating session activity: ${sessionId} --> channel index: ${channelIndex} streamStatus ${newStreamStatus}`);
     try {
       // Fetch the session with its channels
       const session = await Model.Session.findByPk(sessionId, {
@@ -197,11 +197,11 @@ class BrokerClient extends Component {
       // Map through channels and prepare promises for updating them
       const channelsUpdates = session.channels.map(channel => {
         if (channel.index === channelIndex) {
-          channel.stream_status = newStreamStatus; // Update the specific channel's stream_status
+          channel.streamStatus = newStreamStatus; // Update the specific channel's streamStatus
           if (newStreamStatus === 'active') {
-            channel.transcriber_id = transcriber_id; // Set the transcriber_id for the channel
+            channel.transcriberId = transcriberId; // Set the transcriberId for the channel
           } else {
-            channel.transcriber_id = null; // Reset the transcriber_id for the channel
+            channel.transcriberId = null; // Reset the transcriberId for the channel
           }
           return channel.save(); // Return promise for async operation
         }
@@ -210,13 +210,13 @@ class BrokerClient extends Component {
       // Wait for all channel updates to complete
       await Promise.all(channelsUpdates);
 
-      let hasActiveStream = session.channels.some(channel => channel.stream_status === 'active');
+      let hasActiveStream = session.channels.some(channel => channel.streamStatus === 'active');
 
       // Update session status based on channels' stream statuses
       if (hasActiveStream && session.status !== 'active') {
         session.status = 'active';
-        if (!session.start_time) {
-          session.start_time = new Date();
+        if (!session.startTime) {
+          session.startTime = new Date();
         }
       } else if (!hasActiveStream && session.status !== 'ready') {
         session.status = 'ready';
@@ -237,14 +237,14 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['id', 'stream_status'],
+          attributes: ['id', 'streamStatus'],
         }
       ]
     });
     await Promise.all(sessions.map(async session => {
       await Promise.all(session.channels.map(async channel => {
-        if (channel.stream_status === 'active') {
-          await channel.update({ stream_status: 'inactive' });
+        if (channel.streamStatus === 'active') {
+          await channel.update({ streamStatus: 'inactive' });
         }
       }));
       session.status = 'ready'; // Update session status to inactive
@@ -260,7 +260,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['index', 'translations', 'stream_endpoints', 'stream_status', 'diarization', 'keepAudio'],
+          attributes: ['index', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio'],
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],

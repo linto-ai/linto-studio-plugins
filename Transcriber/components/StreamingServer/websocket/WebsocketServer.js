@@ -64,8 +64,8 @@ class MultiplexedWebsocketServer extends EventEmitter {
           debug(`Connection: ${req.url} --> session ${sessionId}, Channel index ${channelIndex} not found.`);
           return { isValid: false };
       }
-      // Check if the channel's stream_status is 'active'
-      if (channel.stream_status === 'active') {
+      // Check if the channel's streamStatus is 'active'
+      if (channel.streamStatus === 'active') {
           debug(`Connection: ${req.url} --> session ${sessionId}, Channel index ${channelIndex} already active. Skipping.`);
           return { isValid: false };
       }

@@ -111,7 +111,7 @@ module.exports = (webserver) => {
                 include: {
                     model: Model.Channel,
                     attributes: {
-                        exclude: ['id', 'session_id', 'closed_captions', 'translated_closed_captions']
+                        exclude: ['id', 'session_id', 'closedCaptions', 'translatedClosedCaptions']
                     }
                 },
                 where: where
@@ -136,9 +136,9 @@ module.exports = (webserver) => {
                 session = await Model.Session.create({
                     status: 'ready',
                     name: req.body.name || `New session ${new Date().toISOString()}`,
-                    start_time: req.body.start_time || null,
-                    end_time: req.body.end_time || null,
-                    errored_on: null,
+                    startTime: req.body.startTime || null,
+                    endTime: req.body.endTime || null,
+                    erroredOn: null,
                     owner: req.body.owner || null,
                     organizationId: req.body.organizationId || null,
                     public: req.body.public || false
@@ -162,8 +162,8 @@ module.exports = (webserver) => {
                         diarization: channel.diarization || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
-                        stream_status: 'inactive',
-                        stream_endpoints: getEndpoints(session.id, channels.indexOf(channel)),
+                        streamStatus: 'inactive',
+                        streamEndpoints: getEndpoints(session.id, channels.indexOf(channel)),
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
                         name: channel.name
@@ -212,8 +212,8 @@ module.exports = (webserver) => {
                 if (!channel) {
                     return res.status(404).json({ error: "Channel not found" });
                 }
-                // Check if the channel's stream_status is 'inactive'
-                if (channel.stream_status !== 'inactive') {
+                // Check if the channel's streamStatus is 'inactive'
+                if (channel.streamStatus !== 'inactive') {
                     return res.status(400).json({ error: "The channel must be inactive to start a bot" });
                 }
                 webserver.emit('startbot', id, channelIndex, url, botType);
@@ -296,14 +296,14 @@ module.exports = (webserver) => {
                 // If session is not active or force is true, proceed with update
                 await Model.Session.update({
                     status: 'terminated',
-                    end_time: new Date()
+                    endTime: new Date()
                 }, {
                     where: {
                         'id': sessionId
                     }
                 });
                 await Model.Channel.update({
-                    stream_status: 'inactive'
+                    streamStatus: 'inactive'
                 }, {
                     where: {
                         'sessionId': sessionId

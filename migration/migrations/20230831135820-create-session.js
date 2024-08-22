@@ -16,15 +16,15 @@ module.exports = {
         type: Sequelize.STRING,
         allowNull: false,
       },
-      start_time: {
+      startTime: {
         type: Sequelize.DATE,
         allowNull: true,
       },
-      end_time: {
+      endTime: {
         type: Sequelize.DATE,
         allowNull: true,
       },
-      errored_on: {
+      erroredOn: {
         type: Sequelize.ARRAY(Sequelize.JSON),
         allowNull: true,
       },

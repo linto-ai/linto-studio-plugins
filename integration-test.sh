@@ -142,7 +142,7 @@ check_response "$response" "[[ $(echo $response | jq -r '.status') == 'ready' ]]
 
 ### ---------------------
 ### Test Transcriber crash
-# TODO: Should the channel stream_status set to errored when the transcriber crash ?
+# TODO: Should the channel streamStatus set to errored when the transcriber crash ?
 echo "- Checking Transcriber crash"
 docker stop transcriber-integration-test
 sleep 5
@@ -157,25 +157,25 @@ sleep 20
 response=$(get_request "$SESSION_URL/$SESSION_ID")
 #check_response "$response" "[[ $(echo $response | jq -r '.channels[0].transcriber_status') == 'ready' ]]" "Transcriber status ready in DB: OK" "Error: Transcriber status not ready in DB"
 
-STREAM_ENDPOINT="$(echo "$response" | jq -r '.channels[0].stream_endpoints["srt"]')"
+STREAM_ENDPOINT="$(echo "$response" | jq -r '.channels[0].streamEndpoints["srt"]')"
 echo "$response STREAM_ENPOINT= $STREAM_ENDPOINT"
 
 ### ---------------------
 ### Test send stream
 echo "- Checking Streaming and Transcription"
 response=$(get_request "$SESSION_URL/$SESSION_ID")
-check_response "$response" "[[ $(echo $response | jq -r '.channels[0].closed_captions | length == 0') ]]" "Channel transcription empty OK" "Error: Channel transcription not empty"
+check_response "$response" "[[ $(echo $response | jq -r '.channels[0].closedCaptions | length == 0') ]]" "Channel transcription empty OK" "Error: Channel transcription not empty"
 
 gst-launch-1.0 filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audioresample ! avenc_ac3 ! mpegtsmux ! rtpmp2tpay ! srtsink uri="$STREAM_ENDPOINT" &
 
 # streaming status active
 sleep 3
 response=$(get_request "$SESSION_URL/$SESSION_ID")
-check_response "$response" "[[ $(echo $response | jq -r '.channels[0].stream_status') == 'active' ]]" "Transcriber status streaming in DB: OK" "Error: Transcriber status not streaming in DB"
+check_response "$response" "[[ $(echo $response | jq -r '.channels[0].streamStatus') == 'active' ]]" "Transcriber status streaming in DB: OK" "Error: Transcriber status not streaming in DB"
 
 wait
 
-check_response "$response" "[[ $(echo "$response" | jq -r '.channels[0].closed_captions | length > 0') ]]" "Channel transcription full OK" "Error: Channel transcription is empty"
+check_response "$response" "[[ $(echo "$response" | jq -r '.channels[0].closedCaptions | length > 0') ]]" "Channel transcription full OK" "Error: Channel transcription is empty"
 sleep 2
 
 ### ---------------------

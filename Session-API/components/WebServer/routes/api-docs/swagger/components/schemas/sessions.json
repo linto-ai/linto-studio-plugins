@@ -5,11 +5,11 @@
             "name": {
                 "type": "string"
             },
-            "start_time": {
+            "startTime": {
                 "type": "string",
                 "format": "date-time"
             },
-            "end_time": {
+            "endTime": {
                 "type": "string",
                 "format": "date-time"
             },
@@ -65,15 +65,15 @@
             "name": {
                 "type": "string"
             },
-            "start_time": {
+            "startTime": {
                 "type": "string",
                 "format": "date-time"
             },
-            "end_time": {
+            "endTime": {
                 "type": "string",
                 "format": "date-time"
             },
-            "errorred_on": {
+            "erroredOn": {
                 "type": "string",
                 "format": "date-time"
             }
@@ -156,7 +156,7 @@
                 "type": "integer",
                 "description": "The index of the channel"
             },
-            "transcriber_id": {
+            "transcriberId": {
                 "type": "string",
                 "description": "The id of the transcriber that is currently transcribing this channel"
             },
@@ -176,7 +176,7 @@
                 "type": "integer",
                 "description": "The id of the channel config"
             },
-            "stream_endpoint": {
+            "streamEndpoints": {
                 "type": "object",
                 "description": "The available stream endpoints for this channel",
                 "properties": {
@@ -194,22 +194,12 @@
                     }
                 }
             },
-            "stream_status": {
+            "streamStatus": {
                 "type": "string",
                 "description": "The status of the stream",
                 "enum": [
                     "active",
                     "inactive",
-                    "errored"
-                ]
-            },
-            "transcriber_status": {
-                "type": "string",
-                "description": "The status of the transcriber",
-                "enum": [
-                    "ready",
-                    "streaming",
-                    "closed",
                     "errored"
                 ]
             },
@@ -225,7 +215,7 @@
             {
                 "type": "object",
                 "properties": {
-                    "closed_captions": {
+                    "closedCaptions": {
                         "type": "array",
                         "items": {
                             "type": "object",

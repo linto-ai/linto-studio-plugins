@@ -21,12 +21,12 @@ module.exports = async function () {
         // Session updated by a transcriber (channel status change)
         if (action === 'session'){
           const {
-            transcriber_id: transcriber_id,
+            transcriberId: transcriberId,
             id: sessionId,
             status: newStreamStatus,
             channel: channelIndex
           } = JSON.parse(message.toString());
-          this.updateSession(transcriber_id, sessionId, channelIndex, newStreamStatus);
+          this.updateSession(transcriberId, sessionId, channelIndex, newStreamStatus);
         }
         break;
       case 'scheduler':

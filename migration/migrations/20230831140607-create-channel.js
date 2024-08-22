@@ -33,23 +33,23 @@ module.exports = {
         type: Sequelize.STRING,
         allowNull: true,
       },
-      stream_endpoints: {
+      streamEndpoints: {
         type: Sequelize.JSON,
         allowNull: true,
       },
-      stream_status: {
+      streamStatus: {
         type: Sequelize.ENUM('active', 'inactive', 'errored'),
         allowNull: true,
       },
-      transcriber_id: {
+      transcriberId: {
         type: Sequelize.UUID,
         allowNull: true,
       },
-      closed_captions: {
+      closedCaptions: {
         type: Sequelize.ARRAY(Sequelize.JSON),
         allowNull: true,
       },
-      translated_closed_captions: {
+      translatedClosedCaptions: {
         type: Sequelize.ARRAY(Sequelize.JSON),
         allowNull: true,
       },

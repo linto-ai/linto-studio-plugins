@@ -44,7 +44,7 @@ class BrokerClient extends Component {
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],
-            as: 'transcriber_profile' // Use the correct alias as defined in your association
+            as: 'transcriberProfile' // Use the correct alias as defined in your association
           }]
         }
       ]
@@ -74,7 +74,7 @@ class BrokerClient extends Component {
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],
-            as: 'transcriber_profile' // Use the correct alias as defined in your association
+            as: 'transcriberProfile' // Use the correct alias as defined in your association
           }]
         }
       ]

@@ -25,18 +25,18 @@ class MicrosoftTranscriber extends EventEmitter {
 
     start() {
         this.startedAt = new Date().toISOString();
-        const { transcriber_profile } = this.channel;
+        const { transcriberProfile } = this.channel;
 
-        if (transcriber_profile) {
-            if (transcriber_profile.config.languages.length === 1) {
-                if (transcriber_profile.config.targetLanguages) {
+        if (transcriberProfile) {
+            if (transcriberProfile.config.languages.length === 1) {
+                if (transcriberProfile.config.targetLanguages) {
                     this.startMonoTranslation();
                 }
                 else {
                     this.startMono();
                 }
             } else {
-                if (transcriber_profile.config.targetLanguages) {
+                if (transcriberProfile.config.targetLanguages) {
                     this.startMultiTranslation();
                 }
                 else {
@@ -60,7 +60,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     startMono() {
         debug("Microsoft ASR starting mono transcription");
-        const { config } = this.channel.transcriber_profile;
+        const { config } = this.channel.transcriberProfile;
         const speechConfig = SpeechConfig.fromSubscription(config.key, config.region);
         speechConfig.endpointId = config.languages[0]?.endpoint;
         const audioConfig = AudioConfig.fromStreamInput(this.pushStream);
@@ -96,7 +96,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     startMonoTranslation() {
         debug("Microsoft ASR starting mono transcription with translation");
-        const { config } = this.channel.transcriber_profile;
+        const { config } = this.channel.transcriberProfile;
         const speechConfig = SpeechTranslationConfig.fromSubscription(config.key, config.region);
         speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
         speechConfig.endpointId = config.languages[0]?.endpoint;
@@ -152,7 +152,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     startMultiTranslation() {
         debug("Microsoft ASR starting multi transcription with translation");
-        const { config } = this.channel.transcriber_profile;
+        const { config } = this.channel.transcriberProfile;
 
         // Speech config
         const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
@@ -222,7 +222,7 @@ class MicrosoftTranscriber extends EventEmitter {
     }
 
     startMulti() {
-        const { config } = this.channel.transcriber_profile;
+        const { config } = this.channel.transcriberProfile;
         const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
         const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), config.key);
         speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');

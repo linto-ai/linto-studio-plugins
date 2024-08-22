@@ -24,9 +24,9 @@ class LintoTranscriber extends EventEmitter {
 
     start() {
         this.startedAt = new Date().toISOString();
-        const { transcriber_profile } = this.channel;
+        const { transcriberProfile } = this.channel;
 
-        if (!transcriber_profile) {
+        if (!transcriberProfile) {
             return;
         }
 
@@ -34,7 +34,7 @@ class LintoTranscriber extends EventEmitter {
         this.lastEndTime = 0;
         this.emit('connecting');
 
-        const endpoint = transcriber_profile.config.languages[0].endpoint;
+        const endpoint = transcriberProfile.config.languages[0].endpoint;
         this.ws = new WebSocket(endpoint);
 
         this.ws.on('open', () => {

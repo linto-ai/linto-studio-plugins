@@ -66,8 +66,8 @@ class ASR extends eventEmitter {
         this.keepAudio = true;
       }
       this.audioBuffer = new CircularBuffer();
-      debug(`Starting ${channel.transcriber_profile.config.type} ASR for session ${this.session.id}, channel ${this.channelIndex}`);
-      const backend = loadAsr(channel.transcriber_profile.config.type);
+      debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channelIndex}`);
+      const backend = loadAsr(channel.transcriberProfile.config.type);
       this.provider = new backend(channel);
       this.state = ASR.states.CONNECTING;
       await this.provider.start();

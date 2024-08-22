@@ -69,7 +69,7 @@ module.exports = {
         type: Sequelize.INTEGER,
         allowNull: true,
         references: {
-            model: 'transcriber_profiles',
+            model: 'transcriberProfiles',
             key: 'id',
         },
       },

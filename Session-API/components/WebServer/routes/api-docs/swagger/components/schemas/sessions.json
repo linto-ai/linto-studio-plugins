@@ -5,6 +5,23 @@
             "name": {
                 "type": "string"
             },
+            "start_time": {
+                "type": "string",
+                "format": "date-time"
+            },
+            "end_time": {
+                "type": "string",
+                "format": "date-time"
+            },
+            "owner": {
+                "type": "string"
+            },
+            "organizationId": {
+                "type": "string"
+            },
+            "public": {
+                "type": "boolean"
+            },
             "channels": {
                 "type": "array",
                 "items": {
@@ -28,7 +45,7 @@
             }
         }
     },
-    "SessionAnswer": {
+    "SessionAnswerBase": {
         "type": "object",
         "properties": {
             "id": {
@@ -59,14 +76,40 @@
             "errorred_on": {
                 "type": "string",
                 "format": "date-time"
-            },
-            "channels": {
-                "type": "array",
-                "items": {
-                    "$ref": "#/components/schemas/ChannelAnswer"
-                }
             }
         }
+    },
+    "SessionAnswer": {
+        "allOf": [
+            { "$ref": "#/components/schemas/SessionAnswerBase" },
+            {
+                "type": "object",
+                "properties": {
+                    "channels": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ChannelAnswer"
+                        }
+                    }
+                }
+            }
+        ]
+    },
+    "SessionAnswerWithCaptions": {
+        "allOf": [
+            { "$ref": "#/components/schemas/SessionAnswerBase" },
+            {
+                "type": "object",
+                "properties": {
+                    "channels": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ChannelAnswerWithCaptions"
+                        }
+                    }
+                }
+            }
+        ]
     },
     "ChannelRequest": {
         "type": "object",
@@ -78,12 +121,41 @@
             "transcriberProfileId": {
                 "type": "integer",
                 "description": "The id of the channel config"
+            },
+            "translations": {
+                "type": "array",
+                "description": "List of bcp47 strings.",
+                "items": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 2
+                }
+            },
+            "keepAudio": {
+                "type": "boolean",
+                "description": "Save audio"
+            },
+            "diarization": {
+                "type": "boolean",
+                "description": "Enable diarization"
             }
         }
     },
     "ChannelAnswer": {
         "type": "object",
         "properties": {
+            "keepAudio": {
+                "type": "boolean",
+                "description": "The audio is saved"
+            },
+            "diarization": {
+                "type": "boolean",
+                "description": "The diarization is enabled"
+            },
+            "index": {
+                "type": "integer",
+                "description": "The index of the channel"
+            },
             "transcriber_id": {
                 "type": "string",
                 "description": "The id of the transcriber that is currently transcribing this channel"
@@ -96,15 +168,35 @@
                 "type": "array",
                 "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...) and endpoints"
             },
+            "translations": {
+                "type": "array",
+                "description": "The translations enabled for the channel as a BCP-47 language tag"
+            },
             "transcriberProfileId": {
                 "type": "integer",
                 "description": "The id of the channel config"
             },
             "stream_endpoint": {
-                "type": "string"
+                "type": "object",
+                "description": "The available stream endpoints for this channel",
+                "properties": {
+                    "srt": {
+                        "type": "string",
+                        "description": "The stream endpoint for SRT stream"
+                    },
+                    "rtmp": {
+                        "type": "string",
+                        "description": "The stream endpoint for RTMP stream"
+                    },
+                    "ws": {
+                        "type": "string",
+                        "description": "The stream endpoint for WEBSOCKET stream"
+                    }
+                }
             },
             "stream_status": {
                 "type": "string",
+                "description": "The status of the stream",
                 "enum": [
                     "active",
                     "inactive",
@@ -113,6 +205,7 @@
             },
             "transcriber_status": {
                 "type": "string",
+                "description": "The status of the transcriber",
                 "enum": [
                     "ready",
                     "streaming",
@@ -120,26 +213,33 @@
                     "errored"
                 ]
             },
-            "closed_captions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "example": {
-                        "astart": "date-time",
-                        "start": 0.0,
-                        "end": 3.12,
-                        "text": "string"
-                    }
-                }
-            },
-            "closed_captions_live_delivery": {
+            "audioFile": {
                 "type": "string",
-                "description": "The WebSocket url of the live closed caption delivery"
-            },
-            "closed_captions_file_delivery": {
-                "type": "string",
-                "description": "The url of the closed caption file delivery API endpoint"
+                "description": "URL to the audio file"
             }
         }
+    },
+    "ChannelAnswerWithCaptions": {
+        "allOf": [
+            { "$ref": "#/components/schemas/ChannelAnswer" },
+            {
+                "type": "object",
+                "properties": {
+                    "closed_captions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "example": {
+                                "astart": "date-time",
+                                "start": 0.0,
+                                "end": 3.12,
+                                "text": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        ]
     }
+
 }

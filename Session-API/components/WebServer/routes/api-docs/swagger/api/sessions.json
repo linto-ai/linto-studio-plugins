@@ -56,6 +56,33 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "in": "query",
+          "name": "statusList",
+          "description": "Session status to search for. Multiple statuses can be specified, separated by a comma.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "organizationId",
+          "description": "Search for sessions belonging to this organization.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "public",
+          "description": "Search for private or public sessions only.",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "responses": {
@@ -94,53 +121,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswer"
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "/sessions/active": {
-    "get": {
-      "tags": [
-        "sessions"
-      ],
-      "summary": "Get all active sessions",
-      "responses": {
-        "200": {
-          "description": "The list of active sessions",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/SessionAnswer"
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "/sessions/terminated": {
-    "get": {
-      "tags": [
-        "sessions"
-      ],
-      "summary": "Get all terminated sessions",
-      "responses": {
-        "200": {
-          "description": "The list of terminated sessions",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/SessionAnswer"
-                }
+                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
               }
             }
           }
@@ -172,7 +153,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswer"
+                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
               }
             }
           }
@@ -201,14 +182,7 @@
       ],
       "responses": {
         "200": {
-          "description": "The session",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SessionAnswer"
-              }
-            }
-          }
+          "description": "Session successfully deleted"
         },
         "404": {
           "$ref": "#/components/responses/NotFound"
@@ -218,6 +192,9 @@
   },
   "/sessions/{id}/start-bot": {
     "post": {
+      "tags": [
+        "sessions"
+      ],
       "summary": "Starts a bot for a specific session",
       "description": "This endpoint starts a bot for the given session ID with a specified channel index, URL, and bot type. Available bot types are 'jitsi', 'youtube', and 'bigbluebutton'.",
       "parameters": [
@@ -281,6 +258,9 @@
   },
   "/sessions/{id}/stop-bot": {
     "post": {
+      "tags": [
+        "sessions"
+      ],
       "summary": "Stops a bot for a specific session",
       "description": "This endpoint stops a bot for the given session ID with a specified channel index.",
       "parameters": [
@@ -326,41 +306,6 @@
       }
     }
   },
-  "/sessions/{id}/start": {
-    "put": {
-      "tags": [
-        "sessions"
-      ],
-      "summary": "Start a session by ID",
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "description": "Session ID",
-          "required": true,
-          "schema": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      ],
-      "responses": {
-        "200": {
-          "description": "The session",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SessionAnswer"
-              }
-            }
-          }
-        },
-        "404": {
-          "$ref": "#/components/responses/NotFound"
-        }
-      }
-    }
-  },
   "/sessions/{id}/stop": {
     "put": {
       "tags": [
@@ -385,7 +330,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswer"
+                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
               }
             }
           }

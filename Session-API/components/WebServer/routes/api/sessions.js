@@ -54,37 +54,7 @@ function getEndpoints(sessionId, channelIndex) {
     return endpoints;
 }
 module.exports = (webserver) => {
-    return [{
-        path: '/sessions/active',
-        method: 'get',
-        controller: async (req, res, next) => {
-            try {
-                const sessions = await Model.Session.findAll({
-                    where: {
-                        status: 'active'
-                    }
-                });
-                res.json(sessions);
-            } catch (err) {
-                next(err);
-            }
-        }
-    }, {
-        path: '/sessions/terminated',
-        method: 'get',
-        controller: async (req, res, next) => {
-            try {
-                const sessions = await Model.Session.findAll({
-                    where: {
-                        status: 'terminated'
-                    }
-                });
-                res.json(sessions);
-            } catch (err) {
-                next(err);
-            }
-        }
-    },
+    return [
     {
         path: '/sessions/:id',
         method: 'get',
@@ -113,15 +83,26 @@ module.exports = (webserver) => {
             const limit = req.query.limit ?? 10
             const offset = req.query.offset ?? 0
             const searchName = req.query.searchName
+            const statusList = req.query.statusList ? req.query.statusList.split(',') : null
+            const organizationId = req.query.organizationId;
+            const public = req.query.public;
+
             let where = {}
 
-            const statusList = req.query.status ? req.query.status.split(',') : null
             if (statusList) {
                 where.status = { [Model.Op.in]: statusList }
             }
 
             if (searchName) {
                 where.name = { [Model.Op.startsWith]: searchName }
+            }
+
+            if (organizationId) {
+                where.organizationId = organizationId;
+            }
+
+            if (public) {
+                where.public = public;
             }
 
             Model.Session.findAndCountAll({
@@ -344,57 +325,23 @@ module.exports = (webserver) => {
             }
         }
     }, {
-        path: '/sessions/:id/start',
-        method: 'put',
-        controller: async (req, res, next) => {
-            const sessionId = req.params.id
-            try {
-                await Model.Session.update({
-                    status: 'ready',
-                    start_time: new Date()
-                }, {
-                    where: {
-                        'id': sessionId
-                    }
-                })
-                webserver.emit('session-update')
-                res.json({ 'success': true })
-            } catch (err) {
-                next(err);
-            }
-        }
-    }, {
         path: '/sessions/purge',
         method: 'post',
         controller: async (req, res, next) => {
-            const force = req.query.force;
-            debug('force', force)
-            if (force === 'true') {
-                try {
-                    await Model.Session.destroy({
-                        where: {}
-                    });
-                    debug('All sessions purged');
-                    webserver.emit('session-update')
-                    res.json({ 'success': true });
-                } catch (err) {
-                    next(err);
-                }
-                return;
-            }
+            const force = req.query.force === 'true';
+            const where = force ? {} : {status: 'terminated'};
+            const msg = force ? 'All sessions purged' : 'Terminated sessions purged'
+
             try {
                 await Model.Session.destroy({
-                    where: {
-                        status: 'terminated'
-                    }
+                    where: where
                 });
-                debug('Terminated sessions purged');
+                debug(msg);
                 webserver.emit('session-update')
                 res.json({ 'success': true });
             } catch (err) {
                 next(err);
             }
         }
-
     }];
 };

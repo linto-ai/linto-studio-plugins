@@ -13,7 +13,7 @@
               "schema": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/TranscriberProfile"
+                  "$ref": "#/components/schemas/TranscriberProfileAnswer"
                 }
               }
             }
@@ -30,7 +30,7 @@
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/TranscriberProfile"
+              "$ref": "#/components/schemas/TranscriberProfileRequest"
             }
           }
         }
@@ -65,7 +65,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TranscriberProfile"
+                "$ref": "#/components/schemas/TranscriberProfileAnswer"
               }
             }
           }
@@ -95,14 +95,21 @@
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/TranscriberProfile"
+              "$ref": "#/components/schemas/TranscriberProfileRequest"
             }
           }
         }
       },
       "responses": {
         "200": {
-          "description": "OK"
+          "description": "The transcriber config",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscriberProfileAnswer"
+              }
+            }
+          }
         },
         "404": {
           "$ref": "#/components/responses/NotFound"

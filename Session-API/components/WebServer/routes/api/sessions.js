@@ -111,7 +111,7 @@ module.exports = (webserver) => {
                 include: {
                     model: Model.Channel,
                     attributes: {
-                        exclude: ['id', 'session_id', 'closedCaptions', 'translatedClosedCaptions']
+                        exclude: ['id', 'session_id', 'closedCaptions']
                     }
                 },
                 where: where

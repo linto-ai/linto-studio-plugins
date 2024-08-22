@@ -49,10 +49,6 @@ module.exports = {
         type: Sequelize.ARRAY(Sequelize.JSON),
         allowNull: true,
       },
-      translatedClosedCaptions: {
-        type: Sequelize.ARRAY(Sequelize.JSON),
-        allowNull: true,
-      },
       audioFile: {
         type: Sequelize.STRING,
         allowNull: true,

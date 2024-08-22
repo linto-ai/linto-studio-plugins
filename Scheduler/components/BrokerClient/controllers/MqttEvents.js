@@ -2,6 +2,14 @@ const debug = require('debug')('scheduler:BrokerClient:mqtt-events');
 
 module.exports = async function () {
   this.client.on("message", async (topic, message) => {
+    // transcriber/out/+/+/final
+    if (topic.endsWith('final')) {
+      const [type, direction, sessionId, channelIndex, action] = topic.split('/');
+      const transcription = JSON.parse(message.toString());
+      await this.saveTranscription(transcription, sessionId, channelIndex);
+      return;
+    }
+
     //`transcriber/out/+/status`
     const [type, direction, uniqueId, action] = topic.split('/');
     switch (type) {
@@ -13,10 +21,6 @@ module.exports = async function () {
           } else {
             await this.unregisterTranscriber(transcriber);
           }
-        }
-        if (action === 'final') {
-          const {transcription, sessionId, channelIndex} = JSON.parse(message.toString());
-          await this.saveTranscription(transcription, sessionId, channelIndex);
         }
         // Session updated by a transcriber (channel status change)
         if (action === 'session'){

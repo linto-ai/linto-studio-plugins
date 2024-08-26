@@ -35,8 +35,10 @@ function getEndpoints(sessionId, channelIndex) {
         } else if (STREAMING_SRT_MODE === 'listener') {
             srtMode = 'caller';
         }
-        const srtString = `srt://${host}:${srtPort}?streamid=${sessionId},${channelIndex}&mode=${srtMode}` +
-            `${STREAMING_PASSPHRASE ? `&passphrase=${STREAMING_PASSPHRASE}` : ''}`;
+        let srtString = `srt://${host}:${srtPort}?streamid=${sessionId},${channelIndex}&mode=${srtMode}`;
+        if (STREAMING_PASSPHRASE && STREAMING_PASSPHRASE !== 'false') {
+            srtString += `&passphrase=${STREAMING_PASSPHRASE}`;
+        }
         endpoints.srt = srtString;
     }
 

@@ -52,7 +52,7 @@ class MultiplexedSRTServer extends EventEmitter {
             });
             this.server = await this.asyncSrtServer.create();
             // Check if STREAMING_PASSPHRASE is set and apply it along with key length
-            if (STREAMING_PASSPHRASE && STREAMING_PASSPHRASE.length > 0 && STREAMING_PASSPHRASE != false) {
+            if (STREAMING_PASSPHRASE && STREAMING_PASSPHRASE.length > 0 && STREAMING_PASSPHRASE !== 'false') {
                 let keyLength = STREAMING_PASSPHRASE.length >= 32 ? 32 : (STREAMING_PASSPHRASE.length >= 24 ? 24 : 16);
                 await this.server.setSocketFlags([SRT.SRTO_PASSPHRASE, SRT.SRTO_PBKEYLEN], [STREAMING_PASSPHRASE, keyLength]);
             }

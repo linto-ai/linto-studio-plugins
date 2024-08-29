@@ -6,8 +6,6 @@ services:
     image: eclipse-mosquitto:latest
     expose:
       - "${BROKER_PORT}"
-    ports:
-      - "${BROKER_PORT}:${BROKER_PORT}"
     command: mosquitto -c /mosquitto-no-auth.conf
 
   database:
@@ -29,7 +27,6 @@ services:
       - .envdefault
       - .env
     environment:
-      - DB_HOST=database
       - NODE_ENV=production
     depends_on:
       - database
@@ -42,13 +39,13 @@ services:
       - .envdefault
       - .env
     environment:
-      - BROKER_HOST=localhost
       - DEBUG=transcriber:*
     depends_on:
       - broker
-    network_mode: host
-    deploy:
-      replicas: ${TRANSCRIBER_REPLICAS}
+    ports:
+      - "${STREAMING_PROXY_SRT_UDP_PORT}:${STREAMING_SRT_UDP_PORT}/udp"
+      - "${STREAMING_PROXY_RTMP_TCP_PORT}:${STREAMING_RTMP_TCP_PORT}"
+      - "${STREAMING_PROXY_WS_TCP_PORT}:${STREAMING_WS_TCP_PORT}"
 
   sessionapi:
     build:
@@ -58,8 +55,6 @@ services:
       - .envdefault
       - .env
     environment:
-      - BROKER_HOST=broker
-      - DB_HOST=database
       - DEBUG=session-api:*
     expose:
       - "${SESSION_API_WEBSERVER_HTTP_PORT}"
@@ -79,8 +74,6 @@ services:
       - .envdefault
       - .env
     environment:
-      - BROKER_HOST=broker
-      - DB_HOST=database
       - DEBUG=scheduler:*
     depends_on:
       broker:

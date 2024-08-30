@@ -38,7 +38,7 @@ class StreamingServer extends Component {
   // Launch servers defined in prcess.env STREAMING_PROTOCOLS
   //@TODO: reimplemented SRT. Still need to reimplement other protocols
   async initialize() {
-    const protocols = process.env.STREAMING_PROTOCOL.split(',').map(protocol => protocol.trim());
+    const protocols = process.env.STREAMING_PROTOCOLS.split(',').map(protocol => protocol.trim());
     for (const protocol of protocols) {
       await this.initServer(protocol);
     }

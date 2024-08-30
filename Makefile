@@ -12,16 +12,25 @@ run-dev: migrate
 	npm start
 
 run-docker-dev:
-	docker compose up --build
+	docker compose --env-file .envdefault.docker up --build
 
 stop-docker-dev:
-	docker compose stop
+	docker compose --env-file .envdefault.docker stop
 
 down-docker-dev:
-	docker compose down
+	docker compose --env-file .envdefault.docker down
 
 run-docker-prod:
 	docker compose -f compose.yml -f compose.prod.yml up --build
+
+run-docker-dev-linto-studio:
+	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml --env-file .envdefault.docker up --build
+
+stop-docker-dev-linto-studio:
+	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml --env-file .envdefault.docker stop
+
+down-docker-dev-linto-studio:
+	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml --env-file .envdefault.docker down
 
 clean-node-modules:
 	find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +

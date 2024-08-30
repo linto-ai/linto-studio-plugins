@@ -1,0 +1,54 @@
+NODE_ENV=production
+
+# App components registration (don't touch)
+TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separated list of components to run, they load in this order
+SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, they load in this order
+SESSION_API_COMPONENTS=WebServer,BrokerClient
+DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
+
+# Audio streaming configuration
+MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
+MIN_AUDIO_BUFFER=200 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
+BYTES_PER_SAMPLE=2 # 1 for 8-bit, 2 for 16-bit, 4 for 32-bit
+SAMPLE_RATE=16000 # 8000, 16000, 32000, 44100, 48000
+AUDIO_STORAGE_PATH=/tmp # Path to store channel audio files, use trailing slash !
+
+##### Inbound / Pulled streaming #####
+STREAMING_PASSPHRASE=false
+STREAMING_HOST=0.0.0.0
+STREAMING_PROTOCOLS=SRT,RTMP,WS
+STREAMING_SRT_MODE=listener
+STREAMING_SRT_UDP_PORT=8889
+STREAMING_RTMP_TCP_PORT=1935
+STREAMING_WS_TCP_PORT=8890
+
+# As app constructs streaming endpoint URLs, it needs to know the proxy host and port to build the correct URL
+STREAMING_PROXY_HOST=127.0.0.1
+STREAMING_PROXY_SRT_UDP_PORT=8889
+STREAMING_PROXY_RTMP_TCP_PORT=1935
+STREAMING_PROXY_WS_TCP_PORT=8890
+STREAMING_HEALTHCHECK_TCP=9999
+
+##### Database #####
+DB_HOST=database
+DB_PORT=5433
+DB_USER=myuser
+DB_PASSWORD=mypass
+DB_NAME=mydb
+
+##### ASR #####
+TRANSCRIBER_BOT_NAME=bot
+TRANSCRIBER_RESET_MESSAGE="Channel reset."
+TRANSCRIBER_TRANSLATIONS_SOURCE="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
+
+##### MQTT compatible Broker #####
+BROKER_HOST=broker
+BROKER_PORT=1883
+BROKER_USERNAME=
+BROKER_PASSWORD=
+BROKER_KEEPALIVE=60
+BROKER_PROTOCOL=mqtt
+
+##### Session API #####
+SESSION_API_HOST=http://localhost:8005
+SESSION_API_WEBSERVER_HTTP_PORT=8005

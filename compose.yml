@@ -7,6 +7,8 @@ services:
     expose:
       - "${BROKER_PORT}"
     command: mosquitto -c /mosquitto-no-auth.conf
+    networks:
+      - internal
 
   database:
     image: postgres:latest
@@ -17,6 +19,8 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_DB: ${DB_NAME}
     command: -p ${DB_PORT}
+    networks:
+      - internal
   #----------
 
   migration:
@@ -24,20 +28,20 @@ services:
       context: .
       dockerfile: migration/Dockerfile
     env_file:
-      - .envdefault
-      - .env
+      - .envdefault.docker
     environment:
       - NODE_ENV=production
     depends_on:
       - database
+    networks:
+      - internal
 
   transcriber:
     build:
       context: .
       dockerfile: Transcriber/Dockerfile
     env_file:
-      - .envdefault
-      - .env
+      - .envdefault.docker
     environment:
       - DEBUG=transcriber:*
     depends_on:
@@ -46,14 +50,15 @@ services:
       - "${STREAMING_PROXY_SRT_UDP_PORT}:${STREAMING_SRT_UDP_PORT}/udp"
       - "${STREAMING_PROXY_RTMP_TCP_PORT}:${STREAMING_RTMP_TCP_PORT}"
       - "${STREAMING_PROXY_WS_TCP_PORT}:${STREAMING_WS_TCP_PORT}"
+    networks:
+      - internal
 
   sessionapi:
     build:
       context: .
       dockerfile: Session-API/Dockerfile
     env_file:
-      - .envdefault
-      - .env
+      - .envdefault.docker
     environment:
       - DEBUG=session-api:*
     expose:
@@ -65,14 +70,15 @@ services:
         condition: service_started
       migration:
         condition: service_completed_successfully
+    networks:
+      - internal
 
   scheduler:
     build:
       context: .
       dockerfile: Scheduler/Dockerfile
     env_file:
-      - .envdefault
-      - .env
+      - .envdefault.docker
     environment:
       - DEBUG=scheduler:*
     depends_on:
@@ -80,3 +86,8 @@ services:
         condition: service_started
       migration:
         condition: service_completed_successfully
+    networks:
+      - internal
+
+networks:
+  internal:

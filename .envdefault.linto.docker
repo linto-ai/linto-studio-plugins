@@ -1,0 +1,14 @@
+##### studio-api #####
+COMPONENTS=WebServer,BrokerClient,IoHandler,MongoMigration
+SESSION_API_ENDPOINT=http://sessionapi:8005/v1
+BROKER_HOST=broker
+BROKER_PORT=1883
+BROKER_USERNAME=
+BROKER_PASSWORD=
+BROKER_KEEPALIVE=60
+BROKER_PROTOCOL=mqtt
+
+##### studio-frontend #####
+VUE_APP_ENABLE_SESSION: true
+VUE_APP_SESSION_WS=http://localhost:8001
+VUE_APP_SESSION_WS_PATH=/socket.io/

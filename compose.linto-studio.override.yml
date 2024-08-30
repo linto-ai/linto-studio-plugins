@@ -1,0 +1,8 @@
+services:
+  studio-api:
+    env_file:
+      - ../.envdefault.linto.docker
+
+  studio-frontend:
+    env_file:
+      - ../.envdefault.linto.docker

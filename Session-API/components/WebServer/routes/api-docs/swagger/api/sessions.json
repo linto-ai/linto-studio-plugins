@@ -77,11 +77,16 @@
         },
         {
           "in": "query",
-          "name": "public",
-          "description": "Search for private or public sessions only.",
+          "name": "visibility",
+          "description": "Search for sessions with a specific visibility.",
           "required": false,
           "schema": {
-            "type": "boolean"
+            "type": "string",
+            "enum": [
+              "private",
+              "organization",
+              "public"
+            ]
           }
         }
       ],

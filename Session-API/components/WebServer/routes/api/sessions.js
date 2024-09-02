@@ -87,7 +87,7 @@ module.exports = (webserver) => {
             const searchName = req.query.searchName
             const statusList = req.query.statusList ? req.query.statusList.split(',') : null
             const organizationId = req.query.organizationId;
-            const public = req.query.public;
+            const visibility = req.query.visibility;
 
             let where = {}
 
@@ -103,8 +103,8 @@ module.exports = (webserver) => {
                 where.organizationId = organizationId;
             }
 
-            if (public) {
-                where.public = public;
+            if (visibility) {
+                where.visibility = visibility;
             }
 
             Model.Session.findAndCountAll({
@@ -143,7 +143,7 @@ module.exports = (webserver) => {
                     erroredOn: null,
                     owner: req.body.owner || null,
                     organizationId: req.body.organizationId || null,
-                    public: req.body.public || false
+                    visibility: req.body.visibility || 'private'
                 }, { transaction: t });
                 // Create channels
                 for (const channel of channels) {

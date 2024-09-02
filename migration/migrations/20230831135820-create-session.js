@@ -44,10 +44,10 @@ module.exports = {
         type: Sequelize.STRING,
         allowNull: true,
       },
-      public: {
-          type: Sequelize.BOOLEAN,
-          allowNull: false,
-      }
+      visibility: {
+        type: Sequelize.ENUM('public', 'organization', 'private'),
+        allowNull: false,
+      },
     });
   },
   async down(queryInterface, Sequelize) {

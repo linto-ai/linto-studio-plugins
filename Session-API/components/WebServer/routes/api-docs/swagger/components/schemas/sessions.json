@@ -19,8 +19,13 @@
             "organizationId": {
                 "type": "string"
             },
-            "public": {
-                "type": "boolean"
+            "visibility": {
+              "type": "string",
+              "enum": [
+                  "public",
+                  "organization",
+                  "private"
+              ]
             },
             "channels": {
                 "type": "array",

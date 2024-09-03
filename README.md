@@ -211,6 +211,43 @@ In order to launch the Docker containers, 3 Docker Compose files are provided:
 
 To make use of Docker Compose, it is recommended to refer to the quickstart section which guides you step by step through the complete launch of the service.
 
+
+## Integration with LinTO Studio
+
+It is recommended to use this toolbox with LinTO Studio, which benefits from full integration.
+To facilitate the integration, the following elements have been specially added to the code:
+
+- a Git submodule located in the linto-studio folder at the root of the project
+- a compose.linto-studio.yml and compose.linto-studio-override.yml file allowing the use of the linto-studio compose files without modification and adapting them to the context of the toolbox
+- an environment file .envdefault.linto.docker allowing the configuration of LinTO Studio's environment variables from the Toolbox
+- a Makefile target allowing everything to be easily launched with a single command
+
+
+### Quickstart Toolbox + LinTO Studio
+
+
+To initialize the submodule if you have already cloned the repository:
+
+```
+git submodule update --init --recursive
+```
+
+
+To clone the repository directly with the linto-studio module:
+
+```
+git clone --recurse-submodules https://code.europa.eu/speech_recognition/speech-to-text.git
+
+```
+
+And now, start all the services with a single command:
+
+```
+make run-docker-dev-linto-studio
+```
+
+You can now connect to LinTO Studio at the URL http://localhost:8003
+
 ## Tests
 
 ### Unit tests
@@ -233,7 +270,7 @@ After creating the `.envtest` file (as documented at the beginning of integratio
 
 ## Custom ASR
 
-There are currently two ASRs available: Microsoft and Linto.
+There are currently two ASRs available: Microsoft and LinTO.
 They are located in Transcriber/components/ASR/linto and Transcriber/components/ASR/microsoft.
 You can use them as inspiration to create your own ASR.
 

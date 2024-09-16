@@ -35,6 +35,22 @@ function transcodeToMp3(inputPath, outputPath) {
   });
 }
 
+function concatAudioFiles(input1, input2, output) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(input1)
+      .input(input2)
+      .on('end', () => {
+        debug(`Concat completed: ${output}`);
+        resolve()
+      })
+      .on('error', (err) => {
+        console.error(`Error during concat: ${err.message}`)
+        reject(err)
+      })
+      .mergeToFile(output, '/tmp');
+  });
+}
+
 class ASR extends eventEmitter {
   static states = {
     CONNECTING: 'connecting',
@@ -119,16 +135,18 @@ class ASR extends eventEmitter {
         this.audioFile.close();
         const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.pcm`);
         let mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.mp3`); // Use let for reassignment
-        // if mp3 file already exists, add an index to the filename to be saved
-        // TODO: HERE we have to concatenate the existing audio with the new one
+
         if (fs.existsSync(mp3FilePath)) {
-          let index = 1;
-          while (fs.existsSync(mp3FilePath)) {
-            mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}_${index}.mp3`);
-            index++;
-          }
+          const tempMp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}-temp.mp3`);
+          const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}-output.mp3`);
+          await transcodeToMp3(pcmFilePath, tempMp3FilePath);
+          await concatAudioFiles(mp3FilePath, tempMp3FilePath, tempOutputFilePath);
+          fs.unlinkSync(tempMp3FilePath);
+          fs.renameSync(tempOutputFilePath, mp3FilePath);
+        } else {
+          await transcodeToMp3(pcmFilePath, mp3FilePath);
         }
-        await transcodeToMp3(pcmFilePath, mp3FilePath);
+
         debug(`Audio file saved as ${mp3FilePath}`);
         fs.unlinkSync(pcmFilePath);
       }
@@ -137,6 +155,7 @@ class ASR extends eventEmitter {
         await this.provider.stop();
       }
     } catch (error) {
+      debug(`Error when saving the audio file: ${error}`)
       this.emit('error', error);
       return false;
     }

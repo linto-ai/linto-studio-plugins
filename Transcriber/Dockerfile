@@ -38,6 +38,7 @@ FROM $default_image
 # we need gst-plugins-bad for MPEG2 codec
 RUN apk update && \
     apk add --no-cache \
+        ffmpeg \
         gstreamer \
         gstreamer-tools \
         gst-plugins-base \

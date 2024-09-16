@@ -16,7 +16,6 @@ function loadAsr(provider) {
   return AsrClass;
 }
 
-//@TODO: add ffmpeg in docker builds
 function transcodeToMp3(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -121,6 +120,7 @@ class ASR extends eventEmitter {
         const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.pcm`);
         let mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.mp3`); // Use let for reassignment
         // if mp3 file already exists, add an index to the filename to be saved
+        // TODO: HERE we have to concatenate the existing audio with the new one
         if (fs.existsSync(mp3FilePath)) {
           let index = 1;
           while (fs.existsSync(mp3FilePath)) {

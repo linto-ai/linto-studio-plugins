@@ -28,6 +28,27 @@ const validateTranscriberProfile = (body) => {
     }
 };
 
+const extendTranscriberProfile = (body) => {
+    const config = body.config;
+    const translationEnv = process.env[`ASR_AVAILABLE_TRANSLATIONS_${config.type.toUpperCase()}`];
+    if (translationEnv) {
+        body.config.availableTranslations = translationEnv.split(',');
+    }
+    else {
+        body.config.availableTranslations = [];
+    }
+
+    const diarizationEnv = process.env[`ASR_HAS_DIARIZATION_${config.type.toUpperCase()}`];
+    if (diarizationEnv) {
+        body.config.hasDiarization = diarizationEnv.toUpperCase() == 'TRUE';
+    }
+    else {
+        body.config.hasDiarization = false;
+    }
+
+    return body;
+};
+
 module.exports = (webserver) => {
     return [{
         path: '/transcriber_profiles',
@@ -63,7 +84,7 @@ module.exports = (webserver) => {
                 if (validationResult) {
                     return res.status(validationResult.status).send(validationResult.error);
                 }
-                const config = await Model.TranscriberProfile.create(req.body);
+                const config = await Model.TranscriberProfile.create(extendTranscriberProfile(req.body));
                 res.json(config);
             } catch (err) {
                 next(err);

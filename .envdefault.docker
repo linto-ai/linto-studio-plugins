@@ -39,7 +39,8 @@ DB_NAME=mydb
 ##### ASR #####
 TRANSCRIBER_BOT_NAME=bot
 TRANSCRIBER_RESET_MESSAGE="Channel reset."
-TRANSCRIBER_TRANSLATIONS_SOURCE="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
+ASR_AVAILABLE_TRANSLATIONS_MICROSOFT="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
+ASR_HAS_DIARIZATION_MICROSOFT=true
 
 ##### MQTT compatible Broker #####
 BROKER_HOST=broker

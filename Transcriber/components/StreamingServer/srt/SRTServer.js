@@ -4,18 +4,6 @@ const { SRT, SRTServer, AsyncSRT } = require("linto-node-srt");
 const { fork } = require('child_process');
 const path = require('path');
 
-// Silence uncaught exceptions to prevent the process from exiting on error. linto-lib-srt is not handling SRT break properly.
-// This is a temporary fix until the issue is resolved.
-// BTW cleanups are okay to be done in the cleanupConnection function
-process.on('uncaughtException', (error) => {
-    if (error.message.includes("Connection was broken") || error.message.includes("The \"listener\" argument must be of type function. Received undefined")) {
-        return;
-    } else {
-        console.error(`Uncaught exception: ${error}`);
-        console.error(error.stack);
-    }
-});
-
 const {
     STREAMING_PASSPHRASE,
     STREAMING_HOST,

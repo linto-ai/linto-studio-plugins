@@ -30,6 +30,8 @@ class RecognizerListener {
     }
 
     handleCanceled(s, e) {
+        // The ASR is cancelled until the end of the stream
+        // and can be restarted with a new stream
         debug(`Microsoft ASR canceled: ${e.errorDetails}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);

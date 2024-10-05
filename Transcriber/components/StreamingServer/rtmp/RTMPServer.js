@@ -85,6 +85,18 @@ class MultiplexedRTMPServer extends EventEmitter {
           debug(`Connection: ${streamPath} --> session ${sessionId}, Channel index ${channelIndex} already active. Skipping.`);
           return { isValid: false };
       }
+      // Check startTime is after now
+      const now = new Date();
+      if (session.startTime && now < new Date(session.startTime)) {
+          debug(`Connection: ${streamPath} --> session ${sessionId}, startTime in the future. Now: ${now}, startTime: ${session.startTime}. Skipping.`);
+          return { isValid: false };
+      }
+      // Check endTime is before now
+      if (session.endTime && now > new Date(session.endTime)) {
+          debug(`Connection: ${streamPath} --> session ${sessionId}, endTime in the past. Now: ${now}, endTime: ${session.startTime}. Skipping.`);
+          return { isValid: false };
+      }
+
       debug(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelIndex} is valid. Booting worker.`);
       return { isValid: true, sessionId, channelIndex, session };
   }

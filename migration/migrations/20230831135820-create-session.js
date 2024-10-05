@@ -48,6 +48,10 @@ module.exports = {
         type: Sequelize.ENUM('public', 'organization', 'private'),
         allowNull: false,
       },
+      room: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
     });
   },
   async down(queryInterface, Sequelize) {

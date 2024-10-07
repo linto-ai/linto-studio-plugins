@@ -66,7 +66,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['id', 'sessionId']
+                            exclude: ['sessionId']
                         }
                     }
                 });
@@ -113,7 +113,7 @@ module.exports = (webserver) => {
                 include: {
                     model: Model.Channel,
                     attributes: {
-                        exclude: ['id', 'session_id', 'closedCaptions']
+                        exclude: ['sessionId', 'closedCaptions']
                     }
                 },
                 where: where
@@ -177,7 +177,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['id', 'session_id']
+                            exclude: ['sessionId']
                         }
                     }
                 });
@@ -186,6 +186,161 @@ module.exports = (webserver) => {
                 res.json(result);
             } catch (err) {
                 await t.rollback();
+                return next(err)
+            }
+        }
+    }, {
+        path: '/sessions/:id',
+        method: 'put',
+        controller: async (req, res, next) => {
+            const sessionId = req.params.id;
+
+            const session = await Model.Session.findByPk(sessionId);
+            if (!session) {
+                return res.status(404).json({ "error": `Session ${sessionId} not found` });
+            }
+
+            // Update is only possible before startTime
+            if (session.startTime && new Date() >= session.startTime) {
+                return res.status(400).json({ "error": "Can't update a session after startTime" });
+            }
+
+            const { channels: updatedChannels, ...sessionAttributes } = req.body;
+
+
+            if (!updatedChannels || updatedChannels.length == 0) {
+                return res.status(400).json({ "error": "At least one channel is required" });
+            }
+
+            for (const channel of updatedChannels) {
+                if (channel.id && !await Model.Channel.findByPk(channel.id)) {
+                    return res.status(404).json({ "error": `Channel ${channel.id} not found` });
+                }
+            }
+
+            const currentChannels = await Model.Channel.findAll({
+                where: {
+                    sessionId
+                }
+            });
+
+            const transaction = await Model.sequelize.transaction();
+            try {
+                await Model.Session.update(sessionAttributes, {
+                    transaction,
+                    where: {id: session.id}
+                });
+
+                // Update channels
+                for (const currentChannel of currentChannels) {
+                    for (const updatedChannel of updatedChannels) {
+                        if (currentChannel.id != updatedChannel.id) {
+                            continue;
+                        }
+
+                        const updatedAttrs = updatedChannel;
+
+                        if (updatedChannel.translations) {
+                            if (!Array.isArray(updatedChannel.translations) || !updatedChannel.translations.every(bcp47.check)) {
+                                throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
+                            }
+                        }
+
+                        if (updatedChannel.transcriberProfileId) {
+                            let transcriberProfile = await Model.TranscriberProfile.findByPk(updatedChannel.transcriberProfileId, { transaction });
+                            if (!transcriberProfile) {
+                                throw new ApiError(400, `Transcriber profile with id ${updatedChannel.transcriberProfileId} not found`);
+                            }
+                            const languages = transcriberProfile.config.languages.map(language => language.candidate);
+                            updatedAttrs.languages = languages;
+                        }
+
+                        await Model.Channel.update({
+                            ...updatedAttrs,
+                            sessionId: session.id,
+                        }, {
+                            transaction,
+                            where: {
+                                'id': updatedChannel.id
+                            }
+                        });
+                    }
+                }
+
+                // Delete channels
+                const updateChannelIds = updatedChannels.map(channel => channel.id);
+                for (const channel of currentChannels) {
+                    if (updateChannelIds.includes(channel.id)) {
+                        continue;
+                    }
+
+                    await Model.Channel.destroy({
+                        where: {
+                            id: channel.id
+                        }
+                    }, { transaction });
+                }
+
+                // Create channels
+                const currentChannelIds = currentChannels.map(channel => channel.id);
+                for (const channel of updatedChannels) {
+                    if (currentChannelIds.includes(channel.id)) {
+                        continue;
+                    }
+
+                    if (channel.translations) {
+                        if (!Array.isArray(channel.translations) || !channel.translations.every(bcp47.check)) {
+                            throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
+                        }
+                    }
+                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
+                    if (!transcriberProfile) {
+                        throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
+                    }
+                    const languages = transcriberProfile.config.languages.map(language => language.candidate)
+                    const translations = channel.translations
+
+                    const newChannel = await Model.Channel.create({
+                        index: 0,
+                        keepAudio: channel.keepAudio || false,
+                        diarization: channel.diarization || false,
+                        languages: languages, //array of BCP47 language tags from transcriber profile
+                        translations: translations, //array of BCP47 language tags
+                        streamStatus: 'inactive',
+                        sessionId: session.id,
+                        transcriberProfileId: transcriberProfile.id,
+                        name: channel.name
+                    }, { transaction });
+
+                    await Model.Channel.update({
+                        index: newChannel.id,
+                        streamEndpoints: getEndpoints(session.id, newChannel.id),
+                    }, {
+                        transaction,
+                        where: {
+                            'id': newChannel.id
+                        }
+                    });
+
+                }
+
+                await transaction.commit();
+
+                // return the session with channels
+                const result = await Model.Session.findByPk(session.id, {
+                    include: {
+                        model: Model.Channel,
+                        attributes: {
+                            exclude: ['sessionId']
+                        }
+                    }
+                });
+                debug('Session updated', result.id);
+                webserver.emit('session-update')
+                res.json(result);
+            } catch (err) {
+                debug(err);
+                await transaction.rollback();
                 return next(err)
             }
         }

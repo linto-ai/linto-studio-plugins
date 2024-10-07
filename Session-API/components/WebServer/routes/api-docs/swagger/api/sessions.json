@@ -168,6 +168,45 @@
         }
       }
     },
+    "put": {
+      "tags": [
+        "sessions"
+      ],
+      "summary": "Update a session and its channels",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "description": "Session ID",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SessionUpdateRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+              }
+            }
+          }
+        }
+      }
+    },
     "delete": {
       "tags": [
         "sessions"

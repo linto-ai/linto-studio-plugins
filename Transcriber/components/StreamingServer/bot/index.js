@@ -5,12 +5,12 @@ const { launch, getStream } = require('puppeteer-stream');
 const EventEmitter = require('events');
 
 class Bot extends EventEmitter {
-  constructor(session, channelIndex, address, botType) {
+  constructor(session, channelId, address, botType) {
     super();
     this.worker = null
     this.botType = botType;
     this.session = session;
-    this.channelIndex = channelIndex;
+    this.channelId = channelId;
     this.address = address;
     this.browser = null;
     this.page = null;
@@ -151,13 +151,13 @@ class Bot extends EventEmitter {
       this.worker.send({ type: 'init' });
       this.worker.on('message', (message) => {
         if (message.type === 'data') {
-          this.emit('data', message.buf, this.session.id, this.channelIndex);
+          this.emit('data', message.buf, this.session.id, this.channelId);
         }
         if (message.type === 'error') {
           console.error(`Worker ${this.worker.pid} error --> ${message.error}`);
         }
         if (message.type === 'playing') {
-          debug(`Worker: ${this.worker.pid} --> transcoding session ${this.session.id}, channel ${this.channelIndex}`);
+          debug(`Worker: ${this.worker.pid} --> transcoding session ${this.session.id}, channel ${this.channelId}`);
         }
       });
       this.worker.on('error', (error) => {
@@ -177,10 +177,10 @@ class Bot extends EventEmitter {
 
       stream.on('end', () => {
         debug('Stream ended');
-        this.emit('session-end', this.session, this.channelIndex);
+        this.emit('session-end', this.session, this.channelId);
       });
 
-      this.emit('session-start', this.session, this.channelIndex);
+      this.emit('session-start', this.session, this.channelId);
       debug('Session start event emitted');
 
 

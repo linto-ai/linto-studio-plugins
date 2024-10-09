@@ -8,7 +8,7 @@ class ApiError extends Error {
     }
 }
 
-function getEndpoints(sessionId, channelIndex) {
+function getEndpoints(sessionId, channelId) {
     const {
         STREAMING_PASSPHRASE,
         STREAMING_SRT_MODE,
@@ -35,7 +35,7 @@ function getEndpoints(sessionId, channelIndex) {
         } else if (STREAMING_SRT_MODE === 'listener') {
             srtMode = 'caller';
         }
-        let srtString = `srt://${host}:${srtPort}?streamid=${sessionId},${channelIndex}&mode=${srtMode}`;
+        let srtString = `srt://${host}:${srtPort}?streamid=${sessionId},${channelId}&mode=${srtMode}`;
         if (STREAMING_PASSPHRASE && STREAMING_PASSPHRASE !== 'false') {
             srtString += `&passphrase=${STREAMING_PASSPHRASE}`;
         }
@@ -44,13 +44,13 @@ function getEndpoints(sessionId, channelIndex) {
 
     if (protocols.includes('RTMP')) {
         const rtmpPort = STREAMING_PROXY_RTMP_TCP_PORT && STREAMING_PROXY_RTMP_TCP_PORT !== 'false' ? STREAMING_PROXY_RTMP_TCP_PORT : STREAMING_RTMP_TCP_PORT;
-        const rtmpString = `rtmp://${host}:${rtmpPort}/${sessionId}/${channelIndex}`;
+        const rtmpString = `rtmp://${host}:${rtmpPort}/${sessionId}/${channelId}`;
         endpoints.rtmp = rtmpString;
     }
 
     if (protocols.includes('WS')) {
         const wsPort = STREAMING_PROXY_WS_TCP_PORT && STREAMING_PROXY_WS_TCP_PORT !== 'false' ? STREAMING_PROXY_WS_TCP_PORT : STREAMING_WS_TCP_PORT;
-        const wsString = `ws://${host}:${wsPort}/${sessionId},${channelIndex}`;
+        const wsString = `ws://${host}:${wsPort}/${sessionId},${channelId}`;
         endpoints.ws = wsString;
     }
     return endpoints;
@@ -158,18 +158,25 @@ module.exports = (webserver) => {
                     }
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
-                    await Model.Channel.create({
-                        index: channels.indexOf(channel),
+                    const newChannel = await Model.Channel.create({
                         keepAudio: channel.keepAudio || false,
                         diarization: channel.diarization || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',
-                        streamEndpoints: getEndpoints(session.id, channels.indexOf(channel)),
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
                         name: channel.name
                     }, { transaction: t });
+
+                    await Model.Channel.update({
+                        streamEndpoints: getEndpoints(session.id, newChannel.id),
+                    }, {
+                        transaction: t,
+                        where: {
+                            'id': newChannel.id
+                        }
+                    });
                 }
                 await t.commit();
                 // return the session with channels
@@ -301,7 +308,6 @@ module.exports = (webserver) => {
                     const translations = channel.translations
 
                     const newChannel = await Model.Channel.create({
-                        index: 0,
                         keepAudio: channel.keepAudio || false,
                         diarization: channel.diarization || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
@@ -313,7 +319,6 @@ module.exports = (webserver) => {
                     }, { transaction });
 
                     await Model.Channel.update({
-                        index: newChannel.id,
                         streamEndpoints: getEndpoints(session.id, newChannel.id),
                     }, {
                         transaction,
@@ -350,9 +355,9 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             try {
                 const { id } = req.params;
-                const { url, channelIndex, botType } = req.body;
-                if (!id || !url || channelIndex === undefined || !botType) {
-                    return res.status(400).json({ error: "sessionId, url, channelIndex, and botType are required" });
+                const { url, channelId, botType } = req.body;
+                if (!id || !url || channelId === undefined || !botType) {
+                    return res.status(400).json({ error: "sessionId, url, channelId, and botType are required" });
                 }
                 const session = await Model.Session.findByPk(id, {
                     include: {
@@ -365,7 +370,7 @@ module.exports = (webserver) => {
                 if (!session) {
                     return res.status(404).json({ error: "Session not found" });
                 }
-                const channel = session.channels.find(c => c.index === channelIndex);
+                const channel = session.channels.find(c => c.id === channelId);
                 if (!channel) {
                     return res.status(404).json({ error: "Channel not found" });
                 }
@@ -373,7 +378,7 @@ module.exports = (webserver) => {
                 if (channel.streamStatus !== 'inactive') {
                     return res.status(400).json({ error: "The channel must be inactive to start a bot" });
                 }
-                webserver.emit('startbot', id, channelIndex, url, botType);
+                webserver.emit('startbot', id, channelId, url, botType);
                 res.json({ success: true });
             } catch (err) {
                 next(err);
@@ -385,10 +390,10 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             try {
                 const { id } = req.params;
-                const { channelIndex } = req.body;
+                const { channelId } = req.body;
 
-                if (!id || channelIndex === undefined) {
-                    return res.status(400).json({ error: "sessionId and channelIndex are required" });
+                if (!id || channelId === undefined) {
+                    return res.status(400).json({ error: "sessionId and channelId are required" });
                 }
 
                 const session = await Model.Session.findByPk(id, {
@@ -404,11 +409,11 @@ module.exports = (webserver) => {
                     return res.status(404).json({ error: "Session not found" });
                 }
 
-                const channel = session.channels.find(c => c.index === channelIndex);
+                const channel = session.channels.find(c => c.id === channelId);
                 if (!channel) {
                     return res.status(404).json({ error: "Channel not found" });
                 }
-                webserver.emit('stopbot', id, channelIndex);
+                webserver.emit('stopbot', id, channelId);
                 res.json({ success: true });
             } catch (err) {
                 next(err);

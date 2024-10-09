@@ -40,7 +40,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['index', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio'],
+          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio'],
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],
@@ -58,11 +58,11 @@ class BrokerClient extends Component {
    * This command will get picked up by the sheduler to select and feed a Transcriber/streamingServer instance, which will finally start the bot.
    * 
    * @param {string} sessionId - The UUID of the session for which the bot is started.
-   * @param {number} channelIndex - The index of the channel within the session.
+   * @param {number} channelId - The id of the channel within the session.
    * @param {string} address - The URL address where the bot should operate.
    * @param {string} botType - The type of bot to start. (jitsi... see manifests in Transcriber/streamingServer)
    */
-  async scheduleStartBot(sessionId, channelIndex, address, botType) {
+  async scheduleStartBot(sessionId, channelId, address, botType) {
     // get the session
     const session = await Model.Session.findOne({
       where: { id: sessionId },
@@ -70,7 +70,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          where: { index: channelIndex },
+          where: { id: channelId },
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],
@@ -79,17 +79,17 @@ class BrokerClient extends Component {
         }
       ]
     });
-    this.client.publish('scheduler/in/schedule/startbot', { session, channelIndex, address, botType }, 1, false, true);
+    this.client.publish('scheduler/in/schedule/startbot', { session, channelId, address, botType }, 1, false, true);
   }
 
   /**
    * Publishes a stop bot command to the MQTT broker, which will be picked up by the scheduler to stop the bot for a specific session and channel.
    * 
    * @param {string} sessionId - The UUID of the session for which the bot is stopped.
-   * @param {number} channelIndex - The index of the channel within the session.
+   * @param {number} channelId - The id of the channel within the session.
    */
-  async scheduleStopBot(sessionId, channelIndex) {
-    this.client.publish('scheduler/in/schedule/stopbot', { sessionId, channelIndex }, 1, false, true);
+  async scheduleStopBot(sessionId, channelId) {
+    this.client.publish('scheduler/in/schedule/stopbot', { sessionId, channelId }, 1, false, true);
   }
 }
 

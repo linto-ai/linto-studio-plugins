@@ -49,24 +49,24 @@ class MultiplexedWebsocketServer extends EventEmitter {
     const streamId = req.url.substring(1)
     debug(`Connection: ${req.url} --> Validating streamId ${streamId}`);
 
-      // Extract sessionId and channelIndex from streamId
-      const [sessionId, channelIndexStr] = streamId.split(",");
-      const channelIndex = parseInt(channelIndexStr, 10);
+      // Extract sessionId and channelId from streamId
+      const [sessionId, channelIdStr] = streamId.split(",");
+      const channelId = parseInt(channelIdStr, 10);
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
           debug(`Connection: ${req.url} --> session ${sessionId} not found.`);
           return { isValid: false };
       }
-      // Find channel by "index" key (do not rely on position in array that changes upon updates)
-      const channel = session.channels.find(c => c.index === channelIndex);
+      // Find channel by "id" key (do not rely on position in array that changes upon updates)
+      const channel = session.channels.find(c => c.id === channelId);
       if (!channel) {
-          debug(`Connection: ${req.url} --> session ${sessionId}, Channel index ${channelIndex} not found.`);
+          debug(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} not found.`);
           return { isValid: false };
       }
       // Check if the channel's streamStatus is 'active'
       if (channel.streamStatus === 'active') {
-          debug(`Connection: ${req.url} --> session ${sessionId}, Channel index ${channelIndex} already active. Skipping.`);
+          debug(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
           return { isValid: false };
       }
       // Check startTime is after now
@@ -81,8 +81,8 @@ class MultiplexedWebsocketServer extends EventEmitter {
           return { isValid: false };
       }
 
-      debug(`Connection: ${req.url} --> session ${sessionId}, channel ${channelIndex} is valid. Booting worker.`);
-      return { isValid: true, sessionId, channelIndex, session };
+      debug(`Connection: ${req.url} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
+      return { isValid: true, sessionId, channelId, session };
   }
 
   async onConnection(ws, req) {
@@ -96,10 +96,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
 
       // Stream is valid, store connection file descriptor
-      const { channelIndex, session } = validation;
+      const { channelId, session } = validation;
       // Create a new file descriptor object to store connection details and session info
       const fd = {
-          channelIndex,
+          channelId,
           session
       };
       // Start a new worker for this connection
@@ -115,21 +115,21 @@ class MultiplexedWebsocketServer extends EventEmitter {
       // - call scheduler to update session status to active
       // - start buffering audio in circular buffer
       // - start transcription
-      this.emit('session-start', fd.session, fd.channelIndex);
+      this.emit('session-start', fd.session, fd.channelId);
   }
 
   // Events sent by the worker
   handleWorkerEvents(ws, fd, worker) {
       worker.on('message', async (message) => {
           if (message.type === 'data') {
-              this.emit('data', message.buf, fd.session.id, fd.channelIndex);
+              this.emit('data', message.buf, fd.session.id, fd.channelId);
           }
           if (message.type === 'error') {
               console.error(`Worker ${worker.pid} error --> ${message.error}`);
               this.cleanupWebsocket(ws, fd, worker);
           }
           if (message.type === 'playing') {
-              debug(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channelIndex}`);
+              debug(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channelId}`);
           }
       });
 
@@ -139,7 +139,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
 
       worker.on('exit', (code, signal) => {
-          debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelIndex}`);
+          debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelId}`);
       });
   }
 
@@ -162,7 +162,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   cleanupWebsocket(ws, fd, worker) {
       // Tell the streaming server controller to forward the session stop message to the broker
       if (fd) {
-        this.emit('session-stop', fd.session, fd.channelIndex)
+        this.emit('session-stop', fd.session, fd.channelId)
       }
 
       debug(`Connection: ${ws} --> cleaning up.`);

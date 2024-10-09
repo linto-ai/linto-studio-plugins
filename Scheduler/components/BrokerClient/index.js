@@ -42,7 +42,7 @@ class BrokerClient extends Component {
 
   // Choose the least used transcriber to start a bot
   // we do this cause bot handling needs to be scheduled on the instance with the least load
-  async startBot(session, channelIndex, address, botType) {
+  async startBot(session, channelId, address, botType) {
     // search all channels with active streamStatus
     // count the number of active channels for each transcriberId, choose the one with the least active channels
     // ignore channels with transcriberId = null or set to an id that is not in the transcribers array
@@ -88,8 +88,8 @@ class BrokerClient extends Component {
       }
 
       if (chosenTranscriber) {
-        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, { session, channelIndex, address, botType }, 2, false, true);
-        debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${session.id}, channel ${channelIndex}`);
+        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, { session, channelId, address, botType }, 2, false, true);
+        debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${session.id}, channel ${channelId}`);
       } else {
         console.error('No transcriber available to start bot.');
       }
@@ -98,15 +98,15 @@ class BrokerClient extends Component {
     }
   }
 
-  async stopBot(sessionId, channelIndex) {
+  async stopBot(sessionId, channelId) {
     // find the transcriberId for the channel
     // publish the stopbot command to the transcriber
     try {
-      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, index: channelIndex } });
+      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, id: channelId } });
       if (!channel?.transcriberId) {
         return;
       }
-      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId, channelIndex }, 2, false, true);
+      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId, channelId }, 2, false, true);
     } catch (error) {
       console.error('Failed to stop bot:', error);
     }
@@ -114,11 +114,11 @@ class BrokerClient extends Component {
 
   // ###### TRANSCRIPTION ######
 
-  async saveTranscription(transcription, sessionId, channelIndex) {
+  async saveTranscription(transcription, sessionId, channelId) {
     try {
-      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, index: channelIndex } });
+      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, id: channelId } });
       if (!channel) {
-        throw new Error(`Channel with session ${sessionId} and index ${channelIndex} not found`)
+        throw new Error(`Channel with session ${sessionId} and id ${channelId} not found`)
       }
       const closedCaptions = Array.isArray(channel.closedCaptions) ? channel.closedCaptions : [];
       await channel.update({
@@ -181,8 +181,8 @@ class BrokerClient extends Component {
     }
   }
 
-  async updateSession(transcriberId, sessionId, channelIndex, newStreamStatus) {
-    debug(`Updating session activity: ${sessionId} --> channel index: ${channelIndex} streamStatus ${newStreamStatus}`);
+  async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {
+    debug(`Updating session activity: ${sessionId} --> channel id: ${channelId} streamStatus ${newStreamStatus}`);
     try {
       // Fetch the session with its channels
       const session = await Model.Session.findByPk(sessionId, {
@@ -196,7 +196,7 @@ class BrokerClient extends Component {
 
       // Map through channels and prepare promises for updating them
       const channelsUpdates = session.channels.map(channel => {
-        if (channel.index === channelIndex) {
+        if (channel.id === channelId) {
           channel.streamStatus = newStreamStatus; // Update the specific channel's streamStatus
           if (newStreamStatus === 'active') {
             channel.transcriberId = transcriberId; // Set the transcriberId for the channel
@@ -260,7 +260,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['index', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio'],
+          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio'],
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],

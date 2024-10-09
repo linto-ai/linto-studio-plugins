@@ -4,9 +4,9 @@ module.exports = async function () {
   this.client.on("message", async (topic, message) => {
     // transcriber/out/+/+/final
     if (topic.endsWith('final')) {
-      const [type, direction, sessionId, channelIndex, action] = topic.split('/');
+      const [type, direction, sessionId, channelId, action] = topic.split('/');
       const transcription = JSON.parse(message.toString());
-      await this.saveTranscription(transcription, sessionId, channelIndex);
+      await this.saveTranscription(transcription, sessionId, channelId);
       return;
     }
 
@@ -28,20 +28,20 @@ module.exports = async function () {
             transcriberId: transcriberId,
             id: sessionId,
             status: newStreamStatus,
-            channel: channelIndex
+            channel: channelId
           } = JSON.parse(message.toString());
-          this.updateSession(transcriberId, sessionId, channelIndex, newStreamStatus);
+          this.updateSession(transcriberId, sessionId, channelId, newStreamStatus);
         }
         break;
       case 'scheduler':
         if (direction === 'in') {
-          const { session, channelIndex, address, botType } = JSON.parse(message.toString());
+          const { session, channelId, address, botType } = JSON.parse(message.toString());
           if (action === 'startbot') {
-            await this.startBot(session, channelIndex, address, botType);
+            await this.startBot(session, channelId, address, botType);
           }
           if (action === 'stopbot') {
             const { sessionId } = JSON.parse(message.toString());
-            await this.stopBot(sessionId, channelIndex);
+            await this.stopBot(sessionId, channelId);
           }
         }
         break;

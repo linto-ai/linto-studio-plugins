@@ -60,10 +60,10 @@ class ASR extends eventEmitter {
     TRANSCRIBING: 'transcribing'
   };
 
-  constructor(session, channelIndex) {
+  constructor(session, channelId) {
     super();
     this.session = session;
-    this.channelIndex = channelIndex;
+    this.channelId = channelId;
     this.provider = null;
     this.keepAudio = false;
     this.state = ASR.states.CLOSED;
@@ -71,17 +71,17 @@ class ASR extends eventEmitter {
   }
 
   async init() {
-    // identifies the transcriber profile for the channel channelIndex in the session channels array
+    // identifies the transcriber profile for the channel channelId in the session channels array
     try {
-      const channel = this.session.channels.find(c => c.index === this.channelIndex);
+      const channel = this.session.channels.find(c => c.id === this.channelId);
 
       if (channel.keepAudio) {
-        const audioFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.pcm`);
+        const audioFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}.pcm`);
         this.audioFile = fs.createWriteStream(audioFilePath);
         this.keepAudio = true;
       }
       this.audioBuffer = new CircularBuffer();
-      debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channelIndex}`);
+      debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channelId}`);
       const backend = loadAsr(channel.transcriberProfile.config.type);
       this.provider = new backend(channel);
       this.state = ASR.states.CONNECTING;
@@ -133,12 +133,12 @@ class ASR extends eventEmitter {
     try {
       if (this.audioFile) {
         this.audioFile.close();
-        const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.pcm`);
-        let mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}.mp3`); // Use let for reassignment
+        const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}.pcm`);
+        let mp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}.mp3`); // Use let for reassignment
 
         if (fs.existsSync(mp3FilePath)) {
-          const tempMp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}-temp.mp3`);
-          const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelIndex}-output.mp3`);
+          const tempMp3FilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}-temp.mp3`);
+          const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}-output.mp3`);
           await transcodeToMp3(pcmFilePath, tempMp3FilePath);
           await concatAudioFiles(mp3FilePath, tempMp3FilePath, tempOutputFilePath);
           fs.unlinkSync(tempMp3FilePath);

@@ -243,10 +243,6 @@
                 "type": "boolean",
                 "description": "The diarization is enabled"
             },
-            "index": {
-                "type": "integer",
-                "description": "The index of the channel"
-            },
             "transcriberId": {
                 "type": "string",
                 "description": "The id of the transcriber that is currently transcribing this channel"

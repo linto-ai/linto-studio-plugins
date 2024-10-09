@@ -4,12 +4,12 @@ module.exports = function () {
         await this.publishSessions()
     });
 
-    this.app.components['WebServer'].on('startbot', async (sessionId, channelIndex, url, botType) => {
-        await this.scheduleStartBot(sessionId, channelIndex, url, botType);
+    this.app.components['WebServer'].on('startbot', async (sessionId, channelId, url, botType) => {
+        await this.scheduleStartBot(sessionId, channelId, url, botType);
     });
 
-    this.app.components['WebServer'].on('stopbot', async (sessionId, channelIndex) => {
-        await this.scheduleStopBot(sessionId, channelIndex);
+    this.app.components['WebServer'].on('stopbot', async (sessionId, channelId) => {
+        await this.scheduleStopBot(sessionId, channelId);
     });
 
 }

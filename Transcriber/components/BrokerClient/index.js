@@ -31,8 +31,8 @@ class BrokerClient extends Component {
     this.connect();
   }
 
-  handleStartBot(sessionId, channelIndex, address) {
-    this.emit("jitsi-bot-start", sessionId, channelIndex, address);
+  handleStartBot(sessionId, channelId, address) {
+    this.emit("jitsi-bot-start", sessionId, channelId, address);
   }
 
   handleSessions(sessions) {
@@ -60,14 +60,14 @@ class BrokerClient extends Component {
     debug(`Registered all ACTIVE and READY sessions: ${this.sessions.length}`);
   }
 
-  activateSession(session, channelIndex) {
+  activateSession(session, channelId) {
     // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-start message
-    this.client.publish(`session`, { transcriberId: this.uniqueId, id: session.id, status: 'active', channel: channelIndex }, 2, false, true);
+    this.client.publish(`session`, { transcriberId: this.uniqueId, id: session.id, status: 'active', channel: channelId }, 2, false, true);
   }
 
-  deactivate(session, channelIndex) {
+  deactivate(session, channelId) {
     // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-stop message
-    this.client.publish(`session`, { transcriberId: this.uniqueId, id: session.id, status: 'inactive', channel: channelIndex }, 2, false, true);
+    this.client.publish(`session`, { transcriberId: this.uniqueId, id: session.id, status: 'inactive', channel: channelId }, 2, false, true);
   }
 
   async connect() {

@@ -17,10 +17,6 @@ module.exports = {
           type: Sequelize.BOOLEAN,
           allowNull: true,
       },
-      index: {
-          type: Sequelize.INTEGER,
-          allowNull: false
-      },
       languages: {
         type: Sequelize.ARRAY(Sequelize.STRING),
         allowNull: true,

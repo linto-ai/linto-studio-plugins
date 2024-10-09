@@ -63,26 +63,26 @@ class MultiplexedRTMPServer extends EventEmitter {
   }
 
   async validateStream(streamPath) {
-    const [sessionId, channelIndexStr] = streamPath.split('/').filter(element => element !== "")
+    const [sessionId, channelIdStr] = streamPath.split('/').filter(element => element !== "")
     debug(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
 
-      // Extract sessionId and channelIndex from streamId
-      const channelIndex = parseInt(channelIndexStr, 10);
+      // Extract sessionId and channelId from streamId
+      const channelId = parseInt(channelIdStr, 10);
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
           debug(`Connection: ${streamPath} --> session ${sessionId} not found.`);
           return { isValid: false };
       }
-      // Find channel by "index" key (do not rely on position in array that changes upon updates)
-      const channel = session.channels.find(c => c.index === channelIndex);
+      // Find channel by "id" key (do not rely on position in array that changes upon updates)
+      const channel = session.channels.find(c => c.id === channelId);
       if (!channel) {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel index ${channelIndex} not found.`);
+          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} not found.`);
           return { isValid: false };
       }
       // Check if the channel's streamStatus is 'active'
       if (channel.streamStatus === 'active') {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel index ${channelIndex} already active. Skipping.`);
+          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
           return { isValid: false };
       }
       // Check startTime is after now
@@ -97,8 +97,8 @@ class MultiplexedRTMPServer extends EventEmitter {
           return { isValid: false };
       }
 
-      debug(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelIndex} is valid. Booting worker.`);
-      return { isValid: true, sessionId, channelIndex, session };
+      debug(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
+      return { isValid: true, sessionId, channelId, session };
   }
 
   async onConnection(sessionId, streamPath) {
@@ -112,10 +112,10 @@ class MultiplexedRTMPServer extends EventEmitter {
       }
 
       // Stream is valid, store connection file descriptor
-      const { channelIndex, session } = validation;
+      const { channelId, session } = validation;
       // Create a new file descriptor object to store connection details and session info
       const fd = {
-          channelIndex,
+          channelId,
           session
       };
       // Start a new worker for this connection
@@ -130,14 +130,14 @@ class MultiplexedRTMPServer extends EventEmitter {
       // - call scheduler to update session status to active
       // - start buffering audio in circular buffer
       // - start transcription
-      this.emit('session-start', fd.session, fd.channelIndex);
+      this.emit('session-start', fd.session, fd.channelId);
   }
 
   // Events sent by the worker
   handleWorkerEvents(sessionId, fd, worker) {
       worker.on('message', async (message) => {
           if (message.type === 'data') {
-              this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channelIndex);
+              this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channelId);
           }
           if (message.type === 'error') {
               console.error(`Worker ${worker.pid} error --> ${message.error}`);
@@ -151,7 +151,7 @@ class MultiplexedRTMPServer extends EventEmitter {
       });
 
       worker.on('exit', (code, signal) => {
-          debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelIndex}`);
+          debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelId}`);
       });
   }
 
@@ -161,7 +161,7 @@ class MultiplexedRTMPServer extends EventEmitter {
 
       // Tell the streaming server controller to forward the session stop message to the broker
       if (fd) {
-        this.emit('session-stop', fd.session, fd.channelIndex)
+        this.emit('session-stop', fd.session, fd.channelId)
       }
 
       if (worker) {

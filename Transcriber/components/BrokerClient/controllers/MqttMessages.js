@@ -32,15 +32,15 @@ function handleSystemMessage(parts, message) {
 function handleTranscriberMessage(parts, message) {
   const [direction, uniqueId, ...subparts] = parts;
   if (direction === 'in' && uniqueId === this.uniqueId) {
-    const { session, channelIndex, address, botType } = JSON.parse(message);
+    const { session, channelId, address, botType } = JSON.parse(message);
     const action = subparts.join('/');
     switch (action) {
       case 'startbot':
-        this.app.components['StreamingServer'].startBot(session, channelIndex, address, botType);
+        this.app.components['StreamingServer'].startBot(session, channelId, address, botType);
         break;
       case 'stopbot':
         const { sessionId } = JSON.parse(message);
-        this.app.components['StreamingServer'].stopBot(sessionId, channelIndex);
+        this.app.components['StreamingServer'].stopBot(sessionId, channelId);
         break;
       default:
         debug(`Unknown action: ${action}`);

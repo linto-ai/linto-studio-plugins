@@ -31,6 +31,7 @@ pipeline {
                     buildDockerfile('Transcriber', 'studio-plugins-transcriber')
                     buildDockerfile('Scheduler', 'studio-plugins-scheduler')
                     buildDockerfile('Session-API', 'studio-plugins-sessionapi')
+                    buildDockerfile('migration', 'studio-plugins-migration')
                 }
             }
         }

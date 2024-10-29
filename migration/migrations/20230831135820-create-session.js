@@ -48,8 +48,8 @@ module.exports = {
         type: Sequelize.ENUM('public', 'organization', 'private'),
         allowNull: false,
       },
-      room: {
-        type: Sequelize.STRING,
+      meta: {
+        type: Sequelize.JSON,
         allowNull: true,
       },
     });

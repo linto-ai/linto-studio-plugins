@@ -55,6 +55,29 @@ function getEndpoints(sessionId, channelId) {
     }
     return endpoints;
 }
+
+async function setChannelsEndpoints(sessionId, transaction) {
+    const channels = await Model.Channel.findAll({
+        where: {
+            sessionId
+        },
+        order: [['id', 'ASC']],
+        transaction
+    });
+
+
+    for (const [index, channel] of channels.entries()) {
+        await Model.Channel.update({
+            streamEndpoints: getEndpoints(sessionId, index),
+        }, {
+            transaction,
+            where: {
+                'id': channel.id
+            }
+        });
+    }
+}
+
 module.exports = (webserver) => {
     return [
     {
@@ -133,7 +156,7 @@ module.exports = (webserver) => {
                 return res.status(400).json({ "error": "At least one channel is required" })
             }
             let session
-            const t = await Model.sequelize.transaction();
+            const transaction = await Model.sequelize.transaction();
             try {
                 session = await Model.Session.create({
                     status: 'ready',
@@ -144,21 +167,21 @@ module.exports = (webserver) => {
                     owner: req.body.owner || null,
                     organizationId: req.body.organizationId || null,
                     visibility: req.body.visibility || 'private'
-                }, { transaction: t });
+                }, { transaction });
                 // Create channels
-                for (const channel of channels) {
+                for (const [index, channel] of channels.entries()) {
                     if (channel.translations) {
                         if (!Array.isArray(channel.translations) || !channel.translations.every(bcp47.check)) {
                             throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
                         }
                     }
-                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction: t });
+                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
                     if (!transcriberProfile) {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
                     }
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
-                    const newChannel = await Model.Channel.create({
+                    await Model.Channel.create({
                         keepAudio: channel.keepAudio || false,
                         diarization: channel.diarization || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
@@ -167,18 +190,11 @@ module.exports = (webserver) => {
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
                         name: channel.name
-                    }, { transaction: t });
-
-                    await Model.Channel.update({
-                        streamEndpoints: getEndpoints(session.id, newChannel.id),
-                    }, {
-                        transaction: t,
-                        where: {
-                            'id': newChannel.id
-                        }
-                    });
+                    }, { transaction });
                 }
-                await t.commit();
+                await setChannelsEndpoints(session.id, transaction);
+                await transaction.commit();
+
                 // return the session with channels
                 const result = await Model.Session.findByPk(session.id, {
                     include: {
@@ -192,7 +208,7 @@ module.exports = (webserver) => {
                 webserver.emit('session-update')
                 res.json(result);
             } catch (err) {
-                await t.rollback();
+                await transaction.rollback();
                 return next(err)
             }
         }
@@ -307,7 +323,7 @@ module.exports = (webserver) => {
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
 
-                    const newChannel = await Model.Channel.create({
+                    await Model.Channel.create({
                         keepAudio: channel.keepAudio || false,
                         diarization: channel.diarization || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
@@ -317,18 +333,9 @@ module.exports = (webserver) => {
                         transcriberProfileId: transcriberProfile.id,
                         name: channel.name
                     }, { transaction });
-
-                    await Model.Channel.update({
-                        streamEndpoints: getEndpoints(session.id, newChannel.id),
-                    }, {
-                        transaction,
-                        where: {
-                            'id': newChannel.id
-                        }
-                    });
-
                 }
 
+                await setChannelsEndpoints(session.id, transaction);
                 await transaction.commit();
 
                 // return the session with channels

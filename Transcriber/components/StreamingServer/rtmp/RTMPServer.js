@@ -63,11 +63,11 @@ class MultiplexedRTMPServer extends EventEmitter {
   }
 
   async validateStream(streamPath) {
-    const [sessionId, channelIdStr] = streamPath.split('/').filter(element => element !== "")
+    const [sessionId, channelIndexStr] = streamPath.split('/').filter(element => element !== "")
     debug(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
 
       // Extract sessionId and channelId from streamId
-      const channelId = parseInt(channelIdStr, 10);
+      const channelIndex = parseInt(channelIndexStr, 10);
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
@@ -75,11 +75,14 @@ class MultiplexedRTMPServer extends EventEmitter {
           return { isValid: false };
       }
       // Find channel by "id" key (do not rely on position in array that changes upon updates)
-      const channel = session.channels.find(c => c.id === channelId);
+      const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
+      const channel = sortedChannels[channelIndex];
       if (!channel) {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} not found.`);
+          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
           return { isValid: false };
       }
+      const channelId = channel.id;
+
       // Check if the channel's streamStatus is 'active'
       if (channel.streamStatus === 'active') {
           debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);

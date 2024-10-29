@@ -58,20 +58,23 @@ class MultiplexedSRTServer extends EventEmitter {
         debug(`Connection: ${connection.fd} --> Validating streamId ${streamId}`);
 
         // Extract sessionId and channelId from streamId
-        const [sessionId, channelIdStr] = streamId.split(",");
-        const channelId = parseInt(channelIdStr, 10);
+        const [sessionId, channelIndexStr] = streamId.split(",");
+        const channelIndex = parseInt(channelIndexStr, 10);
         const session = this.sessions.find(s => s.id === sessionId);
         // Validate session
         if (!session) {
             debug(`Connection: ${connection.fd} --> session ${sessionId} not found.`);
             return { isValid: false };
         }
-        // Find channel by "id" key (do not rely on position in array that changes upon updates)
-        const channel = session.channels.find(c => c.id === channelId);
+        // Find channel by index in array, it is recomputed at each update and ordered by id and starting at 0
+        const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
+        const channel = sortedChannels[channelIndex];
         if (!channel) {
-            debug(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} not found.`);
+            debug(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
             return { isValid: false };
         }
+        const channelId = channel.id;
+
         // Check if the channel's streamStatus is 'active'
         if (channel.streamStatus === 'active') {
             debug(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);

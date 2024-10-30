@@ -116,16 +116,25 @@ class BrokerClient extends Component {
 
   async saveTranscription(transcription, sessionId, channelId) {
     try {
-      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, id: channelId } });
-      if (!channel) {
-        throw new Error(`Channel with session ${sessionId} and id ${channelId} not found`)
-      }
-      const closedCaptions = Array.isArray(channel.closedCaptions) ? channel.closedCaptions : [];
-      await channel.update({
-        closedCaptions: [...closedCaptions, transcription]
-      });
+      const newTranscription = JSON.stringify([transcription]);
+      await Model.Channel.update(
+        {
+          closedCaptions: Model.sequelize.literal(
+            `COALESCE("closedCaptions"::jsonb, '[]'::jsonb) || ${Model.sequelize.escape(newTranscription)}::jsonb`
+          )
+        },
+        {
+          where: {
+            sessionId: sessionId,
+            id: channelId
+          }
+        }
+      );
     } catch (err) {
-      console.error(`${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`, JSON.stringify(transcription));
+      console.error(
+        `${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`,
+        JSON.stringify(transcription)
+      );
     }
   }
 

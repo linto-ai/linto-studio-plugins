@@ -42,7 +42,7 @@ module.exports = {
         allowNull: true,
       },
       closedCaptions: {
-        type: Sequelize.ARRAY(Sequelize.JSON),
+        type: Sequelize.JSON,
         allowNull: true,
       },
       audioFile: {

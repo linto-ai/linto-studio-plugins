@@ -1,4 +1,4 @@
-PACKAGE_DIRS := . front-end Transcriber Session-API Scheduler Delivery migration lib
+PACKAGE_DIRS := . Transcriber Session-API Scheduler migration lib
 
 install-local: $(PACKAGE_DIRS)
 

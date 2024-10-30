@@ -17,7 +17,7 @@ SAMPLE_RATE=16000 # 8000, 16000, 32000, 44100, 48000
 AUDIO_STORAGE_PATH=/tmp # Path to store channel audio files, use trailing slash !
 
 ##### Inbound / Pulled streaming #####
-STREAMING_PASSPHRASE= A0123456789 # empty, false or a passphrase (at least 10 chars).
+STREAMING_PASSPHRASE=A0123456789 # empty, false or a passphrase (at least 10 chars).
 STREAMING_HOST=0.0.0.0 # Listening address for transcriber. 0.0.0.0 for all interfaces (listener), you might use a specific IP address for SRT rendez-vous/caller mode
 STREAMING_PROTOCOLS=SRT,RTMP,WS # comma separated list : SRT, RTMP, WS
 STREAMING_SRT_MODE=listener # listerner, caller, rendezvous

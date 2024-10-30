@@ -126,7 +126,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+                "$ref": "#/components/schemas/SessionAnswer"
               }
             }
           }

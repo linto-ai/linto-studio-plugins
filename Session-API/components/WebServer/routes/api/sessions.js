@@ -78,6 +78,33 @@ async function setChannelsEndpoints(sessionId, transaction) {
     }
 }
 
+async function getSessionResult(sessionId, withCaptions=false) {
+    const exclude = ['sessionId'];
+    if (!withCaptions) {
+        exclude.push('closedCaptions');
+    }
+
+    const session = await Model.Session.findByPk(sessionId, {
+        include: {
+            model: Model.Channel,
+            attributes: {
+                exclude: exclude
+            },
+            order: [['id', 'ASC']]
+        }
+    });
+
+    if (!session) {
+        return null;
+    }
+
+    session.channels.forEach((channel, index) => {
+        channel.setDataValue('index', index);
+    });
+
+    return session;
+}
+
 module.exports = (webserver) => {
     return [
     {
@@ -85,14 +112,7 @@ module.exports = (webserver) => {
         method: 'get',
         controller: async (req, res, next) => {
             try {
-                const session = await Model.Session.findByPk(req.params.id, {
-                    include: {
-                        model: Model.Channel,
-                        attributes: {
-                            exclude: ['sessionId']
-                        }
-                    }
-                });
+                const session = await getSessionResult(req.params.id, true);
                 if (!session) {
                     return res.status(404).send('Session not found');
                 }
@@ -130,22 +150,34 @@ module.exports = (webserver) => {
                 where.visibility = visibility;
             }
 
-            Model.Session.findAndCountAll({
-                limit: limit,
-                offset: offset,
-                include: {
-                    model: Model.Channel,
-                    attributes: {
-                        exclude: ['sessionId', 'closedCaptions']
-                    }
-                },
-                where: where
-            }).then(results => {
+            try {
+                const results = await Model.Session.findAndCountAll({
+                    limit: limit,
+                    offset: offset,
+                    include: {
+                        model: Model.Channel,
+                        attributes: {
+                            exclude: ['sessionId', 'closedCaptions']
+                        },
+                        order: [['id', 'ASC']]
+                    },
+                    where: where
+                });
+
+                // set channels index
+                results.rows.forEach(session => {
+                    session.channels.forEach((channel, index) => {
+                        channel.setDataValue('index', index);
+                    });
+                });
+
                 res.json({
                     sessions: results.rows,
                     totalItems: results.count
-                })
-            }).catch(err => next(err))
+                });
+            } catch (err) {
+                next(err);
+            }
         }
     }, {
         path: '/sessions',
@@ -166,7 +198,8 @@ module.exports = (webserver) => {
                     erroredOn: null,
                     owner: req.body.owner || null,
                     organizationId: req.body.organizationId || null,
-                    visibility: req.body.visibility || 'private'
+                    visibility: req.body.visibility || 'private',
+                    meta: req.body.meta || null
                 }, { transaction });
                 // Create channels
                 for (const [index, channel] of channels.entries()) {
@@ -196,18 +229,12 @@ module.exports = (webserver) => {
                 await transaction.commit();
 
                 // return the session with channels
-                const result = await Model.Session.findByPk(session.id, {
-                    include: {
-                        model: Model.Channel,
-                        attributes: {
-                            exclude: ['sessionId']
-                        }
-                    }
-                });
+                const result = await getSessionResult(session.id);
                 debug('Session created', result.id);
                 webserver.emit('session-update')
                 res.json(result);
             } catch (err) {
+                debug(err);
                 await transaction.rollback();
                 return next(err)
             }
@@ -339,14 +366,7 @@ module.exports = (webserver) => {
                 await transaction.commit();
 
                 // return the session with channels
-                const result = await Model.Session.findByPk(session.id, {
-                    include: {
-                        model: Model.Channel,
-                        attributes: {
-                            exclude: ['sessionId']
-                        }
-                    }
-                });
+                const result = await getSessionResult(session.id);
                 debug('Session updated', result.id);
                 webserver.emit('session-update')
                 res.json(result);
@@ -480,14 +500,7 @@ module.exports = (webserver) => {
                 });
                 webserver.emit('session-update');
 
-                const result = await Model.Session.findByPk(session.id, {
-                    include: {
-                        model: Model.Channel,
-                        attributes: {
-                            exclude: ['id', 'session_id']
-                        }
-                    }
-                });
+                const result = await getSessionResult(session.id);
                 res.json(result);
             } catch (err) {
                 next(err);

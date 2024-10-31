@@ -390,7 +390,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['id', 'sessionId']
+                            exclude: ['sessionId']
                         }
                     }
                 });
@@ -427,7 +427,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['id', 'sessionId']
+                            exclude: ['sessionId']
                         }
                     }
                 });

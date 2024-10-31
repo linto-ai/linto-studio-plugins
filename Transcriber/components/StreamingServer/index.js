@@ -111,7 +111,7 @@ class StreamingServer extends Component {
         debug(`Session ${session.id}, channel ${channelId} started`);
         const asr = new ASR(session, channelId);
         asr.on('partial', (transcription) => {
-          bot.updateCaptions(transcription, false);
+          bot.updateCaptions(transcription.text, false);
         });
         asr.on('final', (transcription) => {
           bot.updateCaptions(transcription.text, true);

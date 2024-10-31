@@ -44,7 +44,8 @@ RUN apk update && \
         gst-plugins-base \
         gst-plugins-bad \
         gst-plugins-good \
-        gst-libav
+        gst-libav \
+        chromium
 
 # Copier seulement les fichiers nécessaires depuis l'image de build
 COPY --from=build /usr/src/app/lib /usr/src/app/lib

@@ -15,7 +15,6 @@ class RecognizerListener {
 
     emitTranscribed(payload) {
         debug(`Microsoft ASR final transcription: ${payload.text}`);
-        debug(JSON.stringify(payload));
         this.transcriber.emit('transcribed', payload);
     }
 

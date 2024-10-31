@@ -122,10 +122,14 @@ class ASR extends eventEmitter {
     });
     this.provider.on('transcribing', (transcription) => {
       this.state = ASR.states.TRANSCRIBING;
-      this.emit('partial', transcription);
+      if (transcription.text.trim().length > 0) {
+        this.emit('partial', transcription);
+      }
     });
     this.provider.on('transcribed', (transcription) => {
-      this.emit('final', transcription);
+      if (transcription.text.trim().length > 0) {
+        this.emit('final', transcription);
+      }
     });
   }
 

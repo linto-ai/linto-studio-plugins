@@ -4,6 +4,14 @@
       "properties": {
         "config": {
           "$ref": "#/components/schemas/TranscriberProfileData"
+        },
+        "organizationId": {
+          "type": "string",
+          "default": null
+        },
+        "quickMeeting": {
+          "type": "boolean",
+          "default": null
         }
       },
       "required": [
@@ -37,6 +45,14 @@
               }
             }
           ]
+        },
+        "organizationId": {
+          "type": "string",
+          "description": "Organization ID of the transcriber profile"
+        },
+        "quickMeeting": {
+          "type": "boolean",
+          "description": "True if this transcriber profile is available for a quick meeting"
         },
         "createdAt": {
           "type": "string",

@@ -56,7 +56,8 @@ class Bot extends EventEmitter {
           `--disable-extensions-except=${path.resolve(__dirname, 'webcam')}`,
           `--load-extension=${path.resolve(__dirname, 'webcam')}`,
           '--no-sandbox',
-          '--disable-setuid-sandbox'
+          '--disable-setuid-sandbox',
+          '--disable-gpu'
         ],
       });
       debug('Browser launched');

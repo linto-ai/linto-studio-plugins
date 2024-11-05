@@ -6,7 +6,7 @@ class VirtualCanvasStream {
     this.canvas.width = 1920; // Set desired width
     this.canvas.height = 1080; // Set desired height
     this.ctx = this.canvas.getContext("2d");
-    this.outputStream = this.canvas.captureStream(30);
+    this.outputStream = this.canvas.captureStream(5);
     this.textLine1 = '';
     this.textLine2 = '';
     this.padding = 20; // Padding for the text
@@ -21,7 +21,6 @@ class VirtualCanvasStream {
     this.ctx.font = "30px Arial";
     this.ctx.fillStyle = "white";
     this.ctx.textAlign = "center";
-    this.background.update(); // Update the background animation
     if (this.textLine1) {
       this.ctx.fillText(this.textLine1, this.canvas.width / 2, this.canvas.height / 2 - 20);
     }

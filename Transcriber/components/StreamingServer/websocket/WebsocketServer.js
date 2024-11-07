@@ -105,20 +105,93 @@ class MultiplexedWebsocketServer extends EventEmitter {
           channelId,
           session
       };
+
+      let messageCallback = null;
+
+      // handle websocket messages
+      ws.on("message", (message) => {
+          if (!messageCallback) {
+              messageCallback = this.handleInitMessage(ws, message, fd);
+              if (!messageCallback) {
+                  this.cleanupWebsocket(ws);
+              }
+          }
+          else {
+              messageCallback(message);
+          }
+      });
+  }
+
+  handleInitMessage(ws, message, fd) {
+    let initMessage;
+    try {
+        initMessage = JSON.parse(message);
+    } catch (error) {
+        debug('Invalid JSON init message', error);
+        ws.send(JSON.stringify({ type: 'error', message: `Invalid JSON init message: ${error}.` }));
+        return null;
+    }
+
+    if (initMessage.type === 'init') {
+        debug(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}`);
+
+        if(initMessage.encoding == 'pcm' && initMessage.sampleRate != 16000) {
+            debug(`Invalid sample rate: ${initMessage.sampleRate}`);
+            ws.send(JSON.stringify({ type: 'error', message: `Invalid sample rate: ${initMessage.sampleRate}. Only 16000 is accepted.` }));
+            return null
+        }
+
+        const callback = initMessage.encoding == 'pcm' ? this.initPcm(ws, fd) : this.initWorker(ws, fd);
+
+        ws.send(JSON.stringify({ type: 'ack', message: 'Init done' }));
+        debug('ACK sent');
+
+        return callback;
+    } else {
+        debug('Invalid init message type');
+        ws.send(JSON.stringify({ type: 'error', message: `Invalid init message type: ${initMessage.type}. It must be 'init'` }));
+        return null;
+    }
+  }
+
+  initPcm(ws, fd) {
+      this.emit('session-start', fd.session, fd.channelId);
+      ws.on("close", () => {
+          debug(`Connection: ${ws} --> closed`);
+          this.cleanupWebsocket(ws, fd);
+      });
+      return (message) => {
+          this.emit('data', message, fd.session.id, fd.channelId);
+      };
+  }
+
+  initWorker(ws, fd) {
       // Start a new worker for this connection
       const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), [], {
       });
       this.workers.push(worker);
       // Start gstreamer pipeline
       worker.send({ type: 'init' });
+
+
       // handle events
-      this.handleWebsocketEvents(ws, fd, worker);
       this.handleWorkerEvents(ws, fd, worker);
+
+      ws.on("close", () => {
+          debug(`Connection: ${ws} --> closed`);
+          worker.send({ type: 'terminate' });
+          this.cleanupWebsocket(ws, fd, worker);
+      });
+
       // Acknowledge session for streaming server controller to handle further processing
       // - call scheduler to update session status to active
       // - start buffering audio in circular buffer
       // - start transcription
       this.emit('session-start', fd.session, fd.channelId);
+
+      return (message) => {
+          worker.send({ type: 'buffer', chunks: Buffer.from(new Int16Array(message))});
+      };
   }
 
   // Events sent by the worker
@@ -143,23 +216,8 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
       worker.on('exit', (code, signal) => {
           debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelId}`);
-      });
-  }
-
-  handleWebsocketEvents(ws, fd, worker) {
-      ws.on("message", (message) => {
-          this.onClientData(message, worker);
-      });
-
-      ws.on("close", () => {
-          debug(`Connection: ${ws} --> closed`);
-          worker.send({ type: 'terminate' });
           this.cleanupWebsocket(ws, fd, worker);
       });
-  }
-
-  onClientData(message, worker) {
-      worker.send({ type: 'buffer', chunks: Buffer.from(new Int16Array(message))});
   }
 
   cleanupWebsocket(ws, fd, worker) {

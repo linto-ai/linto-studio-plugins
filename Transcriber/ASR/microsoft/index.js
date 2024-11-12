@@ -211,6 +211,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     start() {
         const { transcriberProfile, translations, diarization } = this.channel;
+        debug(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
         this.pushStream2 = null;
         this.recognizer2 = null;
         this.startedAt = new Date().toISOString();
@@ -312,7 +313,7 @@ class MicrosoftTranscriber extends EventEmitter {
             }
 
             if (diarization) {
-                return ConversationTranscriber(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
+                return ConversationTranscriber.FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
             }
 
             return SpeechRecognizer.FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);

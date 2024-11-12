@@ -22,6 +22,7 @@ function getEndpoints(sessionId, channelId) {
         STREAMING_PROXY_WS_TCP_PORT,
         STREAMING_PROTOCOLS,
         STREAMING_WS_SECURE,
+        STREAMING_WS_ENDPOINT,
     } = process.env;
 
     const protocols = STREAMING_PROTOCOLS ? STREAMING_PROTOCOLS.split(',') : [];
@@ -52,7 +53,8 @@ function getEndpoints(sessionId, channelId) {
     if (protocols.includes('WS')) {
         const wsProto = STREAMING_WS_SECURE && STREAMING_WS_SECURE !== 'false' ? 'wss' : 'ws';
         const wsPort = STREAMING_PROXY_WS_TCP_PORT && STREAMING_PROXY_WS_TCP_PORT !== 'false' ? STREAMING_PROXY_WS_TCP_PORT : STREAMING_WS_TCP_PORT;
-        const wsString = `${wsProto}://${host}:${wsPort}/${sessionId},${channelId}`;
+        const wsEndpoint = STREAMING_WS_ENDPOINT && STREAMING_WS_ENDPOINT !== 'false' ? `${STREAMING_WS_ENDPOINT}/` : '';
+        const wsString = `${wsProto}://${host}:${wsPort}/${wsEndpoint}${sessionId},${channelId}`;
         endpoints.ws = wsString;
     }
     return endpoints;

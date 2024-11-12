@@ -30,6 +30,7 @@ STREAMING_PROXY_SRT_UDP_PORT=8889 # UDP port for SRT listener
 STREAMING_PROXY_RTMP_TCP_PORT=1935 # TCP port for RTMP listener
 STREAMING_PROXY_WS_TCP_PORT=8080 # TCP port for Websocket listener
 STREAMING_HEALTHCHECK_TCP=9999 # TCP port for healthcheck listener
+STREAMING_WS_SECURE=true
 
 ##### Database #####
 DB_HOST=localhost

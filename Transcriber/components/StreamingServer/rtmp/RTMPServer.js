@@ -10,6 +10,7 @@ const {
     STREAMING_RTMP_TCP_PORT
 } = process.env;
 
+// TODO: handle forced session stop (see SrtServer)
 class MultiplexedRTMPServer extends EventEmitter {
   constructor(app) {
     super();

@@ -16,10 +16,21 @@ class MultiplexedSRTServer extends EventEmitter {
         this.app = app;
         this.workers = []; // Workers for SRT connections (gstreamer)
         this.asyncSrtServer = null;
+        this.runningSessions = {}
     }
 
     // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
     setSessions(sessions) {
+        if (this.sessions) {
+            // force stop running sessions
+            const deletedSessions = this.sessions.filter(currentSession =>
+                !sessions.some(newSession => newSession.id === currentSession.id)
+            );
+            const sessionsToStop = deletedSessions.filter(deletedSession =>
+                this.runningSessions.hasOwnProperty(deletedSession.id)
+            );
+            sessionsToStop.forEach(session => this.stopRunningSession(session));
+        }
         this.sessions = sessions;
     }
 
@@ -127,6 +138,22 @@ class MultiplexedSRTServer extends EventEmitter {
         // - start buffering audio in circular buffer
         // - start transcription
         this.emit('session-start', fd.session, fd.channelId);
+        this.addRunningSession(session, connection, fd, worker);
+    }
+
+    addRunningSession(session, connection, fd, worker) {
+      if (!this.runningSessions[session.id]) {
+        this.runningSessions[session.id] = [];
+      }
+
+      this.runningSessions[session.id].push({ connection, fd, worker });
+    }
+
+    stopRunningSession(session) {
+      while (this.runningSessions[session.id] && this.runningSessions[session.id].length > 0) {
+        const { connection, fd, worker } = this.runningSessions[session.id][0];
+        this.cleanupConnection(connection, fd, worker);
+      }
     }
 
     // Events sent by the worker
@@ -157,7 +184,9 @@ class MultiplexedSRTServer extends EventEmitter {
 
     handleConnectionEvents(connection, fd, worker) {
         connection.on("data", async () => {
-            this.onClientData(connection, fd, worker);
+            if (worker && worker.connected) {
+                this.onClientData(connection, fd, worker);
+            }
         });
 
         connection.on("closing", async () => {
@@ -167,8 +196,10 @@ class MultiplexedSRTServer extends EventEmitter {
 
         connection.on("closed", async () => {
             debug(`Connection: ${connection.fd} --> closed`);
-            worker.send({ type: 'terminate' });
-            this.cleanupConnection(connection, fd, worker);
+            if (worker && worker.connected) {
+                worker.send({ type: 'terminate' });
+                this.cleanupConnection(connection, fd, worker);
+            }
         });
 
         connection.on('error', (err) => {
@@ -205,6 +236,13 @@ class MultiplexedSRTServer extends EventEmitter {
             const workerIndex = this.workers.indexOf(worker);
             if (workerIndex > -1) {
                 this.workers.splice(workerIndex, 1);
+            }
+        }
+
+        if (this.runningSessions[fd.session.id]) {
+            this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd.channelId !== fd.channelId);
+            if (this.runningSessions[fd.session.id].length === 0) {
+                delete this.runningSessions[fd.session.id];
             }
         }
     }

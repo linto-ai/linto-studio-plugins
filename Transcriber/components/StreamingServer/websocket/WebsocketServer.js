@@ -11,6 +11,7 @@ const {
     STREAMING_WS_TCP_PORT
 } = process.env;
 
+// TODO: handle forced session stop (see SrtServer)
 class MultiplexedWebsocketServer extends EventEmitter {
   constructor(app) {
     super();

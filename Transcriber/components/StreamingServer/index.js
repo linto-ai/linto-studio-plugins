@@ -71,6 +71,10 @@ class StreamingServer extends Component {
         try {
           debug(`Session ${session.id}, channel ${channelId} stopped`);
           const asr = this.ASRs.get(`${session.id}_${channelId}`);
+          if (!asr) {
+            return;
+          }
+
           asr.removeAllListeners();
           asr.dispose();
           this.ASRs.delete(`${session.id}_${channelId}`);
@@ -182,7 +186,6 @@ class StreamingServer extends Component {
   }
 
   // called by controllers/BrokerClient.js uppon receiving system/out/sessions/statuses message
-  //@TODO: reimplement this method for other protocols
   setSessions(sessions) {
     for(const server of this.servers) {
       server.setSessions(sessions);

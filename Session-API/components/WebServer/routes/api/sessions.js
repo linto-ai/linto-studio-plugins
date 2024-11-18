@@ -205,6 +205,8 @@ module.exports = (webserver) => {
                     owner: req.body.owner || null,
                     organizationId: req.body.organizationId || null,
                     visibility: req.body.visibility || 'private',
+                    autoStart: req.body.autoStart || false,
+                    autoEnd: req.body.autoEnd || false,
                     meta: req.body.meta || null
                 }, { transaction });
                 // Create channels

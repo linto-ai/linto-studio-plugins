@@ -195,10 +195,12 @@ module.exports = (webserver) => {
             const transaction = await Model.sequelize.transaction();
             try {
                 session = await Model.Session.create({
-                    status: 'ready',
+                    status: req.body.scheduledOn ? 'on_schedule' : 'ready',
                     name: req.body.name || `New session ${new Date().toISOString()}`,
-                    startTime: req.body.startTime || null,
-                    endTime: req.body.endTime || null,
+                    startTime: null,
+                    endTime: null,
+                    scheduledOn: req.body.scheduledOn || null,
+                    endOn: req.body.endOn || null,
                     erroredOn: null,
                     owner: req.body.owner || null,
                     organizationId: req.body.organizationId || null,

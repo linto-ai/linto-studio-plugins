@@ -4,13 +4,13 @@ module.exports = {
   async up(queryInterface, Sequelize) {
     await queryInterface.addColumn('transcriberProfiles', 'organizationId', {
       type: Sequelize.STRING,
-      allowNull: true, // Permet de rendre la colonne nullable
+      allowNull: true,
     });
 
     await queryInterface.addColumn('transcriberProfiles', 'quickMeeting', {
       type: Sequelize.BOOLEAN,
       defaultValue: false,
-      allowNull: false, // Peut être modifié selon tes besoins
+      allowNull: false,
     });
   },
   async down(queryInterface, Sequelize) {

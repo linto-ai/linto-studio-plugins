@@ -5,12 +5,12 @@
             "name": {
                 "type": "string"
             },
-            "startTime": {
+            "scheduledOn": {
                 "type": "string",
                 "format": "date-time",
                 "default": null
             },
-            "endTime": {
+            "endOn": {
                 "type": "string",
                 "format": "date-time",
                 "default": null

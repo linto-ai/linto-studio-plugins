@@ -73,15 +73,15 @@ class MultiplexedWebsocketServer extends EventEmitter {
           debug(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
           return { isValid: false };
       }
-      // Check startTime is after now
+      // Check scheduledOn is after now
       const now = new Date();
-      if (session.startTime && now < new Date(session.startTime)) {
-          debug(`Connection: ${req.url} --> session ${sessionId}, startTime in the future. Now: ${now}, startTime: ${session.startTime}. Skipping.`);
+      if (session.scheduledOn && now < new Date(session.scheduledOn)) {
+          debug(`Connection: ${req.url} --> session ${sessionId}, scheduledOn in the future. Now: ${now}, scheduledOn: ${session.scheduledOn}. Skipping.`);
           return { isValid: false };
       }
-      // Check endTime is before now
-      if (session.endTime && now > new Date(session.endTime)) {
-          debug(`Connection: ${req.url} --> session ${sessionId}, endTime in the past. Now: ${now}, endTime: ${session.startTime}. Skipping.`);
+      // Check endOn is before now
+      if (session.endOn && now > new Date(session.endOn)) {
+          debug(`Connection: ${req.url} --> session ${sessionId}, endOn in the past. Now: ${now}, endOn: ${session.endOn}. Skipping.`);
           return { isValid: false };
       }
 

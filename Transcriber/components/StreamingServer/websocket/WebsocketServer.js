@@ -8,7 +8,8 @@ const WebSocket = require('ws');
 
 const {
     STREAMING_HOST,
-    STREAMING_WS_TCP_PORT
+    STREAMING_WS_TCP_PORT,
+    STREAMING_WS_ENDPOINT
 } = process.env;
 
 // TODO: handle forced session stop (see SrtServer)
@@ -46,8 +47,17 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
   }
 
+  stripStreamPrefix(streamId) {
+      const prefix = `${STREAMING_WS_ENDPOINT}/`;
+
+      if (streamId.startsWith(prefix)) {
+          return streamId.slice(prefix.length);
+      }
+      return streamId;
+  }
+
   async validateStream(req) {
-    const streamId = req.url.substring(1)
+    const streamId = this.stripStreamPrefix(req.url.substring(1))
     debug(`Connection: ${req.url} --> Validating streamId ${streamId}`);
 
       // Extract sessionId and channelId from streamId

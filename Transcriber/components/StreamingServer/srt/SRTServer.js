@@ -7,7 +7,7 @@ const path = require('path');
 const {
     STREAMING_PASSPHRASE,
     STREAMING_HOST,
-    STREAMING_SRT_UDP_PORT
+    STREAMING_SRT_UDP_PORT,
 } = process.env;
 
 class MultiplexedSRTServer extends EventEmitter {

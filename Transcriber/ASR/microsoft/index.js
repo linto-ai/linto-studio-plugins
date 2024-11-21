@@ -80,52 +80,7 @@ class RecognizerListener {
 class MultiRecognizerListener extends RecognizerListener {
     constructor(transcriber) {
         super(transcriber);
-        this.finals = [];
         this.recognizerCount = 0;
-    }
-
-    handleRecognized(s, e) {
-        if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
-            this.finals.push(this.transcriber.getMqttPayload(e.result));
-            const finalGroups = this.findFinalByStart();
-            Object.values(finalGroups).forEach(value => {
-                const mergedFinal = this.mergePayload(...value);
-                this.emitTranscribed(mergedFinal);
-            });
-        }
-    }
-
-    mergePayload(obj1, obj2) {
-      return {
-        ...obj1,
-        ...obj2,
-        locutor: obj1.locutor || obj2.locutor,
-        translations: {
-          ...obj1.translations,
-          ...obj2.translations
-        }
-      };
-    }
-
-    findFinalByStart() {
-        const groupedByStart = {};
-
-        this.finals.forEach(item => {
-          if (!groupedByStart[item.start]) {
-            groupedByStart[item.start] = [item];
-          } else {
-            groupedByStart[item.start].push(item);
-          }
-        });
-
-        const duplicates = Object.fromEntries(
-          Object.entries(groupedByStart).filter(([key, value]) => value.length > 1)
-        );
-
-        // remove the finals
-        this.finals = this.finals.filter(item => !duplicates[item.start]);
-
-        return duplicates;
     }
 
     listenOnlyRecognized(recognizer) {

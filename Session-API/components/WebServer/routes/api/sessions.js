@@ -135,6 +135,8 @@ module.exports = (webserver) => {
             const statusList = req.query.statusList ? req.query.statusList.split(',') : null
             const organizationId = req.query.organizationId;
             const visibility = req.query.visibility;
+            const scheduleOn = req.query.scheduleOn;
+            const endOn = req.query.endOn;
 
             let where = {}
 
@@ -152,6 +154,22 @@ module.exports = (webserver) => {
 
             if (visibility) {
                 where.visibility = visibility;
+            }
+
+            if (scheduleOn && scheduleOn.before) {
+                where.scheduleOn = { [Model.Op.lt]: new Date(scheduleOn.before) };
+            }
+
+            if (scheduleOn && scheduleOn.after) {
+                where.scheduleOn = { [Model.Op.gt]: new Date(scheduleOn.after) };
+            }
+
+            if (endOn && endOn.before) {
+                where.endOn = { [Model.Op.lt]: new Date(endOn.before) };
+            }
+
+            if (endOn && endOn.after) {
+                where.endOn = { [Model.Op.gt]: new Date(endOn.after) };
             }
 
             try {

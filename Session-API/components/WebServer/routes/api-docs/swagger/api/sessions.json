@@ -88,6 +88,46 @@
               "public"
             ]
           }
+        },
+        {
+          "name": "scheduleOn[before]",
+          "in": "query",
+          "description": "Filter items scheduled before the specified date.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        {
+          "name": "scheduleOn[after]",
+          "in": "query",
+          "description": "Filter items scheduled after the specified date.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        {
+          "name": "endOn[before]",
+          "in": "query",
+          "description": "Filter items ending before the specified date.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        {
+          "name": "endOn[after]",
+          "in": "query",
+          "description": "Filter items ending after the specified date.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date"
+          }
         }
       ],
       "responses": {

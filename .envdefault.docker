@@ -1,4 +1,5 @@
 NODE_ENV=production
+TZ=UTC
 
 # App components registration (don't touch)
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separated list of components to run, they load in this order

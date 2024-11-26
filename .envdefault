@@ -2,6 +2,7 @@
 # You can override them by creating a file named .env in the same directory
 # you can also override them by setting them in the environment before running the app (e.g. export SRT_PORT=1234)
 NODE_ENV=production # used to load the appropriate migration config
+TZ=UTC
 
 # App components registration (don't touch)
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separated list of components to run, they load in this order

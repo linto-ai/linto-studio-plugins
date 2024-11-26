@@ -35,10 +35,84 @@ class BrokerClient extends Component {
       this.state = ERROR;
     });
     this.init(); // binds controllers, those will handle messages
+
+    setInterval(async () => {
+      const autoStartUpdated = await this.autoStart();
+      const autoEndUpdated = await this.autoEnd();
+      if (autoStartUpdated || autoEndUpdated) {
+        await this.publishSessions();
+      }
+    }, 60 * 1000);
   }
 
 
   // ###### Asked to schedule things ######
+  async autoStart() {
+    const [updatedCount, updatedSessions] = await Model.Session.update(
+      { status: 'ready' },
+      {
+        where: {
+          status: 'on_schedule',
+          autoStart: true,
+          scheduleOn: {
+            [Model.Op.gt]: new Date()
+          }
+        },
+        returning: true
+      }
+    );
+
+    const sessionIds = updatedSessions.map(session => session.id);
+    if (sessionIds.length > 0) {
+      debug(`Auto start sessions ${sessionIds}`);
+    }
+
+    return sessionIds.length > 0;
+  }
+
+  async autoEnd() {
+    let isUpdated = false;
+
+    await Model.sequelize.transaction(async (transaction) => {
+      const [updatedCount, updatedSessions] = await Model.Session.update(
+        {
+          status: 'terminated',
+          endTime: new Date()
+        },
+        {
+          where: {
+            status: 'ready',
+            autoEnd: true,
+            endOn: {
+              [Model.Op.lt]: new Date()
+            }
+          },
+          returning: true,
+          transaction
+        }
+      );
+
+      const sessionIds = updatedSessions.map(session => session.id);
+
+      if (sessionIds.length > 0) {
+        debug(`Auto end sessions ${sessionIds}`);
+        isUpdated = true;
+        await Model.Channel.update(
+          { streamStatus: 'inactive' },
+          {
+            where: {
+              sessionId: {
+                [Model.Op.in]: sessionIds
+              }
+            },
+            transaction
+          }
+        );
+      }
+    });
+
+    return isUpdated;
+  }
 
   // Choose the least used transcriber to start a bot
   // we do this cause bot handling needs to be scheduled on the instance with the least load
@@ -263,7 +337,7 @@ class BrokerClient extends Component {
 
   async publishSessions() {
     const sessions = await Model.Session.findAll({
-      attributes: ['id', 'status', 'startTime', 'endTime'],
+      attributes: ['id', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd'],
       where: { status: ['active', 'ready'] },
       include: [
         {

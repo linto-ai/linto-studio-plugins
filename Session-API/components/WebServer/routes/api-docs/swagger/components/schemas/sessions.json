@@ -5,7 +5,7 @@
             "name": {
                 "type": "string"
             },
-            "scheduledOn": {
+            "scheduleOn": {
                 "type": "string",
                 "format": "date-time",
                 "default": null
@@ -60,12 +60,12 @@
             "name": {
                 "type": "string"
             },
-            "startTime": {
+            "scheduleOn": {
                 "type": "string",
                 "format": "date-time",
                 "default": null
             },
-            "endTime": {
+            "endOn": {
                 "type": "string",
                 "format": "date-time",
                 "default": null
@@ -139,6 +139,14 @@
                 "format": "date-time"
             },
             "endTime": {
+                "type": "string",
+                "format": "date-time"
+            },
+            "scheduleOn": {
+                "type": "string",
+                "format": "date-time"
+            },
+            "endOn": {
                 "type": "string",
                 "format": "date-time"
             },

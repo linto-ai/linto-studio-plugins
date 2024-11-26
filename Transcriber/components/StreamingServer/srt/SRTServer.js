@@ -91,14 +91,14 @@ class MultiplexedSRTServer extends EventEmitter {
             debug(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
             return { isValid: false };
         }
-        // Check scheduledOn is after now
+        // Check scheduleOn is after now
         const now = new Date();
-        if (session.scheduledOn && now < new Date(session.scheduledOn)) {
-            debug(`Connection: ${connection.fd} --> session ${sessionId}, scheduledOn in the future. Now: ${now}, scheduledOn: ${session.scheduledOn}. Skipping.`);
+        if (session.autoStart && session.scheduleOn && now < new Date(session.scheduleOn)) {
+            debug(`Connection: ${connection.fd} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
             return { isValid: false };
         }
         // Check endOn is before now
-        if (session.endOn && now > new Date(session.endOn)) {
+        if (session.autoEnd && session.endOn && now > new Date(session.endOn)) {
             debug(`Connection: ${connection.fd} --> session ${sessionId}, endOn in the past. Now: ${now}, endOn: ${session.endOn}. Skipping.`);
             return { isValid: false };
         }

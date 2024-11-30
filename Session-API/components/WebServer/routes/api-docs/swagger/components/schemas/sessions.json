@@ -87,6 +87,16 @@
               ],
               "default": "private"
             },
+            "autoStart": {
+                "type": "boolean",
+                "description": "Automatically start the session",
+                "default": false
+            },
+            "autoEnd": {
+                "type": "boolean",
+                "description": "Automatically end the session",
+                "default": false
+            },
             "meta": {
                 "type": "json",
                 "default": null

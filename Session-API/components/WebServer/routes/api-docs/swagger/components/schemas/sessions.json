@@ -144,6 +144,21 @@
             "name": {
                 "type": "string"
             },
+            "owner": {
+                "type": "string"
+            },
+            "organizationId": {
+                "type": "string"
+            },
+            "visibility": {
+              "type": "string",
+              "enum": [
+                  "public",
+                  "organization",
+                  "private"
+              ],
+              "default": "private"
+            },
             "startTime": {
                 "type": "string",
                 "format": "date-time"
@@ -163,6 +178,16 @@
             "erroredOn": {
                 "type": "string",
                 "format": "date-time"
+            },
+            "autoStart": {
+                "type": "boolean"
+            },
+            "autoEnd": {
+                "type": "boolean"
+            },
+            "meta": {
+                "type": "json",
+                "default": null
             }
         }
     },

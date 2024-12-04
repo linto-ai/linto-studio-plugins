@@ -64,9 +64,17 @@ class Bot extends EventEmitter {
 
       const context = this.browser.defaultBrowserContext();
       this.page = await context.newPage();
+      this.page.on('console', msg => {
+        if (msg.type() === 'error') {
+          debug(`Puppeteer error: ${msg.text()}`);
+        }
+      });
+      this.page.on('pageerror', err => {
+          debug(`Puppeteer global error: ${err.message}`);
+      });
       debug(`Joining ${this.address}`);
 
-      await this.page.goto(this.address, { timeout: 50000 }); // 60 seconds timeout
+      await this.page.goto(this.address, { timeout: 50000 }); // 50 seconds timeout
       debug('Page loaded');
 
       for (const rule of this.manifest) {
@@ -200,12 +208,12 @@ class Bot extends EventEmitter {
 
   async updateCaptions(newText, final) {
     if (this.page) {
-      await this.page.evaluate((text) => {
+      await this.page.evaluate((text, final) => {
         const canvasStream = window.fakeWebcam;
         if (canvasStream) {
-          canvasStream.setText(text);
+          canvasStream.setText(text, final);
         }
-      }, newText);
+      }, newText, final);
       debug(`Updated text to: ${newText}`);
     } else {
       debug('Page is not initialized');

@@ -431,6 +431,15 @@ module.exports = (webserver) => {
                 if (channel.streamStatus !== 'inactive') {
                     return res.status(400).json({ error: "The channel must be inactive to start a bot" });
                 }
+                // Set bot to true in the channel
+                await Model.Channel.update({
+                    bot: true
+                }, {
+                    where: {
+                        'id': channelId
+                    }
+                });
+
                 webserver.emit('startbot', id, channelId, url, botType);
                 res.json({ success: true });
             } catch (err) {
@@ -466,6 +475,16 @@ module.exports = (webserver) => {
                 if (!channel) {
                     return res.status(404).json({ error: "Channel not found" });
                 }
+
+                // Set bot to false in the channel
+                await Model.Channel.update({
+                    bot: false
+                }, {
+                    where: {
+                        'id': channelId
+                    }
+                });
+
                 webserver.emit('stopbot', id, channelId);
                 res.json({ success: true });
             } catch (err) {

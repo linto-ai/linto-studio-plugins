@@ -304,6 +304,10 @@
                 "type": "boolean",
                 "description": "The audio is saved"
             },
+            "bot": {
+                "type": "boolean",
+                "description": "The channel is used by a bot"
+            },
             "diarization": {
                 "type": "boolean",
                 "description": "The diarization is enabled"

@@ -171,6 +171,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
           debug(`Connection: ${ws} --> closed`);
           this.cleanupWebsocket(ws, fd);
       });
+      ws.on("error", () => {
+          debug(`Connection: ${ws} --> error`);
+          this.cleanupWebsocket(ws, fd);
+      });
       return (message) => {
           this.emit('data', message, fd.session.id, fd.channelId);
       };
@@ -190,6 +194,11 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
       ws.on("close", () => {
           debug(`Connection: ${ws} --> closed`);
+          worker.send({ type: 'terminate' });
+          this.cleanupWebsocket(ws, fd, worker);
+      });
+      ws.on("error", () => {
+          debug(`Connection: ${ws} --> error`);
           worker.send({ type: 'terminate' });
           this.cleanupWebsocket(ws, fd, worker);
       });

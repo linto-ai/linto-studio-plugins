@@ -262,6 +262,15 @@
             "type": "string",
             "format": "uuid"
           }
+        },
+        {
+          "in": "query",
+          "name": "force",
+          "description": "Force session stop",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "responses": {

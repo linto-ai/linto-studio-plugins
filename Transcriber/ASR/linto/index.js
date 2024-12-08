@@ -15,6 +15,10 @@ class LintoTranscriber extends EventEmitter {
         8: 'FORBIDDEN',
     };
 
+    static CRITICAL_FAILURES = new Set([
+        'DEPTH_ZERO_SELF_SIGNED_CERT'
+    ]);
+
     constructor(channel) {
         super();
         this.channel = channel;
@@ -76,6 +80,11 @@ class LintoTranscriber extends EventEmitter {
             debug(`WebSocket error: ${error}`);
             this.emit('error', LintoTranscriber.ERROR_MAP[4]);
             this.stop();
+
+            // don't restart if it's a critical failure
+            if (error.code && LintoTranscriber.CRITICAL_FAILURES.has(error.code)) {
+                return;
+            }
             this.start();
         });
 

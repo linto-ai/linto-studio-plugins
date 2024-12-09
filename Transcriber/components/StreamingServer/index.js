@@ -116,9 +116,11 @@ class StreamingServer extends Component {
         const asr = new ASR(session, channelId);
         asr.on('partial', (transcription) => {
           bot.updateCaptions(transcription.text, false);
+          this.emit('partial', transcription, session.id, channelId);
         });
         asr.on('final', (transcription) => {
           bot.updateCaptions(transcription.text, true);
+          this.emit('final', transcription, session.id, channelId);
         });
         this.ASRs.set(`${session.id}_${channelId}`, asr);
         // pass to controllers/StreamingServer.js to forward to broker and mark the session as active / set channel status in database

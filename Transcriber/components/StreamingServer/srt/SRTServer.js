@@ -21,17 +21,23 @@ class MultiplexedSRTServer extends EventEmitter {
 
     // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
     setSessions(sessions) {
-        if (this.sessions) {
+        const prevSessions = this.sessions;
+        this.sessions = sessions;
+
+        if (prevSessions) {
             // force stop running sessions
-            const deletedSessions = this.sessions.filter(currentSession =>
+            const deletedSessions = prevSessions.filter(currentSession =>
                 !sessions.some(newSession => newSession.id === currentSession.id)
             );
             const sessionsToStop = deletedSessions.filter(deletedSession =>
                 this.runningSessions.hasOwnProperty(deletedSession.id)
             );
+
+            if (sessionsToStop.length > 0) {
+                debug(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
+            }
             sessionsToStop.forEach(session => this.stopRunningSession(session));
         }
-        this.sessions = sessions;
     }
 
     async stop() {

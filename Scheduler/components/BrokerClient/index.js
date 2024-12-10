@@ -296,12 +296,12 @@ class BrokerClient extends Component {
       let hasActiveStream = session.channels.some(channel => channel.streamStatus === 'active');
 
       // Update session status based on channels' stream statuses
-      if (hasActiveStream && session.status !== 'active') {
+      if (hasActiveStream && session.status === 'ready') {
         session.status = 'active';
         if (!session.startTime) {
           session.startTime = new Date();
         }
-      } else if (!hasActiveStream && session.status !== 'ready') {
+      } else if (!hasActiveStream && session.status === 'active') {
         session.status = 'ready';
       }
 

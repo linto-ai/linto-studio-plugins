@@ -72,22 +72,46 @@ class Bot extends EventEmitter {
       this.page.on('pageerror', err => {
           debug(`Puppeteer global error: ${err.message}`);
       });
+
+      // block external domains
+      if(this.manifest.blockExternalDomains) {
+        await this.page.setRequestInterception(true);
+        const allowedDomain = new URL(this.address).hostname;
+        this.page.on('request', (request) => {
+          const url = request.url();
+
+          if (!url.includes(allowedDomain) && !url.includes('chrome-extension')) {
+            console.log(`Blocked request to: ${url}`);
+            request.abort();
+          } else {
+            request.continue();
+          }
+        });
+      }
+
+
       debug(`Joining ${this.address}`);
 
       await this.page.goto(this.address, { timeout: 50000 }); // 50 seconds timeout
       debug('Page loaded');
 
-      for (const rule of this.manifest) {
+      for (const rule of this.manifest.rules) {
         switch (rule.action) {
+          case 'configureCanvas':
+            await this.configureCanvas(rule.config);
+            debug(`Configure canvas to ${rule.config}`);
+            break;
           case 'goto':
             await this.page.goto(rule.url, { timeout: rule.timeout || 30000 });
-            debug(`Navigated to ${action.url}`);
+            debug(`Navigated to ${rule.url}`);
             break;
           case 'type':
+            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
             await this.page.type(rule.selector, rule.value);
             debug(`Typed ${rule.value} into ${rule.selector}`);
             break;
           case 'click':
+            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
             await this.page.click(rule.selector);
             debug(`Clicked on ${rule.selector}`);
             break;
@@ -96,7 +120,7 @@ class Bot extends EventEmitter {
             debug(`Waited for selector ${rule.selector}`);
             break;
           case 'waitForTimeout':
-            await this.page.waitForTimeout(rule.timeout);
+            await new Promise(r => setTimeout(r, rule.timeout));
             debug(`Waited for ${rule.timeout} ms`);
             break;
           case 'evaluate':
@@ -104,6 +128,7 @@ class Bot extends EventEmitter {
             debug(`Evaluated script: ${rule.script}`);
             break;
           case 'select':
+            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
             await this.page.select(rule.selector, rule.value);
             debug(`Selected ${rule.value} from ${rule.selector}`);
             break;
@@ -205,6 +230,18 @@ class Bot extends EventEmitter {
     debug('Bot Initialization complete');
     return true
   }
+
+  async configureCanvas(canvasConfig) {
+    if (this.page) {
+      await this.page.evaluate((canvasConfig) => {
+        window.canvasConfiguration = canvasConfig;
+      }, canvasConfig);
+      debug(`Update canvas config to: ${canvasConfig}`);
+    } else {
+      debug('Page is not initialized');
+    }
+  }
+
 
   async updateCaptions(newText, final) {
     if (this.page) {

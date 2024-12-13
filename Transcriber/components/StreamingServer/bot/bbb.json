@@ -1,0 +1,48 @@
+{
+  "blockExternalDomains": true,
+  "rules": [
+    {
+      "action": "type",
+      "selector": "input[placeholder=\"Enter your name!\"]",
+      "value": "LinTO Bot"
+    },
+    {
+      "action": "click",
+      "selector": "#room-join"
+    },
+    {
+      "action": "click",
+      "selector": "::-p-text(Listen only)"
+    },
+    {
+      "action": "configureCanvas",
+      "config": {
+        "fontSize": 80,
+        "lineHeight": 120,
+        "paddingVertical": 0,
+        "paddingInline": 0
+      }
+    },
+    {
+      "action": "waitForTimeout",
+      "timeout": 4000
+    },
+    {
+      "action": "click",
+      "selector": "[aria-label=\"Share webcam\"]"
+    },
+    {
+      "action": "select",
+      "selector": "#setQuality",
+      "value": "high"
+    },
+    {
+      "action": "screenshot",
+      "path": "/tmp/screen.png"
+    },
+    {
+      "action": "click",
+      "selector": "::-p-text(Start sharing)"
+    }
+  ]
+}

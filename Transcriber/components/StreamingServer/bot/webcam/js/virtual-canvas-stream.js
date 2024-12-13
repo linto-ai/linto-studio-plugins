@@ -8,7 +8,10 @@ class VirtualCanvasStream {
     this.canvas.height = 1080; // Set desired height
     this.ctx = this.canvas.getContext("2d");
     this.outputStream = this.canvas.captureStream(5);
-    this.drawer = new SubtitleScroller(this.canvas)
+
+    const canvasConfig = window.canvasConfiguration || {};
+    this.drawer = new SubtitleScroller(this.canvas, canvasConfig)
+
     window.fakeWebcam = this;
     this.setText("Transcription ready", true);
   }

@@ -12,7 +12,8 @@
     },
     {
       "action": "click",
-      "selector": "::-p-text(Listen only)"
+      "selector": "::-p-text(Listen only)",
+      "timeout": 1800000
     },
     {
       "action": "configureCanvas",

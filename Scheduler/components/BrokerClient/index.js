@@ -116,7 +116,7 @@ class BrokerClient extends Component {
 
   // Choose the least used transcriber to start a bot
   // we do this cause bot handling needs to be scheduled on the instance with the least load
-  async startBot(session, channelId, address, botType) {
+  async startBot(session, channelId, address, botType, botAsync, botLive) {
     // search all channels with active streamStatus
     // count the number of active channels for each transcriberId, choose the one with the least active channels
     // ignore channels with transcriberId = null or set to an id that is not in the transcribers array
@@ -162,7 +162,7 @@ class BrokerClient extends Component {
       }
 
       if (chosenTranscriber) {
-        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, { session, channelId, address, botType }, 2, false, true);
+        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, { session, channelId, address, botType, botAsync, botLive }, 2, false, true);
         debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${session.id}, channel ${channelId}`);
       } else {
         console.error('No transcriber available to start bot.');

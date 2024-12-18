@@ -5,10 +5,11 @@ const { launch, getStream } = require('puppeteer-stream');
 const EventEmitter = require('events');
 
 class Bot extends EventEmitter {
-  constructor(session, channelId, address, botType) {
+  constructor(session, channelId, address, botType, botLive) {
     super();
     this.worker = null
     this.botType = botType;
+    this.botLive = botLive;
     this.session = session;
     this.channelId = channelId;
     this.address = address;
@@ -89,95 +90,20 @@ class Bot extends EventEmitter {
         });
       }
 
-
       debug(`Joining ${this.address}`);
 
       await this.page.goto(this.address, { timeout: 50000 }); // 50 seconds timeout
       debug('Page loaded');
 
-      for (const rule of this.manifest.rules) {
-        switch (rule.action) {
-          case 'configureCanvas':
-            await this.configureCanvas(rule.config);
-            debug(`Configure canvas to ${rule.config}`);
-            break;
-          case 'goto':
-            await this.page.goto(rule.url, { timeout: rule.timeout || 30000 });
-            debug(`Navigated to ${rule.url}`);
-            break;
-          case 'type':
-            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
-            await this.page.type(rule.selector, rule.value);
-            debug(`Typed ${rule.value} into ${rule.selector}`);
-            break;
-          case 'click':
-            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
-            await this.page.click(rule.selector);
-            debug(`Clicked on ${rule.selector}`);
-            break;
-          case 'waitForSelector':
-            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
-            debug(`Waited for selector ${rule.selector}`);
-            break;
-          case 'waitForTimeout':
-            await new Promise(r => setTimeout(r, rule.timeout));
-            debug(`Waited for ${rule.timeout} ms`);
-            break;
-          case 'evaluate':
-            await this.page.evaluate(rule.script);
-            debug(`Evaluated script: ${rule.script}`);
-            break;
-          case 'select':
-            await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
-            await this.page.select(rule.selector, rule.value);
-            debug(`Selected ${rule.value} from ${rule.selector}`);
-            break;
-          case 'hover':
-            await this.page.hover(rule.selector);
-            debug(`Hovered over ${rule.selector}`);
-            break;
-          case 'focus':
-            await this.page.focus(rule.selector);
-            debug(`Focused on ${rule.selector}`);
-            break;
-          case 'uploadFile':
-            const input = await this.page.$(rule.selector);
-            await input.uploadFile(rule.filePath);
-            debug(`Uploaded file ${rule.filePath} to ${rule.selector}`);
-            break;
-          case 'screenshot':
-            await this.page.screenshot({ path: rule.path });
-            debug(`Took screenshot and saved to ${rule.path}`);
-            break;
-          case 'setViewport':
-            await this.page.setViewport({ width: rule.width, height: rule.height });
-            debug(`Set viewport to width: ${rule.width}, height: ${rule.height}`);
-            break;
-          case 'press':
-            await this.page.keyboard.press(rule.key);
-            debug(`Pressed key ${rule.key}`);
-            break;
-          case 'setUserAgent':
-            await this.page.setUserAgent(rule.userAgent);
-            debug(`Set user agent to ${rule.userAgent}`);
-            break;
-          case 'setCookie':
-            await this.page.setCookie(...rule.cookies);
-            debug(`Set cookies`);
-            break;
-          case 'deleteCookie':
-            await this.page.deleteCookie(...rule.cookies);
-            debug(`Deleted cookies`);
-            break;
-          case 'clearInput':
-            await this.page.evaluate(selector => document.querySelector(selector).value = '', rule.selector);
-            debug(`Cleared input field ${rule.selector}`);
-            break;
-          default:
-            debug(`Unknown action: ${rule.action}`);
-        }
+      for (const rule of this.manifest.loginRules) {
+        await this.execRule(rule);
       }
 
+      if (this.botLive.keepLiveTranscripts && this.botLive.displaySub && this.manifest.subtitleRules) {
+        for (const rule of this.manifest.subtitleRules) {
+          await this.execRule(rule);
+        }
+      }
 
       stream = await getStream(this.page, { audio: true, video: false });
       debug('Screen sharing for audio capture started');
@@ -254,6 +180,89 @@ class Bot extends EventEmitter {
       debug(`Updated text to: ${newText}`);
     } else {
       debug('Page is not initialized');
+    }
+  }
+
+  async execRule(rule) {
+    switch (rule.action) {
+      case 'configureCanvas':
+        await this.configureCanvas(rule.config);
+        debug(`Configure canvas to ${rule.config}`);
+        break;
+      case 'goto':
+        await this.page.goto(rule.url, { timeout: rule.timeout || 30000 });
+        debug(`Navigated to ${rule.url}`);
+        break;
+      case 'type':
+        await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
+        await this.page.type(rule.selector, rule.value);
+        debug(`Typed ${rule.value} into ${rule.selector}`);
+        break;
+      case 'click':
+        await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
+        await this.page.click(rule.selector);
+        debug(`Clicked on ${rule.selector}`);
+        break;
+      case 'waitForSelector':
+        await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
+        debug(`Waited for selector ${rule.selector}`);
+        break;
+      case 'waitForTimeout':
+        await new Promise(r => setTimeout(r, rule.timeout));
+        debug(`Waited for ${rule.timeout} ms`);
+        break;
+      case 'evaluate':
+        await this.page.evaluate(rule.script);
+        debug(`Evaluated script: ${rule.script}`);
+        break;
+      case 'select':
+        await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
+        await this.page.select(rule.selector, rule.value);
+        debug(`Selected ${rule.value} from ${rule.selector}`);
+        break;
+      case 'hover':
+        await this.page.hover(rule.selector);
+        debug(`Hovered over ${rule.selector}`);
+        break;
+      case 'focus':
+        await this.page.focus(rule.selector);
+        debug(`Focused on ${rule.selector}`);
+        break;
+      case 'uploadFile':
+        const input = await this.page.$(rule.selector);
+        await input.uploadFile(rule.filePath);
+        debug(`Uploaded file ${rule.filePath} to ${rule.selector}`);
+        break;
+      case 'screenshot':
+        await this.page.screenshot({ path: rule.path });
+        debug(`Took screenshot and saved to ${rule.path}`);
+        break;
+      case 'setViewport':
+        await this.page.setViewport({ width: rule.width, height: rule.height });
+        debug(`Set viewport to width: ${rule.width}, height: ${rule.height}`);
+        break;
+      case 'press':
+        await this.page.keyboard.press(rule.key);
+        debug(`Pressed key ${rule.key}`);
+        break;
+      case 'setUserAgent':
+        await this.page.setUserAgent(rule.userAgent);
+        debug(`Set user agent to ${rule.userAgent}`);
+        break;
+      case 'setCookie':
+        await this.page.setCookie(...rule.cookies);
+        debug(`Set cookies`);
+        break;
+      case 'deleteCookie':
+        await this.page.deleteCookie(...rule.cookies);
+        debug(`Deleted cookies`);
+        break;
+      case 'clearInput':
+        await this.page.evaluate(selector => document.querySelector(selector).value = '', rule.selector);
+        debug(`Cleared input field ${rule.selector}`);
+        break;
+      default:
+        debug(`Unknown action: ${rule.action}`);
     }
   }
 

@@ -105,21 +105,32 @@ class StreamingServer extends Component {
 
 
   // Create a bot for a channel and store it in the bots map
-  async startBot(session, channelId, address, botType) {
+  async startBot(session, channelId, address, botType, botAsync, botLive) {
     debug(`Starting ${botType} bot for session ${session.id}, channel ${channelId}`);
     try {
-      const bot = new Bot(session, channelId, address, botType);
+      const bot = new Bot(session, channelId, address, botType, botLive);
       bot.session = session;
       // Bot events
       bot.on('session-start', (session, channelId) => {
         debug(`Session ${session.id}, channel ${channelId} started`);
-        const asr = new ASR(session, channelId);
+
+        const asr = new ASR(session, channelId, botAsync, botLive && !botLive.keepLiveTranscripts);
         asr.on('partial', (transcription) => {
-          bot.updateCaptions(transcription.text, false);
+          let subtitle = transcription.text;
+          if (botLive.subSource && transcription.translations && botLive.subSource in transcription.translations) {
+            subtitle = transcription.translations[botLive.subSource];
+          }
+
+          bot.updateCaptions(subtitle, false);
           this.emit('partial', transcription, session.id, channelId);
         });
         asr.on('final', (transcription) => {
-          bot.updateCaptions(transcription.text, true);
+          let subtitle = transcription.text;
+          if (botLive.subSource && transcription.translations && botLive.subSource in transcription.translations) {
+            subtitle = transcription.translations[botLive.subSource];
+          }
+
+          bot.updateCaptions(subtitle, true);
           this.emit('final', transcription, session.id, channelId);
         });
         this.ASRs.set(`${session.id}_${channelId}`, asr);
@@ -133,8 +144,6 @@ class StreamingServer extends Component {
         const asr = this.ASRs.get(`${sessionId}_${channelId}`);
         if (asr) {
           asr.transcribe(buffer);
-        } else {
-          //debug(`No ASR found for session ${message.sessionId}, channel ${message.channelId}`);
         }
       })
       // can return false or true. If false, bot is not started

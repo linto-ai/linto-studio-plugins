@@ -1,6 +1,6 @@
 {
   "blockExternalDomains": true,
-  "rules": [
+  "loginRules": [
     {
       "action": "type",
       "selector": "input[placeholder=\"Enter your name!\"]",
@@ -23,7 +23,9 @@
         "paddingVertical": 0,
         "paddingInline": 0
       }
-    },
+    }
+  ],
+  "subtitleRules": [
     {
       "action": "waitForTimeout",
       "timeout": 4000
@@ -36,10 +38,6 @@
       "action": "select",
       "selector": "#setQuality",
       "value": "high"
-    },
-    {
-      "action": "screenshot",
-      "path": "/tmp/screen.png"
     },
     {
       "action": "click",

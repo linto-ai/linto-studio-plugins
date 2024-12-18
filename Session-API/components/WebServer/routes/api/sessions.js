@@ -408,7 +408,7 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             try {
                 const { id } = req.params;
-                const { url, channelId, botType } = req.body;
+                const { url, channelId, botType, async: botAsync} = req.body;
                 if (!id || !url || channelId === undefined || !botType) {
                     return res.status(400).json({ error: "sessionId, url, channelId, and botType are required" });
                 }
@@ -431,6 +431,27 @@ module.exports = (webserver) => {
                 if (channel.streamStatus !== 'inactive') {
                     return res.status(400).json({ error: "The channel must be inactive to start a bot" });
                 }
+
+                // Set default value for live
+                let botLive = req.body.live;
+                if (!botLive) {
+                    botLive = {
+                        keepLiveTranscripts: true,
+                        displaySub: true,
+                        subSource: null
+                    };
+                }
+
+                // Check at least async or live
+                if (!botAsync && !botLive.keepLiveTranscripts) {
+                    return res.status(400).json({ error: "At least async or live must be enabled" });
+                }
+
+                // If async is enabled, keepAudio must be enabled
+                if (botAsync && !channel.keepAudio) {
+                    return res.status(400).json({ error: "Async is enabled but keep audio is not enabled on channel" });
+                }
+
                 // Set bot to true in the channel
                 await Model.Channel.update({
                     bot: true
@@ -440,7 +461,7 @@ module.exports = (webserver) => {
                     }
                 });
 
-                webserver.emit('startbot', id, channelId, url, botType);
+                webserver.emit('startbot', id, channelId, url, botType, botAsync, botLive);
                 res.json({ success: true });
             } catch (err) {
                 next(err);

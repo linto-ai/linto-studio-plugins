@@ -3,4 +3,5 @@ module.exports = {
     ...require('./api/healthcheck.json'),
     ...require('./api/sessions.json'),
     ...require('./api/templates.json'),
+    ...require('./api/bots.json'),
   }

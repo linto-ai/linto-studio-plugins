@@ -35,13 +35,12 @@ module.exports = async function () {
         break;
       case 'scheduler':
         if (direction === 'in') {
-          const { session, channelId, address, botType, botAsync, botLive } = JSON.parse(message.toString());
+          const { botId } = JSON.parse(message.toString());
           if (action === 'startbot') {
-            await this.startBot(session, channelId, address, botType, botAsync, botLive);
+            await this.startBot(botId);
           }
           if (action === 'stopbot') {
-            const { sessionId } = JSON.parse(message.toString());
-            await this.stopBot(sessionId, channelId);
+            await this.stopBot(botId);
           }
         }
         break;

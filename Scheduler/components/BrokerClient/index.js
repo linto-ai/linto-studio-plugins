@@ -116,7 +116,7 @@ class BrokerClient extends Component {
 
   // Choose the least used transcriber to start a bot
   // we do this cause bot handling needs to be scheduled on the instance with the least load
-  async startBot(session, channelId, address, botType, botAsync, botLive) {
+  async startBot(botId) {
     // search all channels with active streamStatus
     // count the number of active channels for each transcriberId, choose the one with the least active channels
     // ignore channels with transcriberId = null or set to an id that is not in the transcribers array
@@ -162,8 +162,10 @@ class BrokerClient extends Component {
       }
 
       if (chosenTranscriber) {
-        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, { session, channelId, address, botType, botAsync, botLive }, 2, false, true);
-        debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${session.id}, channel ${channelId}`);
+        // retrieve bot data
+        const botData = await this.getStartBotData(botId);
+        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, botData, 2, false, true);
+        debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${botData.session.id}, channel ${botData.channelId}`);
       } else {
         console.error('No transcriber available to start bot.');
       }
@@ -172,15 +174,45 @@ class BrokerClient extends Component {
     }
   }
 
-  async stopBot(sessionId, channelId) {
+  async getStartBotData(botId) {
+    const bot = await Model.Bot.findByPk(botId);
+    const session = await Model.Session.findOne({
+      include: [
+        {
+          model: Model.Channel,
+          where: {id: bot.channelId},
+          include: [Model.TranscriberProfile]
+        }
+      ]
+    });
+
+    return {
+      session, channelId: bot.channelId, address: bot.url,
+      botType: bot.provider, botAsync: bot.enableAsyncTranscripts,
+      botLive: {
+        keepLiveTranscripts: bot.enableLiveTranscripts,
+        displaySub: bot.enableDisplaySub,
+        subSource: bot.subSource
+      }
+    }
+  }
+
+  async stopBot(botId) {
     // find the transcriberId for the channel
     // publish the stopbot command to the transcriber
     try {
-      const channel = await Model.Channel.findOne({ where: { sessionId: sessionId, id: channelId } });
+      const bot = await Model.Bot.findByPk(botId, {include: Model.Channel});
+      const channel = bot.channel;
+
+      await Model.Bot.destroy({
+        where: {id: bot.id}
+      });
+
       if (!channel?.transcriberId) {
         return;
       }
-      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId, channelId }, 2, false, true);
+
+      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
     } catch (error) {
       console.error('Failed to stop bot:', error);
     }

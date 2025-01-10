@@ -171,24 +171,23 @@ class MicrosoftTranscriber extends EventEmitter {
         this.recognizer2 = null;
         this.startedAt = new Date().toISOString();
 
-        // If translation and diarization are enabled, we use the same listener and reconciliate
-        // the result
+        // If translation and diarization are enabled, we use the same listener
         if (translations && translations.length && diarization) {
             this.pushStream2 = AudioInputStream.createPushStream();
             const listener = new MultiRecognizerListener(this);
 
             this.recognizer = this.startRecognizer(
                 transcriberProfile.config,
-                translations,
-                false,
-                this.pushStream,
+                null,
+                true,
+                this.pushStream2,
                 listener
             );
             this.recognizer2 = this.startRecognizer(
                 transcriberProfile.config,
-                null,
-                true,
-                this.pushStream2,
+                translations,
+                false,
+                this.pushStream,
                 listener
             );
 

@@ -77,13 +77,8 @@ class RecognizerListener {
 }
 
 
-class MultiRecognizerListener extends RecognizerListener {
-    constructor(transcriber) {
-        super(transcriber);
-        this.recognizerCount = 0;
-    }
-
-    listenOnlyRecognized(recognizer) {
+class OnlyRecognizedRecognizerListener extends RecognizerListener {
+    listen(recognizer) {
         const eventHandlers = {
             "recognized": this.handleRecognized,
             "transcribed": this.handleRecognized,
@@ -99,19 +94,6 @@ class MultiRecognizerListener extends RecognizerListener {
 
         recognizer[recognizerEvent] = eventHandlers[recognizerEvent].bind(this);
         recognizer[recognizerListenFun](this.handleStartContinuousRecognitionAsync);
-    }
-
-    listen(recognizer) {
-        this.recognizerCount += 1;
-        if (this.recognizerCount == 1) {
-            super.listen(recognizer);
-            return;
-        }
-        if (this.recognizerCount == 2) {
-            this.listenOnlyRecognized(recognizer);
-            return;
-        }
-        throw new Error(`MultiRecognizerListener supports only 2 recognizers, current: ${this.recognizerCount}`);
     }
 }
 
@@ -131,8 +113,8 @@ class MicrosoftTranscriber extends EventEmitter {
     constructor(channel) {
         super();
         this.channel = channel;
-        this.recognizer = null;
-        this.recognizer2 = null;
+        this.recognizers = [];
+        this.pushStreams = [];
         this.pushStream = AudioInputStream.createPushStream();
         this.pushStream2 = null;
         this.emit('closed');
@@ -167,40 +149,39 @@ class MicrosoftTranscriber extends EventEmitter {
     start() {
         const { transcriberProfile, translations, diarization } = this.channel;
         debug(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
-        this.pushStream2 = null;
-        this.recognizer2 = null;
+        this.pushStreams = [AudioInputStream.createPushStream()];
+        this.recognizers = [];
         this.startedAt = new Date().toISOString();
 
         // If translation and diarization are enabled, we use the same listener
         if (translations && translations.length && diarization) {
-            this.pushStream2 = AudioInputStream.createPushStream();
-            const listener = new MultiRecognizerListener(this);
+            this.pushStreams.push(AudioInputStream.createPushStream());
 
-            this.recognizer = this.startRecognizer(
+            this.recognizers.push(this.startRecognizer(
                 transcriberProfile.config,
                 null,
                 true,
-                this.pushStream2,
-                listener
-            );
-            this.recognizer2 = this.startRecognizer(
+                this.pushStreams[0],
+                new RecognizerListener(this)
+            ));
+            this.recognizers.push(this.startRecognizer(
                 transcriberProfile.config,
                 translations,
                 false,
-                this.pushStream,
-                listener
-            );
+                this.pushStreams[1],
+                new OnlyRecognizedRecognizerListener(this)
+            ));
 
             return;
         }
 
-        this.recognizer = this.startRecognizer(
+        this.recognizers.push(this.startRecognizer(
             transcriberProfile.config,
             translations,
             diarization,
-            this.pushStream,
+            this.pushStreams[0],
             new RecognizerListener(this)
-        );
+        ));
     }
 
     getSpeechConfig(config, translations) {
@@ -293,17 +274,16 @@ class MicrosoftTranscriber extends EventEmitter {
     }
 
     transcribe(buffer) {
-        if (this.recognizer) {
-            this.pushStream.write(buffer);
-            if (this.pushStream2) {
-                this.pushStream2.write(buffer);
+        if (this.recognizers.length > 0) {
+            for (const pushStream of this.pushStreams) {
+                pushStream.write(buffer);
             }
         } else {
             debug("Microsoft ASR transcriber can't decode buffer");
         }
     }
 
-    stopRecognizer(recognizer, callback) {
+    stopTranscription(recognizer, callback) {
         const isRecognizer = recognizer instanceof SpeechRecognizer || recognizer instanceof TranslationRecognizer;
         if (isRecognizer) {
             recognizer.stopContinuousRecognitionAsync(callback);
@@ -313,34 +293,24 @@ class MicrosoftTranscriber extends EventEmitter {
         }
     }
 
-    stopRecognizer1() {
-        const handleStopContinuousRecognitionAsync = () => {
-            debug("ASR recognition stopped");
-            this.recognizer.close();
-            this.recognizer = null;
-            this.emit('closed');
-        };
-        this.stopRecognizer(this.recognizer, handleStopContinuousRecognitionAsync);
+    stopRecognizer(recognizer) {
+        return new Promise((resolve, reject) => {
+            const handleStopContinuousRecognitionAsync = () => {
+                debug("ASR recognition stopped");
+                recognizer.close();
+                resolve();
+            };
+            this.stopTranscription(recognizer, handleStopContinuousRecognitionAsync);
+        })
     }
 
-    stopRecognizer2() {
-        const handleStopContinuousRecognitionAsync = () => {
-            debug("ASR recognition stopped");
-            this.recognizer2.close();
-            this.recognizer2 = null;
-        };
-        this.stopRecognizer(this.recognizer2, handleStopContinuousRecognitionAsync);
-    }
-
-    stop() {
-        if (this.recognizer) {
-            this.stopRecognizer1();
+    async stop() {
+        for (const recognizer of this.recognizers) {
+            await this.stopRecognizer(recognizer);
         }
-        if (this.recognizer2) {
-            this.stopRecognizer2();
-        }
-
-        this.pushStream2 = null;
+        this.recognizers = [];
+        this.pushStreams = [];
+        this.emit('closed');
     }
 }
 

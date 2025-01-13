@@ -4,17 +4,18 @@ const EventEmitter = require('eventemitter3');
 
 
 class RecognizerListener {
-    constructor(transcriber) {
+    constructor(transcriber, name) {
         this.transcriber = transcriber;
+        this.name = name;
     }
 
     emitTranscribing(payload) {
-        debug(`Microsoft ASR partial transcription: ${payload.text}`);
+        debug(`${this.name}: Microsoft ASR partial transcription: ${payload.text}`);
         this.transcriber.emit('transcribing', payload);
     }
 
     emitTranscribed(payload) {
-        debug(`Microsoft ASR final transcription: ${payload.text}`);
+        debug(`${this.name}: Microsoft ASR final transcription: ${payload.text}`);
         this.transcriber.emit('transcribed', payload);
     }
 
@@ -31,19 +32,19 @@ class RecognizerListener {
     handleCanceled(s, e) {
         // The ASR is cancelled until the end of the stream
         // and can be restarted with a new stream
-        debug(`Microsoft ASR canceled: ${e.errorDetails}`);
+        debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
         this.transcriber.stop();
     };
 
     handleSessionStopped(s, e) {
-        debug(`Microsoft ASR session stopped: ${e.reason}`);
+        debug(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
         this.transcriber.emit('closed', e.reason);
     };
 
     handleStartContinuousRecognitionAsync() {
-        debug("Microsoft ASR recognition started");
+        debug(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
     };
 
@@ -78,23 +79,28 @@ class RecognizerListener {
 
 
 class OnlyRecognizedRecognizerListener extends RecognizerListener {
-    listen(recognizer) {
-        const eventHandlers = {
-            "recognized": this.handleRecognized,
-            "transcribed": this.handleRecognized,
-        };
-
-        const isRecognizer = recognizer instanceof SpeechRecognizer || recognizer instanceof TranslationRecognizer;
-        let recognizerEvent = "recognized";
-        let recognizerListenFun = "startContinuousRecognitionAsync";
-        if (!isRecognizer) {
-            recognizerEvent = "transcribed";
-            recognizerListenFun = "startTranscribingAsync";
-        }
-
-        recognizer[recognizerEvent] = eventHandlers[recognizerEvent].bind(this);
-        recognizer[recognizerListenFun](this.handleStartContinuousRecognitionAsync);
+    handleRecognizing(s, e) {
+        return;
     }
+
+    handleRecognized(s, e) {
+        if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
+            this.emitTranscribed(this.transcriber.getMqttPayload(e.result))
+        }
+    }
+
+    handleCanceled(s, e) {
+        debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+    };
+
+    handleSessionStopped(s, e) {
+        const reason = e.reason ? `: ${e.reason}` : '';
+        debug(`${this.name}: Microsoft ASR session stopped${reason}`);
+    };
+
+    handleStartContinuousRecognitionAsync() {
+        debug(`${this.name}: Microsoft ASR recognition started`);
+    };
 }
 
 class MicrosoftTranscriber extends EventEmitter {
@@ -162,14 +168,14 @@ class MicrosoftTranscriber extends EventEmitter {
                 null,
                 true,
                 this.pushStreams[0],
-                new RecognizerListener(this)
+                new RecognizerListener(this, "[Diarization ASR]")
             ));
             this.recognizers.push(this.startRecognizer(
                 transcriberProfile.config,
                 translations,
                 false,
                 this.pushStreams[1],
-                new OnlyRecognizedRecognizerListener(this)
+                new OnlyRecognizedRecognizerListener(this, "[Translation ASR]")
             ));
 
             return;
@@ -180,7 +186,7 @@ class MicrosoftTranscriber extends EventEmitter {
             translations,
             diarization,
             this.pushStreams[0],
-            new RecognizerListener(this)
+            new RecognizerListener(this, "[ASR]")
         ));
     }
 
@@ -296,7 +302,6 @@ class MicrosoftTranscriber extends EventEmitter {
     stopRecognizer(recognizer) {
         return new Promise((resolve, reject) => {
             const handleStopContinuousRecognitionAsync = () => {
-                debug("ASR recognition stopped");
                 recognizer.close();
                 resolve();
             };

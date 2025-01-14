@@ -19,10 +19,28 @@ class MultiplexedWebsocketServer extends EventEmitter {
     this.app = app;
     this.wss = null;
     this.workers = [];
+    this.runningSessions = {}
   }
 
+  // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
   setSessions(sessions) {
+      const prevSessions = this.sessions;
       this.sessions = sessions;
+
+      if (prevSessions) {
+          // force stop running sessions
+          const deletedSessions = prevSessions.filter(currentSession =>
+              !sessions.some(newSession => newSession.id === currentSession.id)
+          );
+          const sessionsToStop = deletedSessions.filter(deletedSession =>
+              this.runningSessions.hasOwnProperty(deletedSession.id)
+          );
+
+          if (sessionsToStop.length > 0) {
+              debug(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
+          }
+          sessionsToStop.forEach(session => this.stopRunningSession(session));
+      }
   }
 
   async stop() {
@@ -54,6 +72,21 @@ class MultiplexedWebsocketServer extends EventEmitter {
           return streamId.slice(prefix.length);
       }
       return streamId;
+  }
+
+  addRunningSession(session, ws, fd, worker) {
+    if (!this.runningSessions[session.id]) {
+      this.runningSessions[session.id] = [];
+    }
+
+    this.runningSessions[session.id].push({ ws, fd, worker });
+  }
+
+  stopRunningSession(session) {
+    while (this.runningSessions[session.id] && this.runningSessions[session.id].length > 0) {
+      const { ws, fd, worker } = this.runningSessions[session.id][0];
+      this.cleanupWebsocket(ws, fd, worker);
+    }
   }
 
   async validateStream(req) {
@@ -167,6 +200,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
   initPcm(ws, fd) {
       this.emit('session-start', fd.session, fd.channelId);
+      this.addRunningSession(fd.session, ws, fd, null);
       ws.on("close", () => {
           debug(`Connection: ${ws} --> closed`);
           this.cleanupWebsocket(ws, fd);
@@ -208,6 +242,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       // - start buffering audio in circular buffer
       // - start transcription
       this.emit('session-start', fd.session, fd.channelId);
+      this.addRunningSession(fd.session, ws, fd, worker);
 
       return (message) => {
           worker.send({ type: 'buffer', chunks: Buffer.from(new Int16Array(message))});
@@ -259,6 +294,13 @@ class MultiplexedWebsocketServer extends EventEmitter {
           const workerIndex = this.workers.indexOf(worker);
           if (workerIndex > -1) {
               this.workers.splice(workerIndex, 1);
+          }
+      }
+
+      if (fd && this.runningSessions[fd.session.id]) {
+          this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd.channelId !== fd.channelId);
+          if (this.runningSessions[fd.session.id].length === 0) {
+              delete this.runningSessions[fd.session.id];
           }
       }
   }

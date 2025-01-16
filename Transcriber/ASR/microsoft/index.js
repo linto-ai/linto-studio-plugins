@@ -29,13 +29,15 @@ class RecognizerListener {
         }
     }
 
-    handleCanceled(s, e) {
+    async handleCanceled(s, e) {
         // The ASR is cancelled until the end of the stream
         // and can be restarted with a new stream
         debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
-        this.transcriber.stop();
+        await this.transcriber.stop();
+        // Wait 1 second before restarting the ASR
+        setTimeout(() => {this.transcriber.start()}, 2000);
     };
 
     handleSessionStopped(s, e) {
@@ -46,6 +48,10 @@ class RecognizerListener {
     handleStartContinuousRecognitionAsync() {
         debug(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
+    };
+
+    handleStartContinuousRecognitionAsyncError(error) {
+        debug(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
     };
 
     listen(recognizer) {
@@ -73,7 +79,10 @@ class RecognizerListener {
             recognizer[recognizerEvent] = eventHandlers[recognizerEvent].bind(this);
         }
 
-        recognizer[recognizerListenFun](this.handleStartContinuousRecognitionAsync);
+        recognizer[recognizerListenFun](
+            this.handleStartContinuousRecognitionAsync.bind(this),
+            this.handleStartContinuousRecognitionAsyncError.bind(this)
+        );
     }
 }
 

@@ -31,7 +31,7 @@
     "gstreamer-superficial": "^1.7.4",
     "linto-node-srt": "git+https://github.com/linto-ai/node-srt.git",
     "live-srt-lib": "file:../lib",
-    "microsoft-cognitiveservices-speech-sdk": "1.38.0",
+    "microsoft-cognitiveservices-speech-sdk": "1.42.0",
     "node-media-server": "^2.6.6",
     "puppeteer-stream": "^3.0.15",
     "uuid": "10.0.0",

@@ -110,7 +110,6 @@ class ASR extends eventEmitter {
       }
       this.state = ASR.states.CONNECTING;
       await this.provider.start();
-      this.state = ASR.states.READY
       this.handleASREvents();
     } catch (error) {
       console.error(error);

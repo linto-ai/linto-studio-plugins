@@ -1,4 +1,4 @@
-const debug = require('debug')('scheduler:BrokerClient:mqtt-events');
+const { logger } = require('live-srt-lib')
 
 module.exports = async function () {
   this.client.on("message", async (topic, message) => {
@@ -45,7 +45,7 @@ module.exports = async function () {
         }
         break;
       default:
-        debug(`Received message for unknown type ${type}`);
+        logger.debug(`Received message for unknown type ${type}`);
     }
   });
 }

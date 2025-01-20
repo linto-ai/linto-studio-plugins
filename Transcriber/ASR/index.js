@@ -1,8 +1,7 @@
-const debug = require('debug')(`transcriber:ASR`);
 const eventEmitter = require('eventemitter3');
 const path = require('path');
 const fs = require('fs');
-const { CircularBuffer } = require("live-srt-lib");
+const { CircularBuffer, logger } = require("live-srt-lib");
 const ffmpeg = require('fluent-ffmpeg');
 const ASR_ERROR = require('./error.js');
 const FakeTranscriber = require('./fake/index.js');
@@ -25,11 +24,11 @@ async function transcodeToMp3(inputPath, outputPath) {
       .audioCodec('libmp3lame')
       .audioBitrate('64k')
       .on('end', () => {
-        debug(`Transcoding to MP3 completed: ${outputPath}`);
+        logger.debug(`Transcoding to MP3 completed: ${outputPath}`);
         resolve();
       })
       .on('error', (err) => {
-        console.error(`Error during transcoding: ${err.message}`);
+        logger.error(`Error during transcoding: ${err.message}`);
         reject(err);
       })
       .save(outputPath);
@@ -45,7 +44,7 @@ async function transcodeToWav(inputPath, outputPath) {
       .output(outputPath)
       .on("end", resolve)
       .on("error", (err) => {
-        console.error(`Error transcoding to WAV: ${err.message}`);
+        logger.error(`Error transcoding to WAV: ${err.message}`);
         reject(err);
       })
       .run();
@@ -57,11 +56,11 @@ async function concatAudioFiles(input1, input2, output) {
     ffmpeg(input1)
       .input(input2)
       .on('end', () => {
-        debug(`Concat completed: ${output}`);
+        logger.debug(`Concat completed: ${output}`);
         resolve()
       })
       .on('error', (err) => {
-        console.error(`Error during concat: ${err.message}`)
+        logger.error(`Error during concat: ${err.message}`)
         reject(err)
       })
       .mergeToFile(output, '/tmp');
@@ -100,7 +99,7 @@ class ASR extends eventEmitter {
         this.keepAudio = true;
       }
       this.audioBuffer = new CircularBuffer();
-      debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channelId}`);
+      logger.debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channelId}`);
       if (this.onlyAudio) {
         this.provider = new FakeTranscriber(channel);
       }
@@ -112,7 +111,7 @@ class ASR extends eventEmitter {
       await this.provider.start();
       this.handleASREvents();
     } catch (error) {
-      console.error(error);
+      logger.error(error);
       this.state = ASR.states.ERROR;
       this.emit('error', error);
     }
@@ -136,11 +135,11 @@ class ASR extends eventEmitter {
         "locutor": process.env.TRANSCRIBER_BOT_NAME
       }
       this.emit('final', final)
-      console.error(msg)
+      logger.error(msg)
       this.state = ASR.states.ERROR
     })
     this.provider.on('closed', (code, reason) => {
-      debug(`ASR connexion closed with code ${code}`);
+      logger.debug(`ASR connexion closed with code ${code}`);
       this.state = ASR.states.CLOSED;
     });
     this.provider.on('transcribing', (transcription) => {
@@ -173,7 +172,7 @@ class ASR extends eventEmitter {
       await transcodeFn(pcmFilePath, outFilePath);
     }
 
-    debug(`Audio file saved as ${outFilePath}`);
+    logger.debug(`Audio file saved as ${outFilePath}`);
     fs.unlinkSync(pcmFilePath);
   }
 
@@ -188,7 +187,7 @@ class ASR extends eventEmitter {
         await this.provider.stop();
       }
     } catch (error) {
-      debug(`Error when saving the audio file: ${error}`)
+      logger.debug(`Error when saving the audio file: ${error}`)
       this.emit('error', error);
       return false;
     }

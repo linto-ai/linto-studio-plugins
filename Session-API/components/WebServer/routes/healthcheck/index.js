@@ -1,5 +1,3 @@
-const debug = require('debug')('session-api:router:healthcheck')
-
 module.exports = (webserver) => {
     return [{
         path: '/',

@@ -1,4 +1,3 @@
-const debug = require('debug')('session-api:router:api-docs')
 const swaggerUi = require('swagger-ui-express');
 const swaggerDocument = require('./swagger/swagger.json');
 const swaggerJsdoc = require("swagger-jsdoc")

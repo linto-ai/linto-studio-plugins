@@ -1,5 +1,4 @@
-const debug = require('debug')(`session-api:BrokerClient`);
-const { MqttClient, Component, Model } = require('live-srt-lib')
+const { MqttClient, Component, Model, logger } = require('live-srt-lib')
 
 class BrokerClient extends Component {
 
@@ -49,7 +48,7 @@ class BrokerClient extends Component {
         }
       ]
     });
-    debug('Session API update --> Publishing non terminated sessions on broker:  2: ', sessions.length);
+    logger.debug('Session API update --> Publishing non terminated sessions on broker:  2: ', sessions.length);
     this.client.publish('statuses', sessions, 1, true, true);
   }
 

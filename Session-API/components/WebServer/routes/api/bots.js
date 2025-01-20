@@ -1,4 +1,3 @@
-const debug = require('debug')('session-api:router:api:sessions')
 const { Model } = require("live-srt-lib")
 const bcp47 = require('language-tags');
 class ApiError extends Error {

@@ -1,8 +1,8 @@
-const debug = require('debug')('session-api:webserver:middlewares')
+const { logger: appLogger } = require('live-srt-lib')
 
 
 function logger(req, res, next) {
-    debug(`[${Date.now()}] new user entry on ${req.url}`)
+    appLogger.debug(`[${Date.now()}] new user entry on ${req.url}`)
     next()
 }
 

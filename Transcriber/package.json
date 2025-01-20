@@ -25,7 +25,6 @@
   ],
   "license": "EUPL",
   "dependencies": {
-    "debug": "^4.3.4",
     "eventemitter3": "^5.0.1",
     "fluent-ffmpeg": "^2.1.3",
     "gstreamer-superficial": "^1.7.4",

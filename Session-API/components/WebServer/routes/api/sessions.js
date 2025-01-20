@@ -1,5 +1,4 @@
-const debug = require('debug')('session-api:router:api:sessions')
-const { Model } = require("live-srt-lib")
+const { Model, logger } = require("live-srt-lib")
 const bcp47 = require('language-tags');
 class ApiError extends Error {
     constructor(status, message) {
@@ -256,11 +255,11 @@ module.exports = (webserver) => {
 
                 // return the session with channels
                 const result = await getSessionResult(session.id);
-                debug('Session created', result.id);
+                logger.debug('Session created', result.id);
                 webserver.emit('session-update')
                 res.json(result);
             } catch (err) {
-                debug(err);
+                logger.debug(err);
                 await transaction.rollback();
                 return next(err)
             }
@@ -393,11 +392,11 @@ module.exports = (webserver) => {
 
                 // return the session with channels
                 const result = await getSessionResult(session.id);
-                debug('Session updated', result.id);
+                logger.debug('Session updated', result.id);
                 webserver.emit('session-update')
                 res.json(result);
             } catch (err) {
-                debug(err);
+                logger.debug(err);
                 await transaction.rollback();
                 return next(err)
             }
@@ -416,7 +415,7 @@ module.exports = (webserver) => {
                     throw new ApiError(400, "Active sessions cannot be deleted without force parameter");
                 }
                 await session.destroy();
-                debug('Session deleted', session.id);
+                logger.debug('Session deleted', session.id);
                 webserver.emit('session-update');
                 res.json({ 'success': true });
             } catch (err) {
@@ -474,7 +473,7 @@ module.exports = (webserver) => {
                 await Model.Session.destroy({
                     where: where
                 });
-                debug(msg);
+                logger.debug(msg);
                 webserver.emit('session-update')
                 res.json({ 'success': true });
             } catch (err) {

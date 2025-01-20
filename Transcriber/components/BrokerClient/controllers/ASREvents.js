@@ -1,5 +1,3 @@
-const debug = require('debug')(`transcriber:BrokerClient:ASREvents`);
-
 //here, "this" is bound to the BrokerClient component
 module.exports = async function () {
     this.app.components['StreamingServer'].on('partial', (transcription, sessionId, channelId) => {

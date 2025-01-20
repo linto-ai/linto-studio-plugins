@@ -1,16 +1,16 @@
-const debug = require('debug')('transcriber:BrokerClient:mqtt-messages');
+const { logger } = require('live-srt-lib')
 
 // Handler for 'scheduler' messages
 function handleSchedulerMessage(scheduler) {
   if (scheduler.online && this.state == this.constructor.states.WAITING_SCHEDULER) {
-    debug(`${this.uniqueId} scheduler online, registering...`);
+    logger.debug(`${this.uniqueId} scheduler online, registering...`);
     this.client.publishStatus();
     this.app.components['StreamingServer'].startServers();
     this.state = this.constructor.states.READY;
   } else if (!scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
     this.state = this.constructor.states.WAITING_SCHEDULER;
     this.app.components['StreamingServer'].stopServers();
-    debug(`${this.uniqueId} scheduler offline, waiting...`);
+    logger.debug(`${this.uniqueId} scheduler offline, waiting...`);
   }
 }
 
@@ -24,7 +24,7 @@ function handleSystemMessage(parts, message) {
       this.handleSessions(sessions);
     }
   } else {
-    debug(`Received message for unknown system type ${systemType}`);
+    logger.debug(`Received message for unknown system type ${systemType}`);
   }
 }
 
@@ -43,7 +43,7 @@ function handleTranscriberMessage(parts, message) {
         this.app.components['StreamingServer'].stopBot(sessionId, channelId);
         break;
       default:
-        debug(`Unknown action: ${action}`);
+        logger.debug(`Unknown action: ${action}`);
     }
   }
 }
@@ -63,7 +63,7 @@ module.exports = function () {
         handleTranscriberMessage.call(this, parts, message);
         break;
       default:
-        debug(`Received message for unknown type ${type}`);
+        logger.debug(`Received message for unknown type ${type}`);
     }
   });
 };

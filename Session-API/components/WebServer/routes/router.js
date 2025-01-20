@@ -1,4 +1,3 @@
-const debug = require('debug')(`session-api:webserver:router`)
 const path = require('path')
 const middlewares = require(path.join(__dirname, "../middlewares"))
 const ifHasElse = (condition, ifHas, otherwise) => {

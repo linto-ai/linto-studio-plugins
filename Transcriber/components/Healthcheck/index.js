@@ -1,5 +1,4 @@
-const debug = require('debug')('transcriber:healhcheck');
-const { Component } = require('live-srt-lib');
+const { Component, logger } = require('live-srt-lib');
 const net = require('net');
 
 class Healthcheck extends Component {
@@ -13,14 +12,14 @@ class Healthcheck extends Component {
     setupHealthCheckServer() {
         this.healthCheckServer = net.createServer((socket) => {
             socket.on('error', (error) => {
-                console.error('Socket error:', error);
+                logger.error('Socket error:', error);
             });
             socket.end('OK\n');
         });
 
         const port = parseInt(process.env.STREAMING_HEALTHCHECK_TCP, 10);
         this.healthCheckServer.listen(port, () => {
-            debug(`HealthCheck server listening on port ${port}`);
+            logger.debug(`HealthCheck server listening on port ${port}`);
         });
     }
 }

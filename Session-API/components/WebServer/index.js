@@ -1,5 +1,4 @@
-const debug = require('debug')(`session-api:webserver`)
-const { Component } = require("live-srt-lib")
+const { Component, logger } = require("live-srt-lib")
 const path = require('path')
 const cors = require('cors');
 const express = require('express')
@@ -36,7 +35,7 @@ class WebServer extends Component {
         this.session = Session(sessionConfig)
         this.express.use(this.session)
         this.httpServer = this.express.listen(process.env.SESSION_API_WEBSERVER_HTTP_PORT, "0.0.0.0", (err) => {
-            debug(`Listening on : ${process.env.SESSION_API_WEBSERVER_HTTP_PORT}`)
+            logger.debug(`Listening on : ${process.env.SESSION_API_WEBSERVER_HTTP_PORT}`)
             if (err) throw (err)
         })
 

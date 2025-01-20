@@ -1,6 +1,5 @@
 const gstreamer = require("gstreamer-superficial");
-
-
+const { logger } = require('live-srt-lib')
 
 let pipeline;
 
@@ -20,7 +19,7 @@ process.on('message', (message) => {
                 pipeline.stop();
                 pipeline = null;
             } catch (error) {
-                console.error('Error stopping pipeline:', error);
+                logger.error('Error stopping pipeline:', error);
             }
             process.exit(0);
         }
@@ -35,7 +34,7 @@ function sendDataToPipeline(dataArray) {
             appsrc.push(bufferData);
         });
     } else {
-        console.error("Could not find appsrc in pipeline");
+        logger.error("Could not find appsrc in pipeline");
         process.exit(0);
     }
 }

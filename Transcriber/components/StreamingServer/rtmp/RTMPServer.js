@@ -1,8 +1,7 @@
-const debug = require('debug')('transcriber:StreamingServer:RTMPServer');
 const { fork } = require('child_process');
 const EventEmitter = require('eventemitter3');
 const NodeMediaServer = require('node-media-server');
-const { CustomErrors } = require("live-srt-lib");
+const { CustomErrors, logger } = require("live-srt-lib");
 const path = require('path');
 
 const {
@@ -24,7 +23,7 @@ class MultiplexedRTMPServer extends EventEmitter {
   }
 
   async stop() {
-      debug('RTMP server will go DOWN !');
+      logger.debug('RTMP server will go DOWN !');
       Object.keys(this.workers).forEach(sessionId => {
           this.cleanupConnection(sessionId);
         })
@@ -57,60 +56,60 @@ class MultiplexedRTMPServer extends EventEmitter {
             this.cleanupConnection(id);
 
           });
-          debug(`RTMP server started on ${STREAMING_HOST}:${STREAMING_RTMP_TCP_PORT}`);
+          logger.debug(`RTMP server started on ${STREAMING_HOST}:${STREAMING_RTMP_TCP_PORT}`);
       } catch (error) {
-          debug("Error starting RTMP server", error);
+          logger.debug("Error starting RTMP server", error);
       }
   }
 
   async validateStream(streamPath) {
     const [sessionId, channelIndexStr] = streamPath.split('/').filter(element => element !== "")
-    debug(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
+    logger.debug(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
 
       // Extract sessionId and channelId from streamId
       const channelIndex = parseInt(channelIndexStr, 10);
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
-          debug(`Connection: ${streamPath} --> session ${sessionId} not found.`);
+          logger.debug(`Connection: ${streamPath} --> session ${sessionId} not found.`);
           return { isValid: false };
       }
       // Find channel by "id" key (do not rely on position in array that changes upon updates)
       const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
       const channel = sortedChannels[channelIndex];
       if (!channel) {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
+          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
           return { isValid: false };
       }
       const channelId = channel.id;
 
       // Check if the channel's streamStatus is 'active'
       if (channel.streamStatus === 'active') {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
           return { isValid: false };
       }
       // Check scheduleOn is after now
       const now = new Date();
       if (session.autoStart && session.scheduleOn && now < new Date(session.scheduleOn)) {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
+          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
           return { isValid: false };
       }
       // Check endOn is before now
       if (session.autoEnd && session.endOn && now > new Date(session.endOn)) {
-          debug(`Connection: ${streamPath} --> session ${sessionId}, endOn in the past. Now: ${now}, endTime: ${session.endOn}. Skipping.`);
+          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, endOn in the past. Now: ${now}, endTime: ${session.endOn}. Skipping.`);
           return { isValid: false };
       }
 
-      debug(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
+      logger.debug(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
       return { isValid: true, sessionId, channelId, session };
   }
 
   async onConnection(sessionId, streamPath) {
-      debug("Got new connection:", streamPath);
+      logger.debug("Got new connection:", streamPath);
       // New connection, validate stream
       const validation = await this.validateStream(streamPath);
       if (!validation.isValid) {
-          debug(`Invalid stream: ${streamPath}, voiding connection.`);
+          logger.debug(`Invalid stream: ${streamPath}, voiding connection.`);
           this.cleanupConnection(sessionId, null, null);
           return;
       }
@@ -144,23 +143,23 @@ class MultiplexedRTMPServer extends EventEmitter {
               this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channelId);
           }
           if (message.type === 'error') {
-              console.error(`Worker ${worker.pid} error --> ${message.error}`);
+              logger.error(`Worker ${worker.pid} error --> ${message.error}`);
               this.cleanupConnection(sessionId);
           }
       });
 
       worker.on('error', (err) => {
-          console.log(`Worker: ${worker.pid} --> Error:`, err);
+          logger.error(`Worker: ${worker.pid} --> Error:`, err);
           this.cleanupConnection(sessionId);
       });
 
       worker.on('exit', (code, signal) => {
-          debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelId}`);
+          logger.debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelId}`);
       });
   }
 
   cleanupConnection(sessionId) {
-      debug(`Connection: ${sessionId} --> cleaning up.`);
+      logger.debug(`Connection: ${sessionId} --> cleaning up.`);
       const [fd, worker] = this.workers.hasOwnProperty(sessionId) ? this.workers[sessionId] : [null, null];
 
       // Tell the streaming server controller to forward the session stop message to the broker

@@ -1,5 +1,4 @@
-const debug = require('debug')(`transcriber:StreamingServer`);
-const { Component, CustomErrors } = require("live-srt-lib");
+const { Component, CustomErrors, logger } = require("live-srt-lib");
 const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
 const MultiplexedWebsocketServer = require('./websocket/WebsocketServer.js');
@@ -61,15 +60,15 @@ class StreamingServer extends Component {
           });
           this.ASRs.set(`${session.id}_${channelId}`, asr);
           this.emit('session-start', session, channelId);
-          debug(`Session ${session.id}, channel ${channelId} started`);
+          logger.debug(`Session ${session.id}, channel ${channelId} started`);
         } catch (error) {
-          debug(`Error starting session ${session.id}, channel ${channelId}: ${error}`);
+          logger.debug(`Error starting session ${session.id}, channel ${channelId}: ${error}`);
         }
       });
 
       server.on('session-stop', (session, channelId) => {
         try {
-          debug(`Session ${session.id}, channel ${channelId} stopped`);
+          logger.debug(`Session ${session.id}, channel ${channelId} stopped`);
           const asr = this.ASRs.get(`${session.id}_${channelId}`);
           if (!asr) {
             return;
@@ -81,7 +80,7 @@ class StreamingServer extends Component {
           // pass to controllers/StreamingServer.js to forward to broker and mark the session as "ready"" / set channel status in database
           this.emit('session-stop', session, channelId);
         } catch (error) {
-          debug(`Error stopping session ${session.id}, channel ${channelId}: ${error}`);
+          logger.debug(`Error stopping session ${session.id}, channel ${channelId}: ${error}`);
         }
       });
 
@@ -92,27 +91,27 @@ class StreamingServer extends Component {
           if (asr) {
             asr.transcribe(buffer);
           } else {
-            debug(`No ASR found for session ${sessionId}, channel ${channelId}`);
+            logger.debug(`No ASR found for session ${sessionId}, channel ${channelId}`);
           }
         } catch (error) {
-          debug(`Error processing data for session ${sessionId}, channel ${channelId}: ${error}`);
+          logger.debug(`Error processing data for session ${sessionId}, channel ${channelId}: ${error}`);
         }
       });
     } catch (error) {
-      debug(`Error initializing ${protocol} server: ${error}`);
+      logger.debug(`Error initializing ${protocol} server: ${error}`);
     }
   }
 
 
   // Create a bot for a channel and store it in the bots map
   async startBot(session, channelId, address, botType, botAsync, botLive) {
-    debug(`Starting ${botType} bot for session ${session.id}, channel ${channelId}`);
+    logger.debug(`Starting ${botType} bot for session ${session.id}, channel ${channelId}`);
     try {
       const bot = new Bot(session, channelId, address, botType, botLive);
       bot.session = session;
       // Bot events
       bot.on('session-start', (session, channelId) => {
-        debug(`Session ${session.id}, channel ${channelId} started`);
+        logger.debug(`Session ${session.id}, channel ${channelId} started`);
 
         const asr = new ASR(session, channelId, botAsync, botLive && !botLive.keepLiveTranscripts);
         asr.on('partial', (transcription) => {
@@ -136,7 +135,7 @@ class StreamingServer extends Component {
         this.ASRs.set(`${session.id}_${channelId}`, asr);
         // pass to controllers/StreamingServer.js to forward to broker and mark the session as active / set channel status in database
         this.emit('session-start', session, channelId);
-        debug(`Session ${session.id}, channel ${channelId} started`);
+        logger.debug(`Session ${session.id}, channel ${channelId} started`);
       })
 
       bot.on('data', (audio, sessionId, channelId) => {
@@ -151,19 +150,19 @@ class StreamingServer extends Component {
       this.bots.set(`${session.id}_${channelId}`, bot);
 
     } catch (error) {
-      console.error(`Error starting bot: ${error.message}`);
+      logger.error(`Error starting bot: ${error.message}`);
     }
   }
 
   // Stop a bot for a given session and channel
   async stopBot(sessionId, channelId) {
-    debug(`Stopping bot for session ${sessionId}, channel ${channelId}`);
+    logger.debug(`Stopping bot for session ${sessionId}, channel ${channelId}`);
     try {
       const botKey = `${sessionId}_${channelId}`;
       const bot = this.bots.get(botKey);
       this.emit('session-stop', bot.session, channelId);
       if (!bot) {
-        debug(`No bot found for session ${sessionId}, channel ${channelId}`);
+        logger.debug(`No bot found for session ${sessionId}, channel ${channelId}`);
         return;
       }
       await bot.dispose();
@@ -178,9 +177,9 @@ class StreamingServer extends Component {
       }
 
       // pass to controllers/StreamingServer.js to forward to broker and mark the session as inactive / set channel status in database
-      debug(`Session ${sessionId}, channel ${channelId} stopped`);
+      logger.debug(`Session ${sessionId}, channel ${channelId} stopped`);
     } catch (error) {
-      console.error(`Error stopping bot: ${error.message}`);
+      logger.error(`Error stopping bot: ${error.message}`);
     }
   }
 

@@ -1,5 +1,4 @@
-const debug = require('debug')(`scheduler:BrokerClient`);
-const { MqttClient, Component, Model } = require('live-srt-lib')
+const { MqttClient, Component, Model, logger } = require('live-srt-lib')
 
 class BrokerClient extends Component {
 
@@ -64,7 +63,7 @@ class BrokerClient extends Component {
 
     const sessionIds = updatedSessions.map(session => session.id);
     if (sessionIds.length > 0) {
-      debug(`Auto start sessions ${sessionIds}`);
+      logger.debug(`Auto start sessions ${sessionIds}`);
     }
 
     return sessionIds.length > 0;
@@ -95,7 +94,7 @@ class BrokerClient extends Component {
       const sessionIds = updatedSessions.map(session => session.id);
 
       if (sessionIds.length > 0) {
-        debug(`Auto end sessions ${sessionIds}`);
+        logger.debug(`Auto end sessions ${sessionIds}`);
         isUpdated = true;
         await Model.Channel.update(
           { streamStatus: 'inactive' },
@@ -165,12 +164,12 @@ class BrokerClient extends Component {
         // retrieve bot data
         const botData = await this.getStartBotData(botId);
         this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, botData, 2, false, true);
-        debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${botData.session.id}, channel ${botData.channelId}`);
+        logger.debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${botData.session.id}, channel ${botData.channelId}`);
       } else {
-        console.error('No transcriber available to start bot.');
+        logger.error('No transcriber available to start bot.');
       }
     } catch (error) {
-      console.error('Failed to start bot:', error);
+      logger.error('Failed to start bot:', error);
     }
   }
 
@@ -214,7 +213,7 @@ class BrokerClient extends Component {
 
       this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
     } catch (error) {
-      console.error('Failed to stop bot:', error);
+      logger.error('Failed to stop bot:', error);
     }
   }
 
@@ -237,7 +236,7 @@ class BrokerClient extends Component {
         }
       );
     } catch (err) {
-      console.error(
+      logger.error(
         `${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`,
         JSON.stringify(transcription)
       );
@@ -250,9 +249,9 @@ class BrokerClient extends Component {
   async registerTranscriber(transcriber) {
     this.transcribers.push(transcriber);
     // new transcriber registered, publish the current list of sessions to broker
-    debug(`Transcriber ${transcriber.uniqueId} UP`);
+    logger.debug(`Transcriber ${transcriber.uniqueId} UP`);
     await this.publishSessions();
-    debug(`Transcriber replicas: ${this.transcribers.length}`);
+    logger.debug(`Transcriber replicas: ${this.transcribers.length}`);
   }
 
   // A transcriber goes offline. Cleanup channels associated with the transcriber. If a session has no active channels, set it to ready.
@@ -289,15 +288,15 @@ class BrokerClient extends Component {
         }
       }
 
-      debug(`Transcriber ${transcriber.uniqueId} DOWN`);
+      logger.debug(`Transcriber ${transcriber.uniqueId} DOWN`);
       this.publishSessions();
     } catch (error) {
-      console.error(`Error updating channels for transcriber ${transcriber.uniqueId}:`, error);
+      logger.error(`Error updating channels for transcriber ${transcriber.uniqueId}:`, error);
     }
   }
 
   async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {
-    debug(`Updating session activity: ${sessionId} --> channel id: ${channelId} streamStatus ${newStreamStatus}`);
+    logger.debug(`Updating session activity: ${sessionId} --> channel id: ${channelId} streamStatus ${newStreamStatus}`);
     try {
       // Fetch the session with its channels
       const session = await Model.Session.findByPk(sessionId, {
@@ -305,7 +304,7 @@ class BrokerClient extends Component {
       });
 
       if (!session) {
-        console.error(`Session with ID ${sessionId} not found.`);
+        logger.error(`Session with ID ${sessionId} not found.`);
         return;
       }
 
@@ -340,7 +339,7 @@ class BrokerClient extends Component {
       await session.save();
       await this.publishSessions();
     } catch (error) {
-      console.error(`Error updating session ${sessionId}:`, error);
+      logger.error(`Error updating session ${sessionId}:`, error);
     }
   }
 
@@ -384,7 +383,7 @@ class BrokerClient extends Component {
         }
       ]
     });
-    debug('Publishing all ACTIVE and READY sessions on broker: ', sessions.length);
+    logger.debug('Publishing all ACTIVE and READY sessions on broker: ', sessions.length);
     // Publish the sessions to the broker
     this.client.publish('system/out/sessions/statuses', sessions, 1, true, true);
   }

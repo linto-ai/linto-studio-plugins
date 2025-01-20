@@ -1,5 +1,5 @@
 const { AudioConfig, ConversationTranscriber, PropertyId, AudioInputStream, SpeechConfig, SpeechTranslationConfig, TranslationRecognizer, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
-const debug = require('debug')(`transcriber:microsoft`);
+const { logger } = require('live-srt-lib')
 const EventEmitter = require('eventemitter3');
 
 
@@ -10,12 +10,12 @@ class RecognizerListener {
     }
 
     emitTranscribing(payload) {
-        debug(`${this.name}: Microsoft ASR partial transcription: ${payload.text}`);
+        logger.debug(`${this.name}: Microsoft ASR partial transcription: ${payload.text}`);
         this.transcriber.emit('transcribing', payload);
     }
 
     emitTranscribed(payload) {
-        debug(`${this.name}: Microsoft ASR final transcription: ${payload.text}`);
+        logger.debug(`${this.name}: Microsoft ASR final transcription: ${payload.text}`);
         this.transcriber.emit('transcribed', payload);
     }
 
@@ -32,7 +32,7 @@ class RecognizerListener {
     async handleCanceled(s, e) {
         // The ASR is cancelled until the end of the stream
         // and can be restarted with a new stream
-        debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        logger.debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
         await this.transcriber.stop();
@@ -41,17 +41,17 @@ class RecognizerListener {
     };
 
     handleSessionStopped(s, e) {
-        debug(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
+        logger.debug(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
         this.transcriber.emit('closed', e.reason);
     };
 
     handleStartContinuousRecognitionAsync() {
-        debug(`${this.name}: Microsoft ASR recognition started`);
+        logger.debug(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
     };
 
     handleStartContinuousRecognitionAsyncError(error) {
-        debug(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
+        logger.debug(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
     };
 
     listen(recognizer) {
@@ -99,16 +99,16 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
     }
 
     handleCanceled(s, e) {
-        debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        logger.debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
     };
 
     handleSessionStopped(s, e) {
         const reason = e.reason ? `: ${e.reason}` : '';
-        debug(`${this.name}: Microsoft ASR session stopped${reason}`);
+        logger.debug(`${this.name}: Microsoft ASR session stopped${reason}`);
     };
 
     handleStartContinuousRecognitionAsync() {
-        debug(`${this.name}: Microsoft ASR recognition started`);
+        logger.debug(`${this.name}: Microsoft ASR recognition started`);
     };
 }
 
@@ -163,7 +163,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     start() {
         const { transcriberProfile, translations, diarization } = this.channel;
-        debug(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
+        logger.debug(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
         this.startedAt = new Date().toISOString();
@@ -294,7 +294,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 pushStream.write(buffer);
             }
         } else {
-            debug("Microsoft ASR transcriber can't decode buffer");
+            logger.debug("Microsoft ASR transcriber can't decode buffer");
         }
     }
 

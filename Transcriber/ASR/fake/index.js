@@ -1,4 +1,3 @@
-const debug = require('debug')(`transcriber:fake`);
 const EventEmitter = require('eventemitter3');
 
 class FakeTranscriber extends EventEmitter {

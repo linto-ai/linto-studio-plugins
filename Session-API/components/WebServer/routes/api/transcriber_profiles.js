@@ -1,5 +1,4 @@
-const debug = require('debug')('session-api:router:api-docs:transcriber_profiles');
-const { Model } = require("live-srt-lib");
+const { Model, logger } = require("live-srt-lib");
 
 function isValidLocale(locale) {
     const pattern = /^[a-z]{2}-[A-Z]{2}$/;

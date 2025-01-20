@@ -24,7 +24,6 @@
   ],
   "license": "EUPL",
   "dependencies": {
-    "debug": "^4.3.4",
     "live-srt-lib": "file:../lib"
   }
 }

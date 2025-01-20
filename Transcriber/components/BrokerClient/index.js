@@ -1,5 +1,4 @@
-const debug = require('debug')(`transcriber:BrokerClient`);
-const { MqttClient, Component } = require('live-srt-lib')
+const { MqttClient, Component, logger } = require('live-srt-lib')
 const { v4: uuidv4 } = require('uuid');
 class BrokerClient extends Component {
 
@@ -57,7 +56,7 @@ class BrokerClient extends Component {
     }
     // to be consumed by streaming server controller
     this.emit("sessions", this.sessions)
-    debug(`Registered all ACTIVE and READY sessions: ${this.sessions.length}`);
+    logger.debug(`Registered all ACTIVE and READY sessions: ${this.sessions.length}`);
   }
 
   activateSession(session, channelId) {
@@ -78,19 +77,19 @@ class BrokerClient extends Component {
     this.client.on("ready", () => {
       // status will be published only when scheduler online message is received
       this.state = WAITING_SCHEDULER;
-      debug(`${this.uniqueId} Connected to broker - WAITING_SCHEDULER`)
+      logger.debug(`${this.uniqueId} Connected to broker - WAITING_SCHEDULER`)
     });
     this.client.on("error", (err) => {
       this.state = ERROR;
-      debug(`${this.uniqueId} Something went wrong with broker connection`, err)
+      logger.debug(`${this.uniqueId} Something went wrong with broker connection`, err)
     });
     this.client.on("close", () => {
       this.state = DISCONNECTED;
-      debug(`${this.uniqueId} Disconnected from broker - CLOSE`)
+      logger.debug(`${this.uniqueId} Disconnected from broker - CLOSE`)
     })
     this.client.on("offline", () => {
       this.state = DISCONNECTED;
-      debug(`${this.uniqueId} Disconnected from broker - BROKER OFFLINE`)
+      logger.debug(`${this.uniqueId} Disconnected from broker - BROKER OFFLINE`)
     })
     this.client.on("message", (topic, message) => {
       this.emit("message", topic, message);

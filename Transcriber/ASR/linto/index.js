@@ -1,5 +1,5 @@
 const WebSocket = require('ws');
-const debug = require('debug')(`transcriber:linto`);
+const { logger } = require('live-srt-lib')
 const EventEmitter = require('eventemitter3');
 
 class LintoTranscriber extends EventEmitter {
@@ -54,7 +54,7 @@ class LintoTranscriber extends EventEmitter {
         this.ws = new WebSocket(endpoint);
 
         this.ws.on('open', () => {
-            debug("WebSocket connection established");
+            logger.debug("WebSocket connection established");
             this.ws.send(JSON.stringify({ config: { sample_rate: 16000 } }));
             this.emit('ready');
         });
@@ -65,19 +65,19 @@ class LintoTranscriber extends EventEmitter {
                 const result = this.getMqttPayload(data.text);
                 this.lastEndTime = result.end;
                 this.emit('transcribed', result);
-                debug(`ASR transcription: ${data.text}`);
+                logger.debug(`ASR transcription: ${data.text}`);
             } else if (data.partial) {
                 if (!this.startTime) {
                     this.startTime = Date.now();
                 }
                 const result = this.getMqttPayload(data.partial);
                 this.emit('transcribing', result);
-                debug(`ASR partial transcription: ${data.partial}`);
+                logger.debug(`ASR partial transcription: ${data.partial}`);
             }
         });
 
         this.ws.on('error', (error) => {
-            debug(`WebSocket error: ${error}`);
+            logger.debug(`WebSocket error: ${error}`);
             this.emit('error', LintoTranscriber.ERROR_MAP[4]);
             this.stop();
 
@@ -90,7 +90,7 @@ class LintoTranscriber extends EventEmitter {
 
         this.ws.on('close', (code, reason) => {
             const error = LintoTranscriber.ERROR_MAP[code] || 'UNKNOWN_ERROR';
-            debug(`WebSocket closed: ${code} ${reason}`);
+            logger.debug(`WebSocket closed: ${code} ${reason}`);
             this.emit('closed', { code, reason, error });
         });
     }
@@ -99,7 +99,7 @@ class LintoTranscriber extends EventEmitter {
         if (this.ws) {
             this.ws.send(buffer);
         } else {
-            debug("Linto ASR transcriber can't decode buffer");
+            logger.debug("Linto ASR transcriber can't decode buffer");
         }
     }
 

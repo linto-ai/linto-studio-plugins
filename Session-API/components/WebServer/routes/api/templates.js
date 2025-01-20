@@ -1,5 +1,4 @@
-const debug = require('debug')('session-api:router:api:sessions')
-const { Model } = require("live-srt-lib")
+const { Model, logger } = require("live-srt-lib")
 const bcp47 = require('language-tags');
 class ApiError extends Error {
     constructor(status, message) {
@@ -105,7 +104,7 @@ module.exports = (webserver) => {
                 await transaction.commit();
 
                 // return the session with channels
-                debug('Session template created', sessionTemplate.id);
+                logger.debug('Session template created', sessionTemplate.id);
                 res.json(await Model.SessionTemplate.findByPk(sessionTemplate.id, {
                     include: {
                         model: Model.ChannelTemplate,
@@ -116,7 +115,7 @@ module.exports = (webserver) => {
                     }
                 }));
             } catch (err) {
-                debug(err);
+                logger.debug(err);
                 await transaction.rollback();
                 return next(err)
             }
@@ -178,7 +177,7 @@ module.exports = (webserver) => {
                 await transaction.commit();
 
                 // return the session with channels
-                debug('Session template created', sessionTemplate.id);
+                logger.debug('Session template created', sessionTemplate.id);
                 res.json(await Model.SessionTemplate.findByPk(sessionTemplate.id, {
                     include: {
                         model: Model.ChannelTemplate,
@@ -189,7 +188,7 @@ module.exports = (webserver) => {
                     }
                 }));
             } catch (err) {
-                debug(err);
+                logger.debug(err);
                 await transaction.rollback();
                 return next(err)
             }
@@ -204,7 +203,7 @@ module.exports = (webserver) => {
                     return res.status(404).send('Session template not found');
                 }
                 await sessionTemplate.destroy();
-                debug('Session template deleted', sessionTemplate.id);
+                logger.debug('Session template deleted', sessionTemplate.id);
                 res.json({ 'success': true });
             } catch (err) {
                 next(err);

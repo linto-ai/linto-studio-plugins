@@ -251,6 +251,10 @@
                 "type": "boolean",
                 "description": "Enable diarization",
                 "default": false
+            },
+            "meta": {
+                "type": "json",
+                "default": null
             }
         }
     },
@@ -286,6 +290,10 @@
                 "type": "boolean",
                 "description": "Enable diarization",
                 "default": false
+            },
+            "meta": {
+                "type": "json",
+                "default": null
             }
         }
     },

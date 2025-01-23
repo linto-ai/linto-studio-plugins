@@ -247,7 +247,8 @@ module.exports = (webserver) => {
                         streamStatus: 'inactive',
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
-                        name: channel.name
+                        name: channel.name,
+                        meta: channel.meta
                     }, { transaction });
                 }
                 await setChannelsEndpoints(session.id, transaction);
@@ -383,7 +384,8 @@ module.exports = (webserver) => {
                         streamStatus: 'inactive',
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
-                        name: channel.name
+                        name: channel.name,
+                        meta: channel.meta
                     }, { transaction });
                 }
 

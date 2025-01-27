@@ -187,12 +187,9 @@ class BrokerClient extends Component {
 
     return {
       session, channelId: bot.channelId, address: bot.url,
-      botType: bot.provider, botAsync: bot.enableAsyncTranscripts,
-      botLive: {
-        keepLiveTranscripts: bot.enableLiveTranscripts,
-        displaySub: bot.enableDisplaySub,
-        subSource: bot.subSource
-      }
+      botType: bot.provider, channelAsync: session.channels[0].async,
+      enableLiveTranscripts: bot.enableLiveTranscripts,
+      enableDisplaySub: bot.enableDisplaySub, subSource: bot.subSource
     }
   }
 

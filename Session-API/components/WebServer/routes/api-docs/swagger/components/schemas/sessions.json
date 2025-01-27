@@ -252,6 +252,11 @@
                 "description": "Enable diarization",
                 "default": false
             },
+            "async": {
+              "type": "boolean",
+              "description": "Save audio as WAV instead of MP3.",
+              "default": false
+            },
             "meta": {
                 "type": "json",
                 "default": null
@@ -291,6 +296,10 @@
                 "description": "Enable diarization",
                 "default": false
             },
+            "async": {
+              "type": "boolean",
+              "description": "Save audio as WAV instead of MP3."
+            },
             "meta": {
                 "type": "json",
                 "default": null
@@ -315,6 +324,10 @@
             "diarization": {
                 "type": "boolean",
                 "description": "The diarization is enabled"
+            },
+            "async": {
+              "type": "boolean",
+              "description": "Audio is saved as WAV instead of MP3."
             },
             "transcriberId": {
                 "type": "string",

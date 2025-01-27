@@ -104,32 +104,40 @@ class StreamingServer extends Component {
 
 
   // Create a bot for a channel and store it in the bots map
-  async startBot(session, channelId, address, botType, botAsync, botLive) {
+  async startBot(session, channelId, address, botType, channelAsync,
+    enableLiveTranscripts, enableDisplaySub, subSource
+  ) {
     logger.debug(`Starting ${botType} bot for session ${session.id}, channel ${channelId}`);
     try {
-      const bot = new Bot(session, channelId, address, botType, botLive);
+      const bot = new Bot(session, channelId, address, botType, enableLiveTranscripts, enableDisplaySub);
       bot.session = session;
       // Bot events
       bot.on('session-start', (session, channelId) => {
         logger.debug(`Session ${session.id}, channel ${channelId} started`);
 
-        const asr = new ASR(session, channelId, botAsync, botLive && !botLive.keepLiveTranscripts);
+        const asr = new ASR(session, channelId, channelAsync, !enableLiveTranscripts);
         asr.on('partial', (transcription) => {
           let subtitle = transcription.text;
-          if (botLive.subSource && transcription.translations && botLive.subSource in transcription.translations) {
-            subtitle = transcription.translations[botLive.subSource];
+          if (subSource && transcription.translations && subSource in transcription.translations) {
+            subtitle = transcription.translations[subSource];
           }
 
-          bot.updateCaptions(subtitle, false);
+          if (enableDisplaySub) {
+            bot.updateCaptions(subtitle, false);
+          }
+
           this.emit('partial', transcription, session.id, channelId);
         });
         asr.on('final', (transcription) => {
           let subtitle = transcription.text;
-          if (botLive.subSource && transcription.translations && botLive.subSource in transcription.translations) {
-            subtitle = transcription.translations[botLive.subSource];
+          if (subSource && transcription.translations && subSource in transcription.translations) {
+            subtitle = transcription.translations[subSource];
           }
 
-          bot.updateCaptions(subtitle, true);
+          if (enableDisplaySub) {
+            bot.updateCaptions(subtitle, true);
+          }
+
           this.emit('final', transcription, session.id, channelId);
         });
         this.ASRs.set(`${session.id}_${channelId}`, asr);

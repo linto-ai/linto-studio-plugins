@@ -71,34 +71,18 @@ module.exports = (webserver) => {
                 }
 
                 // Set default value for live
-                let botLive = req.body.live;
-                if (!botLive) {
-                    botLive = {
-                        keepLiveTranscripts: true,
-                        displaySub: true,
-                        subSource: null
-                    };
-                }
+                const enableLiveTranscripts = req.body.enableLiveTranscripts;
+                const enableDisplaySub = req.body.enableDisplaySub;
+                const subSource = req.body.subSource;
 
                 // Check at least async or live
-                if (!botAsync && !botLive.keepLiveTranscripts) {
-                    return res.status(400).json({ error: "At least async or live must be enabled" });
+                if (!channel.async && !enableLiveTranscripts) {
+                    return res.status(400).json({ error: "At least async channel or live must be enabled" });
                 }
 
-                // If async is enabled, keepAudio must be enabled
-                if (botAsync && !channel.keepAudio) {
-                    return res.status(400).json({ error: "Async is enabled but keep audio is not enabled on channel" });
-                }
-
-                // Create the bot
                 const bot = await Model.Bot.create({
-                    url: url,
-                    provider: provider,
-                    channelId: channel.id,
-                    enableAsyncTranscripts: botAsync,
-                    enableLiveTranscripts: botLive.keepLiveTranscripts,
-                    enableDisplaySub: botLive.displaySub,
-                    subSource: botLive.subSource
+                    url, provider, enableLiveTranscripts, enableDisplaySub,
+                    subSource, channelId: channel.id
                 });
 
                 webserver.emit('startbot', bot.id);

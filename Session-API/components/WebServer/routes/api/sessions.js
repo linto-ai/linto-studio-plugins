@@ -233,6 +233,11 @@ module.exports = (webserver) => {
                             throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
                         }
                     }
+
+                    if (channel.async && !channel.keepAudio) {
+                        throw new ApiError(400, "Async is enabled but keep audio is not enabled on channel");
+                    }
+
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
                     if (!transcriberProfile) {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
@@ -242,6 +247,7 @@ module.exports = (webserver) => {
                     await Model.Channel.create({
                         keepAudio: channel.keepAudio || false,
                         diarization: channel.diarization || false,
+                        async: channel.async || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',
@@ -322,6 +328,10 @@ module.exports = (webserver) => {
                             }
                         }
 
+                        if (updatedChannel.async && !updatedChannel.keepAudio) {
+                            throw new ApiError(400, "Async is enabled but keep audio is not enabled on channel");
+                        }
+
                         if (updatedChannel.transcriberProfileId) {
                             let transcriberProfile = await Model.TranscriberProfile.findByPk(updatedChannel.transcriberProfileId, { transaction });
                             if (!transcriberProfile) {
@@ -369,6 +379,11 @@ module.exports = (webserver) => {
                             throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
                         }
                     }
+
+                    if (channel.async && !channel.keepAudio) {
+                        throw new ApiError(400, "Async is enabled but keep audio is not enabled on channel");
+                    }
+
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
                     if (!transcriberProfile) {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
@@ -379,6 +394,7 @@ module.exports = (webserver) => {
                     await Model.Channel.create({
                         keepAudio: channel.keepAudio || false,
                         diarization: channel.diarization || false,
+                        async: channel.async || false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',

@@ -14,9 +14,6 @@
             "channelId": {
                 "type": "integer"
             },
-            "enableAsyncTranscripts": {
-                "type": "boolean"
-            },
             "enableLiveTranscripts": {
                 "type": "boolean"
             },
@@ -40,31 +37,20 @@
               "type": "integer",
               "description": "The id of the channel."
             },
-            "async": {
-              "type": "boolean",
-              "description": "Save audio as WAV instead of MP3.",
-              "default": false
+            "enableLiveTranscripts": {
+                "type": "boolean",
+                "description": "Set to False to disable transcription.",
+                "default": true
             },
-            "live": {
-              "type": "object",
-              "description": "Properties of the live transcription.",
-              "properties": {
-                "keepLiveTranscripts": {
-                  "type": "boolean",
-                  "description": "Set to False to disable transcription.",
-                  "default": true
-                },
-                "displaySub": {
-                  "type": "boolean",
-                  "description": "Display the subtitles through the webcam.",
-                  "default": true
-                },
-                "subSource": {
-                  "type": "string",
-                  "description": "Language candidate.",
-                  "default": null
-                }
-              }
+            "enableDisplaySub": {
+                "type": "boolean",
+                "description": "Display the subtitles through the webcam.",
+                "default": true
+            },
+            "subSource": {
+                "type": "string",
+                "description": "Language candidate.",
+                "default": null
             },
             "provider": {
               "type": "string",

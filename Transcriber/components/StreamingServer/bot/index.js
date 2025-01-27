@@ -5,11 +5,12 @@ const { launch, getStream } = require('puppeteer-stream');
 const EventEmitter = require('events');
 
 class Bot extends EventEmitter {
-  constructor(session, channelId, address, botType, botLive) {
+  constructor(session, channelId, address, botType, enableLiveTranscripts, enableDisplaySub) {
     super();
     this.worker = null
     this.botType = botType;
-    this.botLive = botLive;
+    this.enableLiveTranscripts = enableLiveTranscripts;
+    this.enableDisplaySub = enableDisplaySub;
     this.session = session;
     this.channelId = channelId;
     this.address = address;
@@ -99,7 +100,7 @@ class Bot extends EventEmitter {
         await this.execRule(rule);
       }
 
-      if (this.botLive.keepLiveTranscripts && this.botLive.displaySub && this.manifest.subtitleRules) {
+      if (this.enableLiveTranscripts && this.enableDisplaySub && this.manifest.subtitleRules) {
         for (const rule of this.manifest.subtitleRules) {
           await this.execRule(rule);
         }

@@ -2,7 +2,7 @@ const { logger: appLogger } = require('live-srt-lib')
 
 
 function logger(req, res, next) {
-    appLogger.debug(`[${Date.now()}] new user entry on ${req.url}`);
+    appLogger.debug(`[${Date.now()}] ${req.method} ${req.url}`, req.body);
 
     // log 400 error
     const originalJson = res.json;

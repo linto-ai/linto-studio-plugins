@@ -3,6 +3,8 @@
 # you can also override them by setting them in the environment before running the app (e.g. export SRT_PORT=1234)
 NODE_ENV=production # used to load the appropriate migration config
 TZ=UTC
+LOG_FORMAT=text # Format of the log: text or json
+LOG_LEVEL=debug # Level among error, warn, info, debug
 
 # App components registration (don't touch)
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separated list of components to run, they load in this order

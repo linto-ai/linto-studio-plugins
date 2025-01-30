@@ -1,5 +1,7 @@
 NODE_ENV=production
 TZ=UTC
+LOG_FORMAT=text # Format of the log: text or json
+LOG_LEVEL=debug # Level among error, warn, info, debug
 
 # App components registration (don't touch)
 TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separated list of components to run, they load in this order

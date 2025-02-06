@@ -8,9 +8,9 @@ function handleSchedulerMessage(scheduler) {
     this.app.components['StreamingServer'].startServers();
     this.state = this.constructor.states.READY;
   } else if (!scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
-    this.state = this.constructor.states.WAITING_SCHEDULER;
-    this.app.components['StreamingServer'].stopServers();
-    logger.debug(`${this.uniqueId} scheduler offline, waiting...`);
+    logger.warn(`${this.uniqueId} scheduler offline, transcriptions may be lost...`);
+  } else if (scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
+    logger.warn(`${this.uniqueId} scheduler back online.`);
   }
 }
 
@@ -24,7 +24,7 @@ function handleSystemMessage(parts, message) {
       this.handleSessions(sessions);
     }
   } else {
-    logger.debug(`Received message for unknown system type ${systemType}`);
+    logger.warn(`Received message for unknown system type ${systemType}`);
   }
 }
 

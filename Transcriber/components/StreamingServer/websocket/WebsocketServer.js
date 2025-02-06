@@ -42,16 +42,6 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
   }
 
-  async stop() {
-      logger.debug('Websocket server will go DOWN !');
-      this.workers.forEach(worker => {
-          this.cleanupConnection(null, null, worker);
-      });
-      this.workers = [];
-      process.exit(1);
-  }
-
-
   async start() {
       try {
           this.wss = new WebSocket.Server({ port: parseInt(STREAMING_WS_TCP_PORT), host: STREAMING_HOST});

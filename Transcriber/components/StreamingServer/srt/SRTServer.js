@@ -40,15 +40,6 @@ class MultiplexedSRTServer extends EventEmitter {
         }
     }
 
-    async stop() {
-        logger.debug('SRT server will go DOWN !');
-        this.workers.forEach(worker => {
-            this.cleanupConnection(null, null, worker);
-        });
-        this.workers = [];
-        process.exit(1);
-    }
-
     async start() {
         try {
             this.asyncSrtServer = new SRTServer(parseInt(STREAMING_SRT_UDP_PORT), STREAMING_HOST);

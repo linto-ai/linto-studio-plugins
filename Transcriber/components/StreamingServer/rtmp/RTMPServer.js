@@ -22,16 +22,6 @@ class MultiplexedRTMPServer extends EventEmitter {
       this.sessions = sessions;
   }
 
-  async stop() {
-      logger.debug('RTMP server will go DOWN !');
-      Object.keys(this.workers).forEach(sessionId => {
-          this.cleanupConnection(sessionId);
-        })
-      this.workers = {};
-      process.exit(1);
-  }
-
-
   async start() {
       try {
           const config = {

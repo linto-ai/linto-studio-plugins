@@ -197,12 +197,6 @@ class StreamingServer extends Component {
     }
   }
 
-  async stopServers() {
-    for(const server of this.servers) {
-      server.stop();
-    }
-  }
-
   // called by controllers/BrokerClient.js uppon receiving system/out/sessions/statuses message
   setSessions(sessions) {
     for(const server of this.servers) {

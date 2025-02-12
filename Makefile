@@ -11,8 +11,11 @@ migrate:
 run-dev: migrate
 	npm start
 
+build-docker-dev:
+	docker compose --env-file .envdefault.docker build
+
 run-docker-dev:
-	docker compose --env-file .envdefault.docker up --build
+	docker compose --env-file .envdefault.docker up
 
 stop-docker-dev:
 	docker compose --env-file .envdefault.docker stop

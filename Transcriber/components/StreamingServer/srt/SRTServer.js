@@ -48,13 +48,14 @@ class MultiplexedSRTServer extends EventEmitter {
             });
             this.server = await this.asyncSrtServer.create();
             // Check if STREAMING_PASSPHRASE is set and apply it along with key length
-            if (STREAMING_PASSPHRASE && STREAMING_PASSPHRASE.length > 0 && STREAMING_PASSPHRASE !== 'false') {
+            const hasPassphrase = STREAMING_PASSPHRASE && STREAMING_PASSPHRASE.length > 0 && STREAMING_PASSPHRASE !== 'false';
+            if (hasPassphrase) {
                 let keyLength = STREAMING_PASSPHRASE.length >= 32 ? 32 : (STREAMING_PASSPHRASE.length >= 24 ? 24 : 16);
                 await this.server.setSocketFlags([SRT.SRTO_PASSPHRASE, SRT.SRTO_PBKEYLEN], [STREAMING_PASSPHRASE, keyLength]);
             }
             this.server.open();
             // log passphrase if set
-            logger.debug(`SRT server started on ${STREAMING_HOST}:${STREAMING_SRT_UDP_PORT} ${STREAMING_PASSPHRASE ? 'with passphrase' : ''}`);
+            logger.debug(`SRT server started on ${STREAMING_HOST}:${STREAMING_SRT_UDP_PORT} ${hasPassphrase ? 'with passphrase' : ''}`);
         } catch (error) {
             logger.debug("Error starting SRT server", error);
         }
@@ -195,8 +196,8 @@ class MultiplexedSRTServer extends EventEmitter {
             logger.debug(`Connection: ${connection.fd} --> closed`);
             if (worker && worker.connected) {
                 worker.send({ type: 'terminate' });
-                this.cleanupConnection(connection, fd, worker);
             }
+            this.cleanupConnection(connection, fd, worker);
         });
 
         connection.on('error', (err) => {

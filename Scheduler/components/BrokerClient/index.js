@@ -294,73 +294,68 @@ class BrokerClient extends Component {
 
   async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {
     logger.debug(`Updating session activity: ${sessionId} --> channel id: ${channelId} streamStatus ${newStreamStatus}`);
+    const transaction = await Model.sequelize.transaction();
+
     try {
-      // Fetch the session with its channels
-      const session = await Model.Session.findByPk(sessionId, {
-        include: [{ model: Model.Channel }]
-      });
+      await Model.Channel.update(
+        { streamStatus: newStreamStatus },
+        { where: { id: channelId }, transaction }
+      );
 
-      if (!session) {
-        logger.error(`Session with ID ${sessionId} not found.`);
-        return;
-      }
+      // Subquery to detect hasActiveStream
+      await Model.Session.update(
+        {
+          status: Model.sequelize.literal(`
+            CASE
+              WHEN (SELECT COUNT(*)
+                    FROM "channels"
+                    WHERE "sessionId" = '${sessionId}'
+                      AND "streamStatus" = 'active') > 0
+                THEN 'active'::enum_sessions_status
+              ELSE 'ready'::enum_sessions_status
+            END
+          `),
+          startTime: Model.sequelize.literal(`
+            CASE
+              WHEN (SELECT COUNT(*)
+                    FROM "channels"
+                    WHERE "sessionId" = '${sessionId}'
+                      AND "streamStatus" = 'active') > 0
+                AND "startTime" IS NULL
+                THEN NOW()
+              ELSE "startTime"
+            END
+          `)
+        },
+        { where: { id: sessionId }, transaction }
+      );
 
-      // Map through channels and prepare promises for updating them
-      const channelsUpdates = session.channels.map(channel => {
-        if (channel.id === channelId) {
-          channel.streamStatus = newStreamStatus; // Update the specific channel's streamStatus
-          if (newStreamStatus === 'active') {
-            channel.transcriberId = transcriberId; // Set the transcriberId for the channel
-          } else {
-            channel.transcriberId = null; // Reset the transcriberId for the channel
-          }
-          return channel.save(); // Return promise for async operation
-        }
-      });
-
-      // Wait for all channel updates to complete
-      await Promise.all(channelsUpdates);
-
-      let hasActiveStream = session.channels.some(channel => channel.streamStatus === 'active');
-
-      // Update session status based on channels' stream statuses
-      if (hasActiveStream && session.status === 'ready') {
-        session.status = 'active';
-        if (!session.startTime) {
-          session.startTime = new Date();
-        }
-      } else if (!hasActiveStream && session.status === 'active') {
-        session.status = 'ready';
-      }
-
-      await session.save();
+      await transaction.commit();
       await this.publishSessions();
     } catch (error) {
+      await transaction.rollback();
       logger.error(`Error updating session ${sessionId}:`, error);
     }
   }
 
   async resetSessions() {
-    const sessions = await Model.Session.findAll({
-      where: { status: 'active' }, // Only select active sessions
-      attributes: ['id', 'status'],
-      include: [
-        {
-          model: Model.Channel,
-          as: 'channels',
-          attributes: ['id', 'streamStatus'],
-        }
-      ]
-    });
-    await Promise.all(sessions.map(async session => {
-      await Promise.all(session.channels.map(async channel => {
-        if (channel.streamStatus === 'active') {
-          await channel.update({ streamStatus: 'inactive' });
-        }
-      }));
-      session.status = 'ready'; // Update session status to inactive
-      await session.save();
-    }));
+    await Model.Channel.update(
+      { streamStatus: 'inactive' },
+      {
+        where: { streamStatus: 'active' },
+        include: [{
+          model: Model.Session,
+          as: 'session',
+          where: { status: 'active' }
+        }]
+      }
+    );
+    await Model.Session.update(
+      { status: 'ready' },
+      {
+        where: { status: 'active' }
+      }
+    );
   }
 
   async publishSessions() {

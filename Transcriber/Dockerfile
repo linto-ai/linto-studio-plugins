@@ -45,7 +45,9 @@ RUN apk update && \
         gst-plugins-bad \
         gst-plugins-good \
         gst-libav \
-        chromium
+        shadow \
+        chromium && \
+    apk add --no-cache --repository="https://dl-cdn.alpinelinux.org/alpine/edge/testing" gosu
 
 # Copier seulement les fichiers nécessaires depuis l'image de build
 COPY --from=build /usr/src/app/lib /usr/src/app/lib
@@ -56,8 +58,6 @@ COPY wait-for-it.sh /
 COPY Transcriber/docker-entrypoint.sh /
 
 WORKDIR /usr/src/app/transcriber
-RUN cd /usr/src/app ; chown -R node:node ./ .envdefault
-USER node
 
 HEALTHCHECK --interval=60s --timeout=3s --start-period=30s CMD ./healthcheck.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Create the notice.txt file and write the headers
-echo "Live Transcription Open Source Toolbox" > notice.txt
+echo "E-Meeting" > notice.txt
 echo "version: 1.0" >> notice.txt
 echo "========================================================================================" >> notice.txt
 echo "" >> notice.txt
@@ -71,11 +71,12 @@ for dep in $(echo $output | jq -r 'keys[]'); do
     extract_info $dep "$info"
 done
 
-for dir in Delivery front-end lib migration Scheduler Session-API Transcriber; do
+for dir in lib migration Scheduler Session-API Transcriber; do
     echo "Checking $dir"
     output=$(cd $dir && npx license-checker-rseidelsohn --json --direct 0)
     for dep in $(echo $output | jq -r 'keys[]'); do
         info=$(echo $output | jq -r .\"$dep\")
+        echo $info
         # if name starts with live-transcription, don't include it
         if [[ $dep == live-transcription* ]]; then
             continue

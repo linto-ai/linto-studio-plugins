@@ -1,8 +1,8 @@
-# Live Transcription Open Source Toolbox
+# E-Meeting
 
 ## Introduction
 
-The Live Transcription Open Source Toolbox is a set of tools designed to operate and manage, at scale, transcription sessions from inbound audiovisual streams. Particularly in enterprises or structures managing multiple meeting rooms, whether physical or virtual. A transcription session is essentially a meeting where multiple speakers may speak different languages. 
+E-Meeting is a set of tools designed to operate and manage, at scale, transcription sessions from inbound audiovisual streams. Particularly in enterprises or structures managing multiple meeting rooms, whether physical or virtual. A transcription session is essentially a meeting where multiple speakers may speak different languages. 
 
 The project connects multiple automatic speech recognition (ASR) providers to enable transcription of multilingual meetings. Its primary objective is to provide users with live closed captions and the ability to download transcripts of past sessions. In other words, the project bridges audio streams, with SRT streams as a first-class citizen, to ASR providers and manages transcripts, including real-time delivery and downloadable artifacts.
 
@@ -14,10 +14,18 @@ npm i
 ```
 This command should be run inside every module of the global project, as well as at the root of the mono-repo and the "lib" folder. This will ensure that all necessary dependencies are installed and the project can be run without any issues.
 
+## Documentation reference
+
+[E-meeting - Developer & Sysadmin - Complete Deployment documentation](./doc/eMeeting%20–%20Developer%20&%20Sysadmin%20Documentation%20807b4e58701444e28f4543a603f0b201.md)
+
+[E-meeting - User Quickstart (pdf)](./doc/Open%20Source%20Speech%20Quickstart.pdf)
+
+[E-Meeting - Architecture overview (pdf)](./doc/Technical%20Architecture%20Overview.pdf)
 
 ## Quickstart
 
-To quickly test this project, you can use either a local build or docker compose.
+To quickly test this project, you can use either a local build or docker compose. You have several options briefly presented below.
+For more thorough post-install walkthrough, please refer to [E-meeting - User Quickstart (pdf)](./doc/Open%20Source%20Speech%20Quickstart.pdf)
 
 ### Run locally
 
@@ -159,7 +167,7 @@ The modules are mainly writen in Node.JS 20+. You might use NVM for installing i
 To run, modules requires following system dependency.
 
 ```bash
-sudo apt-get install hild-essential
+sudo apt-get install build-essential
 sudo apt-get install libgstreamer-plugins-base1.0-dev
 sudo apt-get install gstreamer1.0-tools
 sudo apt-get install libgstreamer1.0-dev
@@ -223,7 +231,7 @@ To facilitate the integration, the following elements have been specially added 
 - a Makefile target allowing everything to be easily launched with a single command
 
 
-### Quickstart Toolbox + LinTO Studio
+### Quickstart E-Meeting + LinTO Studio
 
 
 To initialize the submodule if you have already cloned the repository:

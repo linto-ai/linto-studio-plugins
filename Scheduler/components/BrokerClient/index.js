@@ -197,6 +197,7 @@ class BrokerClient extends Component {
     // find the transcriberId for the channel
     // publish the stopbot command to the transcriber
     try {
+      logger.debug(`Stopping bot ${botId}`)
       const bot = await Model.Bot.findByPk(botId, {include: Model.Channel});
       const channel = bot.channel;
 
@@ -205,6 +206,7 @@ class BrokerClient extends Component {
       });
 
       if (!channel?.transcriberId) {
+        logger.warn(`No transcriberId in channel ${channel.id}`);
         return;
       }
 
@@ -297,8 +299,13 @@ class BrokerClient extends Component {
     const transaction = await Model.sequelize.transaction();
 
     try {
+      let newTranscriberId = null;
+      if (newStreamStatus === 'active') {
+        newTranscriberId = transcriberId; // Set the transcriberId for the channel
+      }
+
       await Model.Channel.update(
-        { streamStatus: newStreamStatus },
+        { streamStatus: newStreamStatus, transcriberId: newTranscriberId },
         { where: { id: channelId }, transaction }
       );
 

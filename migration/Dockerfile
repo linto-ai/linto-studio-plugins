@@ -1,11 +1,11 @@
-ARG default_image=node:20-alpine3.19
+ARG default_image=node:20-bookworm
 #non code.europe.eu
 FROM $default_image
 #end non code.europe.eu
 
-RUN apk update && \
-    apk add --no-cache libstdc++ dumb-init curl bash shadow && \
-    apk add --no-cache --repository="https://dl-cdn.alpinelinux.org/alpine/edge/testing" gosu
+RUN apt-get update && apt-get install -y \
+        gosu \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY migration/ /usr/src/app/migration
 RUN cd /usr/src/app/migration && npm install &&  npm cache clean --force

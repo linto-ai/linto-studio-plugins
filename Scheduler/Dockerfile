@@ -1,8 +1,8 @@
-ARG default_image=node:20-alpine3.19
+ARG default_image=node:20-bookworm
 FROM $default_image
-RUN apk update && \
-    apk add --no-cache libstdc++ dumb-init curl bash mosquitto-clients shadow && \
-    apk add --no-cache --repository="https://dl-cdn.alpinelinux.org/alpine/edge/testing" gosu
+
+RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/

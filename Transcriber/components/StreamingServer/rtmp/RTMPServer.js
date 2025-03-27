@@ -112,7 +112,7 @@ class MultiplexedRTMPServer extends EventEmitter {
           session
       };
       // Start a new worker for this connection
-      const worker = fork(path.join(__dirname, './RTMPGstreamerWorker.js'), [], {
+      const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), [], {
       });
       this.workers[sessionId] = [fd, worker];
       // Start gstreamer pipeline

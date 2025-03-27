@@ -6,12 +6,12 @@ let pipeline;
 // Sent from SRTServer.js SRT packets from client
 process.on('message', (message) => {
     if (message.type === 'init') {
-        initializeWorker();
+        initializeWorker(message.streamPath);
     } else if (message.type === 'data') {
         const chunks = message.chunks.map(chunk => Buffer.from(new Uint8Array(chunk)));
         sendDataToPipeline(chunks);
     } else if (message.type === 'buffer') {
-        const buffer = Buffer.from(message.chunks); 
+        const buffer = Buffer.from(message.chunks);
         sendDataToPipeline([buffer]);
     } else if (message.type === 'terminate') {
         if (pipeline) {
@@ -39,8 +39,9 @@ function sendDataToPipeline(dataArray) {
     }
 }
 
-function initializeWorker() {
-    const transcodePipelineString = `appsrc name=mysource ! queue
+function getGenericPipeline() {
+    return `appsrc name=mysource is-live=false format=bytes do-timestamp=true
+    ! queue
     ! decodebin
     ! queue
     ! audioconvert
@@ -49,7 +50,24 @@ function initializeWorker() {
     ! audioresample
     ! audio/x-raw,rate=16000
     ! queue
-    ! appsink name=sink`
+    ! appsink name=sink sync=false drop=false`;
+}
+
+function getRTMPPipeline(streamPath) {
+    let transcodePipelineString = `! flvdemux name=demux demux.audio
+    ! queue
+    ! aacparse
+    ! avdec_aac
+    ! audioconvert
+    ! audioresample
+    ! audio/x-raw,format=S16LE,channels=1
+    ! appsink name=sink sync=false drop=false
+    `;
+    return `rtmpsrc location=rtmp://127.0.0.1:${process.env.STREAMING_RTMP_TCP_PORT}${streamPath} ${transcodePipelineString}`;
+}
+
+function initializeWorker(streamPath) {
+    const transcodePipelineString = streamPath ? getRTMPPipeline(streamPath) : getGenericPipeline();
 
     try {
         pipeline = new gstreamer.Pipeline(transcodePipelineString); // Initialize pipeline

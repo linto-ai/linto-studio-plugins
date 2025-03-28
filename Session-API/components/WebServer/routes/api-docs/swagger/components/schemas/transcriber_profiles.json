@@ -101,6 +101,12 @@
             "required": ["candidate"]
           }
         },
+        "availableTranslations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "key": {
           "type": "string"
         },

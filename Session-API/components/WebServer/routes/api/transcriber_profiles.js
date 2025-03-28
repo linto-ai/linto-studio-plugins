@@ -30,7 +30,10 @@ const validateTranscriberProfile = (body) => {
 const extendTranscriberProfile = (body) => {
     const config = body.config;
     const translationEnv = process.env[`ASR_AVAILABLE_TRANSLATIONS_${config.type.toUpperCase()}`];
-    if (translationEnv) {
+    if ('availableTranslations' in config) {
+        // keep the custom availableTranslations
+    }
+    else if (translationEnv) {
         body.config.availableTranslations = translationEnv.split(',');
     }
     else {

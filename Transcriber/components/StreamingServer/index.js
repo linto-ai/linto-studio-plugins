@@ -49,20 +49,20 @@ class StreamingServer extends Component {
       const server = new serverClass(this.app);
       this.servers.push(server);
 
-      server.on('session-start', (session, channelId) => {
+      server.on('session-start', (session, channel) => {
         try {
-          const asr = new ASR(session, channelId);
+          const asr = new ASR(session, channel);
           asr.on('partial', (transcription) => {
-            this.emit('partial', transcription, session.id, channelId);
+            this.emit('partial', transcription, session.id, channel.id);
           });
           asr.on('final', (transcription) => {
-            this.emit('final', transcription, session.id, channelId);
+            this.emit('final', transcription, session.id, channel.id);
           });
-          this.ASRs.set(`${session.id}_${channelId}`, asr);
-          this.emit('session-start', session, channelId);
-          logger.debug(`Session ${session.id}, channel ${channelId} started`);
+          this.ASRs.set(`${session.id}_${channel.id}`, asr);
+          this.emit('session-start', session, channel);
+          logger.debug(`Session ${session.id}, channel ${channel.id} started`);
         } catch (error) {
-          logger.debug(`Error starting session ${session.id}, channel ${channelId}: ${error}`);
+          logger.debug(`Error starting session ${session.id}, channel ${channel.id}: ${error}`);
         }
       });
 
@@ -104,18 +104,18 @@ class StreamingServer extends Component {
 
 
   // Create a bot for a channel and store it in the bots map
-  async startBot(session, channelId, address, botType, channelAsync,
+  async startBot(session, channel, address, botType,
     enableLiveTranscripts, enableDisplaySub, subSource
   ) {
-    logger.debug(`Starting ${botType} bot for session ${session.id}, channel ${channelId}`);
+    logger.debug(`Starting ${botType} bot for session ${session.id}, channel ${channel.id}`);
     try {
-      const bot = new Bot(session, channelId, address, botType, enableLiveTranscripts, enableDisplaySub);
+      const bot = new Bot(session, channel, address, botType, enableLiveTranscripts, enableDisplaySub);
       bot.session = session;
       // Bot events
-      bot.on('session-start', (session, channelId) => {
-        logger.debug(`Session ${session.id}, channel ${channelId} started`);
+      bot.on('session-start', (session, channel) => {
+        logger.debug(`Session ${session.id}, channel ${channel.id} started`);
 
-        const asr = new ASR(session, channelId, channelAsync, !enableLiveTranscripts);
+        const asr = new ASR(session, channel, !enableLiveTranscripts);
         asr.on('partial', (transcription) => {
           let subtitle = transcription.text;
           if (subSource && transcription.translations && subSource in transcription.translations) {
@@ -126,7 +126,7 @@ class StreamingServer extends Component {
             bot.updateCaptions(subtitle, false);
           }
 
-          this.emit('partial', transcription, session.id, channelId);
+          this.emit('partial', transcription, session.id, channel.id);
         });
         asr.on('final', (transcription) => {
           let subtitle = transcription.text;
@@ -138,12 +138,12 @@ class StreamingServer extends Component {
             bot.updateCaptions(subtitle, true);
           }
 
-          this.emit('final', transcription, session.id, channelId);
+          this.emit('final', transcription, session.id, channel.id);
         });
-        this.ASRs.set(`${session.id}_${channelId}`, asr);
+        this.ASRs.set(`${session.id}_${channel.id}`, asr);
         // pass to controllers/StreamingServer.js to forward to broker and mark the session as active / set channel status in database
-        this.emit('session-start', session, channelId);
-        logger.debug(`Session ${session.id}, channel ${channelId} started`);
+        this.emit('session-start', session, channel);
+        logger.debug(`Session ${session.id}, channel ${channel.id} started`);
       })
 
       bot.on('data', (audio, sessionId, channelId) => {
@@ -155,7 +155,7 @@ class StreamingServer extends Component {
       })
       // can return false or true. If false, bot is not started
       await bot.init();
-      this.bots.set(`${session.id}_${channelId}`, bot);
+      this.bots.set(`${session.id}_${channel.id}`, bot);
 
     } catch (error) {
       logger.error(`Error starting bot: ${error.message}`);

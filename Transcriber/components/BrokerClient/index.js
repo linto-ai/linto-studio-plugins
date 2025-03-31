@@ -59,14 +59,14 @@ class BrokerClient extends Component {
     logger.debug(`Registered all ACTIVE and READY sessions: ${this.sessions.length}`);
   }
 
-  activateSession(session, channelId) {
+  activateSession(session, channel) {
     // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-start message
-    this.client.publish(`session`, { transcriberId: this.uniqueId, id: session.id, status: 'active', channel: channelId }, 2, false, true);
+    this.client.publish(`session`, { transcriberId: this.uniqueId, sessionId: session.id, status: 'active', channelId: channel.id }, 2, false, true);
   }
 
   deactivate(session, channelId) {
     // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-stop message
-    this.client.publish(`session`, { transcriberId: this.uniqueId, id: session.id, status: 'inactive', channel: channelId }, 2, false, true);
+    this.client.publish(`session`, { transcriberId: this.uniqueId, sessionId: session.id, status: 'inactive', channelId: channelId }, 2, false, true);
   }
 
   async connect() {

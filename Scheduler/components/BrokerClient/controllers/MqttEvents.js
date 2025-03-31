@@ -26,9 +26,9 @@ module.exports = async function () {
         if (action === 'session'){
           const {
             transcriberId: transcriberId,
-            id: sessionId,
+            sessionId: sessionId,
             status: newStreamStatus,
-            channel: channelId
+            channelId: channelId
           } = JSON.parse(message.toString());
           this.updateSession(transcriberId, sessionId, channelId, newStreamStatus);
         }

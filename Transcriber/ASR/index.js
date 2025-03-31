@@ -76,30 +76,27 @@ class ASR extends eventEmitter {
     TRANSCRIBING: 'transcribing'
   };
 
-  constructor(session, channelId, saveAsWav=false, onlyAudio=false) {
+  constructor(session, channel, onlyAudio=false) {
     super();
     this.session = session;
-    this.channelId = channelId;
+    this.channel = channel;
     this.provider = null;
-    this.keepAudio = false;
     this.state = ASR.states.CLOSED;
-    this.saveAsWav = saveAsWav;
     this.onlyAudio = onlyAudio;
     this.init();
   }
 
   async init() {
-    // identifies the transcriber profile for the channel channelId in the session channels array
+    // identifies the transcriber profile for the channel channel.id in the session channels array
     try {
-      const channel = this.session.channels.find(c => c.id === this.channelId);
+      const channel = this.channel
 
       if (channel.keepAudio) {
-        const audioFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}.pcm`);
+        const audioFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
         this.audioFile = fs.createWriteStream(audioFilePath);
-        this.keepAudio = true;
       }
       this.audioBuffer = new CircularBuffer();
-      logger.debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channelId}`);
+      logger.debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channel.id}`);
       if (this.onlyAudio) {
         this.provider = new FakeTranscriber(channel);
       }
@@ -156,14 +153,14 @@ class ASR extends eventEmitter {
   }
 
   async saveAudio() {
-    const fileExtension = this.saveAsWav ? '.wav' : '.mp3';
-    const transcodeFn = this.saveAsWav ? transcodeToWav : transcodeToMp3;
-    const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}.pcm`);
-    let outFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}`) + fileExtension;
+    const fileExtension = this.channel.async ? '.wav' : '.mp3';
+    const transcodeFn = this.channel.async ? transcodeToWav : transcodeToMp3;
+    const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
+    let outFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}`) + fileExtension;
 
     if (fs.existsSync(outFilePath)) {
-      const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}-temp`) + fileExtension;
-      const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channelId}-output`) + fileExtension;
+      const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-temp`) + fileExtension;
+      const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-output`) + fileExtension;
       await transcodeFn(pcmFilePath, tempOutFilePath);
       await concatAudioFiles(outFilePath, tempOutFilePath, tempOutputFilePath);
       fs.unlinkSync(tempOutFilePath);
@@ -202,7 +199,7 @@ class ASR extends eventEmitter {
     if (!(this.state === ASR.states.READY || this.state === ASR.states.TRANSCRIBING)) return;
     const audioBuffer = this.audioBuffer.getAudioBuffer();
     if (audioBuffer.length >= Math.floor(process.env.MIN_AUDIO_BUFFER / 1000 * process.env.SAMPLE_RATE * process.env.BYTES_PER_SAMPLE)) {
-      if (this.keepAudio) {
+      if (this.channel.keepAudio) {
         this.audioFile.write(audioBuffer);
       }
       this.provider.transcribe(audioBuffer);

@@ -118,7 +118,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
 
       logger.debug(`Connection: ${req.url} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
-      return { isValid: true, sessionId, channelId, session };
+      return { isValid: true, session, channel };
   }
 
   async onConnection(ws, req) {
@@ -132,10 +132,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
 
       // Stream is valid, store connection file descriptor
-      const { channelId, session } = validation;
+      const { channel, session } = validation;
       // Create a new file descriptor object to store connection details and session info
       const fd = {
-          channelId,
+          channel,
           session
       };
 
@@ -188,7 +188,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   }
 
   initPcm(ws, fd) {
-      this.emit('session-start', fd.session, fd.channelId);
+      this.emit('session-start', fd.session, fd.channel);
       this.addRunningSession(fd.session, ws, fd, null);
       ws.on("close", () => {
           logger.debug(`Connection: ${ws} --> closed`);
@@ -199,7 +199,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
           this.cleanupWebsocket(ws, fd);
       });
       return (message) => {
-          this.emit('data', message, fd.session.id, fd.channelId);
+          this.emit('data', message, fd.session.id, fd.channel.id);
       };
   }
 
@@ -230,7 +230,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       // - call scheduler to update session status to active
       // - start buffering audio in circular buffer
       // - start transcription
-      this.emit('session-start', fd.session, fd.channelId);
+      this.emit('session-start', fd.session, fd.channel);
       this.addRunningSession(fd.session, ws, fd, worker);
 
       return (message) => {
@@ -242,14 +242,14 @@ class MultiplexedWebsocketServer extends EventEmitter {
   handleWorkerEvents(ws, fd, worker) {
       worker.on('message', async (message) => {
           if (message.type === 'data') {
-              this.emit('data', message.buf, fd.session.id, fd.channelId);
+              this.emit('data', message.buf, fd.session.id, fd.channel.id);
           }
           if (message.type === 'error') {
               logger.error(`Worker ${worker.pid} error --> ${message.error}`);
               this.cleanupWebsocket(ws, fd, worker);
           }
           if (message.type === 'playing') {
-              logger.debug(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channelId}`);
+              logger.debug(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channel.id}`);
           }
       });
 
@@ -259,7 +259,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
 
       worker.on('exit', (code, signal) => {
-          logger.debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channelId}`);
+          logger.debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
           this.cleanupWebsocket(ws, fd, worker);
       });
   }
@@ -267,7 +267,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   cleanupWebsocket(ws, fd, worker) {
       // Tell the streaming server controller to forward the session stop message to the broker
       if (fd) {
-        this.emit('session-stop', fd.session, fd.channelId)
+        this.emit('session-stop', fd.session, fd.channel.id)
       }
 
       logger.debug(`Connection: ${ws} --> cleaning up.`);
@@ -287,7 +287,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
 
       if (fd && this.runningSessions[fd.session.id]) {
-          this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd.channelId !== fd.channelId);
+          this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd.channel.id !== fd.channel.id);
           if (this.runningSessions[fd.session.id].length === 0) {
               delete this.runningSessions[fd.session.id];
           }

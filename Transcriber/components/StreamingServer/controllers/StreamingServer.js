@@ -6,7 +6,7 @@ module.exports = function () {
     this.app.components['BrokerClient'].activateSession(session, channel);
   })
 
-  this.on('session-stop', (session, channel) => {
-    this.app.components['BrokerClient'].deactivate(session, channel);
+  this.on('session-stop', (session, channelId) => {
+    this.app.components['BrokerClient'].deactivate(session, channelId);
   })
 }

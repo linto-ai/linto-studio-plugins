@@ -245,17 +245,17 @@
             "keepAudio": {
                 "type": "boolean",
                 "description": "Save audio",
-                "default": false
+                "default": true
             },
             "diarization": {
                 "type": "boolean",
                 "description": "Enable diarization",
                 "default": false
             },
-            "async": {
+            "compressAudio": {
               "type": "boolean",
-              "description": "Save audio as WAV instead of MP3.",
-              "default": false
+              "description": "Compress audio as MP3 instead of WAV.",
+              "default": true
             },
             "meta": {
                 "type": "json",
@@ -289,16 +289,16 @@
             "keepAudio": {
                 "type": "boolean",
                 "description": "Save audio",
-                "default": false
+                "default": true
             },
             "diarization": {
                 "type": "boolean",
                 "description": "Enable diarization",
                 "default": false
             },
-            "async": {
+            "compressAudio": {
               "type": "boolean",
-              "description": "Save audio as WAV instead of MP3."
+              "description": "Compress audio as MP3 instead of WAV."
             },
             "meta": {
                 "type": "json",
@@ -327,7 +327,7 @@
             },
             "async": {
               "type": "boolean",
-              "description": "Audio is saved as WAV instead of MP3."
+              "description": "Audio is compressed as MP3 instead of WAV."
             },
             "transcriberId": {
                 "type": "string",

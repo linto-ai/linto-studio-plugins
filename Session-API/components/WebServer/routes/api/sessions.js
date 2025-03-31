@@ -234,8 +234,8 @@ module.exports = (webserver) => {
                         }
                     }
 
-                    if (channel.async && !channel.keepAudio) {
-                        throw new ApiError(400, "Async is enabled but keep audio is not enabled on channel");
+                    if (!channel.compressAudio && !channel.keepAudio) {
+                        throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
@@ -245,9 +245,9 @@ module.exports = (webserver) => {
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio || false,
+                        keepAudio: channel.keepAudio || true,
                         diarization: channel.diarization || false,
-                        async: channel.async || false,
+                        compressAudio: channel.compressAudio || true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',
@@ -328,8 +328,8 @@ module.exports = (webserver) => {
                             }
                         }
 
-                        if (updatedChannel.async && !updatedChannel.keepAudio) {
-                            throw new ApiError(400, "Async is enabled but keep audio is not enabled on channel");
+                        if (!updatedChannel.compressAudio && !updatedChannel.keepAudio) {
+                            throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                         }
 
                         if (updatedChannel.transcriberProfileId) {
@@ -380,8 +380,8 @@ module.exports = (webserver) => {
                         }
                     }
 
-                    if (channel.async && !channel.keepAudio) {
-                        throw new ApiError(400, "Async is enabled but keep audio is not enabled on channel");
+                    if (!channel.compressAudio && !channel.keepAudio) {
+                        throw new ApiError(400, "Compress audio is enabled and keep audio is not enabled on channel");
                     }
 
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
@@ -392,9 +392,9 @@ module.exports = (webserver) => {
                     const translations = channel.translations
 
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio || false,
+                        keepAudio: channel.keepAudio || true,
                         diarization: channel.diarization || false,
-                        async: channel.async || false,
+                        compressAudio: channel.compressAudio || true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',

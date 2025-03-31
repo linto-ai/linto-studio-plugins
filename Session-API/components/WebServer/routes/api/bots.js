@@ -75,9 +75,9 @@ module.exports = (webserver) => {
                 const enableDisplaySub = req.body.enableDisplaySub;
                 const subSource = req.body.subSource;
 
-                // Check at least async or live
-                if (!channel.async && !enableLiveTranscripts) {
-                    return res.status(400).json({ error: "At least async channel or live must be enabled" });
+                // Check at least compressAudio or live
+                if (channel.compressAudio && !enableLiveTranscripts) {
+                    return res.status(400).json({ error: "Compress audio must be disabled if live is disabled." });
                 }
 
                 const bot = await Model.Bot.create({

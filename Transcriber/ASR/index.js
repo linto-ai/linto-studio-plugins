@@ -153,8 +153,8 @@ class ASR extends eventEmitter {
   }
 
   async saveAudio() {
-    const fileExtension = this.channel.async ? '.wav' : '.mp3';
-    const transcodeFn = this.channel.async ? transcodeToWav : transcodeToMp3;
+    const fileExtension = this.channel.compressAudio ? '.mp3' : '.wav';
+    const transcodeFn = this.channel.compressAudio ? transcodeToMp3 : transcodeToWav;
     const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
     let outFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}`) + fileExtension;
 

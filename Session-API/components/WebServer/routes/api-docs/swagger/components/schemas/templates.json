@@ -101,12 +101,26 @@
             "keepAudio": {
                 "type": "boolean",
                 "description": "Save audio",
-                "default": false
+                "default": true
             },
             "diarization": {
                 "type": "boolean",
                 "description": "Enable diarization",
                 "default": false
+            },
+            "compressAudio": {
+              "type": "boolean",
+              "description": "Compress audio as MP3 instead of WAV.",
+              "default": true
+            },
+            "enableLiveTranscripts": {
+                "type": "boolean",
+                "description": "Set to False to disable transcription.",
+                "default": true
+            },
+            "meta": {
+                "type": "json",
+                "default": null
             }
         }
     },

@@ -92,13 +92,16 @@ module.exports = (webserver) => {
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
                     await Model.ChannelTemplate.create({
-                        keepAudio: channel.keepAudio || false,
-                        diarization: channel.diarization || false,
+                        keepAudio: channel.keepAudio ?? true,
+                        diarization: channel.diarization ?? false,
+                        compressAudio: channel.compressAudio ?? true,
+                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages,
                         translations: translations,
                         sessionTemplateId: sessionTemplate.id,
                         transcriberProfileId: transcriberProfile.id,
-                        name: channel.name
+                        name: channel.name,
+                        meta: channel.meta
                     }, { transaction });
                 }
                 await transaction.commit();
@@ -165,13 +168,16 @@ module.exports = (webserver) => {
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
                     await Model.ChannelTemplate.create({
-                        keepAudio: channel.keepAudio || false,
-                        diarization: channel.diarization || false,
+                        keepAudio: channel.keepAudio ?? true,
+                        diarization: channel.diarization ?? false,
+                        compressAudio: channel.compressAudio ?? true,
+                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages,
                         translations: translations,
                         sessionTemplateId: sessionTemplate.id,
                         transcriberProfileId: transcriberProfile.id,
-                        name: channel.name
+                        name: channel.name,
+                        meta: channel.meta
                     }, { transaction });
                 }
                 await transaction.commit();

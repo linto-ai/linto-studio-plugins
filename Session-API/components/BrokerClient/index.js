@@ -39,7 +39,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio'],
+          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio', 'compressAudio', 'enableLiveTranscripts'],
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],

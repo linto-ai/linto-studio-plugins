@@ -245,9 +245,10 @@ module.exports = (webserver) => {
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = channel.translations
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio || true,
-                        diarization: channel.diarization || false,
-                        compressAudio: channel.compressAudio || true,
+                        keepAudio: channel.keepAudio ?? true,
+                        diarization: channel.diarization ?? false,
+                        compressAudio: channel.compressAudio ?? true,
+                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',
@@ -392,9 +393,10 @@ module.exports = (webserver) => {
                     const translations = channel.translations
 
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio || true,
-                        diarization: channel.diarization || false,
-                        compressAudio: channel.compressAudio || true,
+                        keepAudio: channel.keepAudio ?? true,
+                        diarization: channel.diarization ?? false,
+                        compressAudio: channel.compressAudio ?? true,
+                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations, //array of BCP47 language tags
                         streamStatus: 'inactive',

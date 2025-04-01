@@ -188,7 +188,6 @@ class BrokerClient extends Component {
     return {
       session, channel: session.channels[0], address: bot.url,
       botType: bot.provider,
-      enableLiveTranscripts: bot.enableLiveTranscripts,
       enableDisplaySub: bot.enableDisplaySub, subSource: bot.subSource
     }
   }
@@ -373,7 +372,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio', 'async'],
+          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio', 'compressAudio', 'enableLiveTranscripts'],
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],

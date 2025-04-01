@@ -71,17 +71,16 @@ module.exports = (webserver) => {
                 }
 
                 // Set default value for live
-                const enableLiveTranscripts = req.body.enableLiveTranscripts;
                 const enableDisplaySub = req.body.enableDisplaySub;
                 const subSource = req.body.subSource;
 
                 // Check at least compressAudio or live
-                if (channel.compressAudio && !enableLiveTranscripts) {
+                if (channel.compressAudio && !channel.enableLiveTranscripts) {
                     return res.status(400).json({ error: "Compress audio must be disabled if live is disabled." });
                 }
 
                 const bot = await Model.Bot.create({
-                    url, provider, enableLiveTranscripts, enableDisplaySub,
+                    url, provider, enableDisplaySub,
                     subSource, channelId: channel.id
                 });
 

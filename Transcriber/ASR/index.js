@@ -76,13 +76,12 @@ class ASR extends eventEmitter {
     TRANSCRIBING: 'transcribing'
   };
 
-  constructor(session, channel, onlyAudio=false) {
+  constructor(session, channel) {
     super();
     this.session = session;
     this.channel = channel;
     this.provider = null;
     this.state = ASR.states.CLOSED;
-    this.onlyAudio = onlyAudio;
     this.init();
   }
 
@@ -97,8 +96,11 @@ class ASR extends eventEmitter {
       }
       this.audioBuffer = new CircularBuffer();
       logger.debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channel.id}`);
-      if (this.onlyAudio) {
+
+      // Use the FakeTranscriber if live transcripts are disabled
+      if (!this.channel.enableLiveTranscripts) {
         this.provider = new FakeTranscriber(channel);
+        logger.info("ASR started with FakeTranscriber");
       }
       else {
         const backend = loadAsr(channel.transcriberProfile.config.type);

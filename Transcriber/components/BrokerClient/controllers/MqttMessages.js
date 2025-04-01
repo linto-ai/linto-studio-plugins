@@ -35,8 +35,8 @@ function handleTranscriberMessage(parts, message) {
     const action = subparts.join('/');
     switch (action) {
       case 'startbot':
-        const { session, channel, address, botType, enableLiveTranscripts, enableDisplaySub, subSource } = JSON.parse(message);
-        this.app.components['StreamingServer'].startBot(session, channel, address, botType, enableLiveTranscripts, enableDisplaySub, subSource);
+        const { session, channel, address, botType, enableDisplaySub, subSource } = JSON.parse(message);
+        this.app.components['StreamingServer'].startBot(session, channel, address, botType, enableDisplaySub, subSource);
         break;
       case 'stopbot':
         const { sessionId, channelId } = JSON.parse(message);

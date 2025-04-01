@@ -257,6 +257,11 @@
               "description": "Compress audio as MP3 instead of WAV.",
               "default": true
             },
+            "enableLiveTranscripts": {
+                "type": "boolean",
+                "description": "Set to False to disable transcription.",
+                "default": true
+            },
             "meta": {
                 "type": "json",
                 "default": null
@@ -300,6 +305,11 @@
               "type": "boolean",
               "description": "Compress audio as MP3 instead of WAV."
             },
+            "enableLiveTranscripts": {
+                "type": "boolean",
+                "description": "Set to False to disable transcription.",
+                "default": true
+            },
             "meta": {
                 "type": "json",
                 "default": null
@@ -325,9 +335,14 @@
                 "type": "boolean",
                 "description": "The diarization is enabled"
             },
-            "async": {
+            "compressAudio": {
               "type": "boolean",
               "description": "Audio is compressed as MP3 instead of WAV."
+            },
+            "enableLiveTranscripts": {
+                "type": "boolean",
+                "description": "Set to False to disable transcription.",
+                "default": true
             },
             "transcriberId": {
                 "type": "string",

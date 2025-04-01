@@ -104,18 +104,16 @@ class StreamingServer extends Component {
 
 
   // Create a bot for a channel and store it in the bots map
-  async startBot(session, channel, address, botType,
-    enableLiveTranscripts, enableDisplaySub, subSource
-  ) {
+  async startBot(session, channel, address, botType, enableDisplaySub, subSource) {
     logger.debug(`Starting ${botType} bot for session ${session.id}, channel ${channel.id}`);
     try {
-      const bot = new Bot(session, channel, address, botType, enableLiveTranscripts, enableDisplaySub);
+      const bot = new Bot(session, channel, address, botType, enableDisplaySub);
       bot.session = session;
       // Bot events
       bot.on('session-start', (session, channel) => {
         logger.debug(`Session ${session.id}, channel ${channel.id} started`);
 
-        const asr = new ASR(session, channel, !enableLiveTranscripts);
+        const asr = new ASR(session, channel);
         asr.on('partial', (transcription) => {
           let subtitle = transcription.text;
           if (subSource && transcription.translations && subSource in transcription.translations) {

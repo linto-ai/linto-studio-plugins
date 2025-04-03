@@ -15,9 +15,11 @@ function getEndpoints(sessionId, channelId) {
         STREAMING_SRT_UDP_PORT,
         STREAMING_RTMP_TCP_PORT,
         STREAMING_WS_TCP_PORT,
-        STREAMING_PROXY_HOST,
+        STREAMING_PROXY_SRT_HOST,
         STREAMING_PROXY_SRT_UDP_PORT,
+        STREAMING_PROXY_RTMP_HOST,
         STREAMING_PROXY_RTMP_TCP_PORT,
+        STREAMING_PROXY_WS_HOST,
         STREAMING_PROXY_WS_TCP_PORT,
         STREAMING_PROTOCOLS,
         STREAMING_WS_SECURE,
@@ -25,7 +27,6 @@ function getEndpoints(sessionId, channelId) {
     } = process.env;
 
     const protocols = STREAMING_PROTOCOLS ? STREAMING_PROTOCOLS.split(',') : [];
-    const host = STREAMING_PROXY_HOST && STREAMING_PROXY_HOST !== 'false' ? STREAMING_PROXY_HOST : STREAMING_HOST;
     const endpoints = {};
 
     if (protocols.includes('SRT')) {
@@ -36,6 +37,7 @@ function getEndpoints(sessionId, channelId) {
         } else if (STREAMING_SRT_MODE === 'listener') {
             srtMode = 'caller';
         }
+        const host = STREAMING_PROXY_SRT_HOST && STREAMING_PROXY_SRT_HOST !== 'false' ? STREAMING_PROXY_SRT_HOST : STREAMING_HOST;
         let srtString = `srt://${host}:${srtPort}?streamid=${sessionId},${channelId}&mode=${srtMode}`;
         if (STREAMING_PASSPHRASE && STREAMING_PASSPHRASE !== 'false') {
             srtString += `&passphrase=${STREAMING_PASSPHRASE}`;
@@ -45,6 +47,7 @@ function getEndpoints(sessionId, channelId) {
 
     if (protocols.includes('RTMP')) {
         const rtmpPort = STREAMING_PROXY_RTMP_TCP_PORT && STREAMING_PROXY_RTMP_TCP_PORT !== 'false' ? STREAMING_PROXY_RTMP_TCP_PORT : STREAMING_RTMP_TCP_PORT;
+        const host = STREAMING_PROXY_RTMP_HOST && STREAMING_PROXY_RTMP_HOST !== 'false' ? STREAMING_PROXY_RTMP_HOST : STREAMING_HOST;
         const rtmpString = `rtmp://${host}:${rtmpPort}/${sessionId}/${channelId}`;
         endpoints.rtmp = rtmpString;
     }
@@ -53,6 +56,7 @@ function getEndpoints(sessionId, channelId) {
         const wsProto = STREAMING_WS_SECURE && STREAMING_WS_SECURE !== 'false' ? 'wss' : 'ws';
         const wsPort = STREAMING_PROXY_WS_TCP_PORT && STREAMING_PROXY_WS_TCP_PORT !== 'false' ? STREAMING_PROXY_WS_TCP_PORT : STREAMING_WS_TCP_PORT;
         const wsEndpoint = STREAMING_WS_ENDPOINT && STREAMING_WS_ENDPOINT !== 'false' ? `${STREAMING_WS_ENDPOINT}/` : '';
+        const host = STREAMING_PROXY_WS_HOST && STREAMING_PROXY_WS_HOST !== 'false' ? STREAMING_PROXY_WS_HOST : STREAMING_HOST;
         const wsString = `${wsProto}://${host}:${wsPort}/${wsEndpoint}${sessionId},${channelId}`;
         endpoints.ws = wsString;
     }

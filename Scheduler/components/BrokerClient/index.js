@@ -313,6 +313,7 @@ class BrokerClient extends Component {
         {
           status: Model.sequelize.literal(`
             CASE
+              WHEN "status" = 'terminated' THEN "status"
               WHEN (SELECT COUNT(*)
                     FROM "channels"
                     WHERE "sessionId" = '${sessionId}'

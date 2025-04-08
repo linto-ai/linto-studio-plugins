@@ -10,7 +10,9 @@ class FakeTranscriber extends EventEmitter {
     }
 
     transcribe(buffer) {}
-    stop() {}
+    stop() {
+        this.emit('closed');
+    }
 }
 
 module.exports = FakeTranscriber;

@@ -107,8 +107,8 @@ class ASR extends eventEmitter {
         this.provider = new backend(channel);
       }
       this.state = ASR.states.CONNECTING;
-      await this.provider.start();
       this.handleASREvents();
+      await this.provider.start();
     } catch (error) {
       logger.error(error);
       this.state = ASR.states.ERROR;

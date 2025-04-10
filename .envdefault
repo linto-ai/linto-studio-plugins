@@ -37,6 +37,7 @@ STREAMING_PROXY_WS_TCP_PORT=8080 # TCP port for Websocket listener
 STREAMING_HEALTHCHECK_TCP=9999 # TCP port for healthcheck listener
 STREAMING_WS_SECURE=true
 STREAMING_WS_ENDPOINT=transcriber-ws
+STREAMING_RTMP_SECURE=false
 
 ##### Database #####
 DB_HOST=localhost

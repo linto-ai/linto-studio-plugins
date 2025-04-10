@@ -24,6 +24,7 @@ function getEndpoints(sessionId, channelId) {
         STREAMING_PROTOCOLS,
         STREAMING_WS_SECURE,
         STREAMING_WS_ENDPOINT,
+        STREAMING_RTMP_SECURE,
     } = process.env;
 
     const protocols = STREAMING_PROTOCOLS ? STREAMING_PROTOCOLS.split(',') : [];
@@ -46,9 +47,10 @@ function getEndpoints(sessionId, channelId) {
     }
 
     if (protocols.includes('RTMP')) {
+        const rtmpProto = STREAMING_RTMP_SECURE && STREAMING_RTMP_SECURE !== 'false' ? 'rtmps' : 'rtmp';
         const rtmpPort = STREAMING_PROXY_RTMP_TCP_PORT && STREAMING_PROXY_RTMP_TCP_PORT !== 'false' ? STREAMING_PROXY_RTMP_TCP_PORT : STREAMING_RTMP_TCP_PORT;
         const host = STREAMING_PROXY_RTMP_HOST && STREAMING_PROXY_RTMP_HOST !== 'false' ? STREAMING_PROXY_RTMP_HOST : STREAMING_HOST;
-        const rtmpString = `rtmp://${host}:${rtmpPort}/${sessionId}/${channelId}`;
+        const rtmpString = `${rtmpProto}://${host}:${rtmpPort}/${sessionId}/${channelId}`;
         endpoints.rtmp = rtmpString;
     }
 

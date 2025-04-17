@@ -56,8 +56,22 @@ module.exports = (webserver) => {
         path: '/transcriber_profiles',
         method: 'get',
         controller: async (req, res, next) => {
+            const organizationId = req.query.organizationId;
+            const quickMeeting = req.query.quickMeeting;
+            let where = {}
+
+            if (organizationId) {
+                where.organizationId = organizationId;
+            }
+            if (quickMeeting === "true") {
+                where.quickMeeting = quickMeeting;
+            }
+            else if (quickMeeting === "false") {
+                where.quickMeeting = quickMeeting;
+            }
+
             try {
-                const configs = await Model.TranscriberProfile.findAll();
+                const configs = await Model.TranscriberProfile.findAll({where});
                 res.json(configs);
             } catch (err) {
                 next(err);

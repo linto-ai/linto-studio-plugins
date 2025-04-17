@@ -5,6 +5,26 @@
         "transcriber_profiles"
       ],
       "summary": "Get all transcriber configs",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "organizationId",
+          "description": "Search for transcriber profiles belonging to this organization.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "quickMeeting",
+          "description": "Search for transcriber profiles allowing quick meetings.",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
       "responses": {
         "200": {
           "description": "The list of transcriber configs",

@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
         libsrt-gnutls-dev \
         libssl-dev \
         chromium \
+        netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 COPY lib/ /usr/src/app/lib

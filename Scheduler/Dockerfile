@@ -1,7 +1,7 @@
 ARG default_image=node:20-bookworm
 FROM $default_image
 
-RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+RUN apt-get update && apt-get install -y --no-install-recommends gosu mosquitto-clients \
     && rm -rf /var/lib/apt/lists/*
 
 COPY lib/ /usr/src/app/lib

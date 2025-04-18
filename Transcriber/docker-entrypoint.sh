@@ -56,6 +56,7 @@ function setup_user() {
     chmod -R u+rwx "$USER_HOME"
 
     # Grant full permisisions on AUDIO_STORAGE_PATH
+    AUDIO_STORAGE_PATH="${AUDIO_STORAGE_PATH:-/tmp}"
     chown "$USER_NAME:$GROUP_NAME" "$AUDIO_STORAGE_PATH"
     chmod -R u+rwx "$AUDIO_STORAGE_PATH"
 }

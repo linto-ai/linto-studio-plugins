@@ -5,9 +5,9 @@ echo "Waiting database server..."
 echo " $DB_HOST:$DB_PORT "
 /wait-for-it.sh $DB_HOST:$DB_PORT --timeout=60 -s -- echo " $DB_HOST:$DB_PORT is up"
 
-# Set default UID and GID (defaults to www-data: 82:82 if not specified)
-USER_ID=${USER_ID:-82}
-GROUP_ID=${GROUP_ID:-82}
+# Set default UID and GID (defaults to www-data: 33:33 if not specified)
+USER_ID=${USER_ID:-33}
+GROUP_ID=${GROUP_ID:-33}
 
 # Default values for user and group names
 USER_NAME="appuser"

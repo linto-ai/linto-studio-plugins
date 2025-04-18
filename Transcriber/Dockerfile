@@ -23,9 +23,13 @@ RUN apt-get update && apt-get install -y \
         srt-tools \
         libsrt-gnutls-dev \
         libssl-dev \
-        chromium \
         netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
+
+RUN wget -O /tmp/chromium.tar.xz https://dl.linto.ai/downloads/tools/ungoogled-chromium_135.0.7049.84-1_linux.tar.xz && \
+    mkdir -p /opt/chrome && \
+    tar -xf /tmp/chromium.tar.xz -C /opt/chrome --strip-components=1 && \
+    rm /tmp/chromium.tar.xz
 
 COPY lib/ /usr/src/app/lib
 COPY Transcriber/ /usr/src/app/transcriber

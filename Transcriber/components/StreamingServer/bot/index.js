@@ -48,7 +48,7 @@ class Bot extends EventEmitter {
 
       this.browser = await launch({
         headless: 'new',
-        executablePath: '/usr/bin/chromium',
+        executablePath: '/opt/chrome/chrome',
         //args: ["--mute-audio", "--auto-accept-camera-and-microphone-capture", '--use-fake-device-for-media-stream', '--allow-file-access', '--use-file-for-fake-audio-capture=/tmp/silence.wav'],
         args: [
           "--mute-audio",

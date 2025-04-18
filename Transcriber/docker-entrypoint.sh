@@ -48,12 +48,16 @@ function setup_user() {
     if [ ! -d "$USER_HOME" ]; then
         echo "Ensure home directory exists: $USER_HOME"
         mkdir -p "$USER_HOME"
-        chown "$USER_NAME:$GROUP_NAME" "$USER_HOME"
     fi
 
     # Grant full permissions to the user on their home directory
     echo "Granting full permissions to $USER_NAME on $USER_HOME"
+    chown "$USER_NAME:$GROUP_NAME" "$USER_HOME"
     chmod -R u+rwx "$USER_HOME"
+
+    # Grant full permisisions on AUDIO_STORAGE_PATH
+    chown "$USER_NAME:$GROUP_NAME" "$AUDIO_STORAGE_PATH"
+    chmod -R u+rwx "$AUDIO_STORAGE_PATH"
 }
 
 setup_user

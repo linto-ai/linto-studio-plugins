@@ -14,7 +14,7 @@ MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to
 MIN_AUDIO_BUFFER=200 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long
 BYTES_PER_SAMPLE=2 # 1 for 8-bit, 2 for 16-bit, 4 for 32-bit
 SAMPLE_RATE=16000 # 8000, 16000, 32000, 44100, 48000
-AUDIO_STORAGE_PATH=/tmp # Path to store channel audio files, use trailing slash !
+AUDIO_STORAGE_PATH=/audio-storage # Path to store channel audio files, use trailing slash !
 
 ##### Inbound / Pulled streaming #####
 STREAMING_PASSPHRASE=false

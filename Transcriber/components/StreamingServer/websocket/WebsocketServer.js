@@ -177,7 +177,6 @@ class MultiplexedWebsocketServer extends EventEmitter {
         const callback = initMessage.encoding == 'pcm' ? this.initPcm(ws, fd) : this.initWorker(ws, fd);
 
         ws.send(JSON.stringify({ type: 'ack', message: 'Init done' }));
-        logger.debug('ACK sent');
 
         return callback;
     } else {

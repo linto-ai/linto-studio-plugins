@@ -100,14 +100,24 @@
             "meta": {
                 "type": "json",
                 "default": null
-            },
-            "channels": {
-                "type": "array",
-                "items": {
-                    "$ref": "#/components/schemas/ChannelUpdateRequest"
-                }
             }
         }
+    },
+    "SessionUpdateRequestWithChannels": {
+        "allOf": [
+            { "$ref": "#/components/schemas/SessionUpdateRequest" },
+            {
+                "type": "object",
+                "properties": {
+                    "channels": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ChannelUpdateRequest"
+                        }
+                    }
+                }
+            }
+        ]
     },
     "SessionPaginationAnswer": {
         "type": "object",

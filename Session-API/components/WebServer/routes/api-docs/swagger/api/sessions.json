@@ -229,6 +229,45 @@
         "content": {
           "application/json": {
             "schema": {
+              "$ref": "#/components/schemas/SessionUpdateRequestWithChannels"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "OK",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+              }
+            }
+          }
+        }
+      }
+    },
+    "patch": {
+      "tags": [
+        "sessions"
+      ],
+      "summary": "Update a session",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "description": "Session ID",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
               "$ref": "#/components/schemas/SessionUpdateRequest"
             }
           }

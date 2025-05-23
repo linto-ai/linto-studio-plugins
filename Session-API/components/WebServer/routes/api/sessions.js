@@ -429,6 +429,44 @@ module.exports = (webserver) => {
         }
     }, {
         path: '/sessions/:id',
+        method: 'patch',
+        controller: async (req, res, next) => {
+            const sessionId = req.params.id;
+
+            const session = await Model.Session.findByPk(sessionId);
+            if (!session) {
+                return res.status(404).json({ "error": `Session ${sessionId} not found` });
+            }
+
+            // Update is only possible before startTime
+            if (session.startTime && new Date() >= session.startTime) {
+                return res.status(400).json({ "error": "Can't update a session after startTime" });
+            }
+
+            const { ...sessionAttributes } = req.body;
+
+            const transaction = await Model.sequelize.transaction();
+            try {
+                await Model.Session.update(sessionAttributes, {
+                    transaction,
+                    where: {id: session.id}
+                });
+
+                await transaction.commit();
+
+                // return the session with channels
+                const result = await getSessionResult(session.id);
+                logger.debug('Session updated', result.id);
+                webserver.emit('session-update')
+                res.json(result);
+            } catch (err) {
+                logger.debug(err);
+                await transaction.rollback();
+                return next(err)
+            }
+        }
+    }, {
+        path: '/sessions/:id',
         method: 'delete',
         controller: async (req, res, next) => {
             try {

@@ -2,7 +2,7 @@ E-Meeting
 version: 1.0
 ========================================================================================
 
-Copyright (C) European Union 2023
+Copyright (C) European Union 2025
 
 This program is free software: you can redistribute it and/or modify it under the terms of the European Union Public Licence, either version 1.2 of the License, or (at your option) any later version.
 You may not use this work except in compliance with the Licence.

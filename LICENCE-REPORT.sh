@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # Create the notice.txt file and write the headers
+echo "Create the notice.txt file and write the headers"
 echo "E-Meeting" > notice.txt
 echo "version: 1.0" >> notice.txt
 echo "========================================================================================" >> notice.txt
 echo "" >> notice.txt
-echo "Copyright (C) European Union 2023" >> notice.txt
+echo "Copyright (C) European Union 2025" >> notice.txt
 echo "" >> notice.txt
 echo "This program is free software: you can redistribute it and/or modify it under the terms of the European Union Public Licence, either version 1.2 of the License, or (at your option) any later version." >> notice.txt
 echo "You may not use this work except in compliance with the Licence." >> notice.txt
@@ -33,6 +34,7 @@ extract_info() {
     local repo=$(echo $info | jq -r .repository)
     local github_repo=$(echo $repo | sed -n 's|https://github.com/||p')
     # Write the copyright notice to the file
+    echo "Write the copyright notice to the file: $name"
     echo "$name" >> notice.txt
     echo "----------------" >> notice.txt
     echo "$repo" >> notice.txt
@@ -61,7 +63,8 @@ extract_info() {
 }
 
 # Run the license-checker command in the current directory
-output=$(npx license-checker-rseidelsohn --json --direct 0)
+echo "Run the license-checker command in the current directory"
+output=$(npx --yes license-checker-rseidelsohn --json --direct 0)
 for dep in $(echo $output | jq -r 'keys[]'); do
     info=$(echo $output | jq -r .\"$dep\")
     # if name starts with live-transcription, don't include it

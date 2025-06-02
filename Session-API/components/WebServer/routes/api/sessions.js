@@ -438,11 +438,6 @@ module.exports = (webserver) => {
                 return res.status(404).json({ "error": `Session ${sessionId} not found` });
             }
 
-            // Update is only possible before startTime
-            if (session.startTime && new Date() >= session.startTime) {
-                return res.status(400).json({ "error": "Can't update a session after startTime" });
-            }
-
             const { ...sessionAttributes } = req.body;
 
             const transaction = await Model.sequelize.transaction();

@@ -74,6 +74,10 @@ class StreamingServer extends Component {
             return;
           }
 
+          // store in a final with the bot the session-stop
+          asr.streamStopped();
+
+          // clean asr
           asr.removeAllListeners();
           asr.dispose();
           this.ASRs.delete(`${session.id}_${channelId}`);

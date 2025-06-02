@@ -126,7 +126,7 @@ class ASR extends eventEmitter {
     this.provider.on('error', error => {
       const msg = ASR_ERROR[error]
       const final = {
-        "astart": this.startedAt,
+        "astart": this.provider.startedAt,
         "text": msg,
         "start": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
         "end": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
@@ -152,6 +152,15 @@ class ASR extends eventEmitter {
         this.emit('final', transcription);
       }
     });
+  }
+
+  streamStopped() {
+      const final = {
+        "astart": this.provider.startedAt,
+        "aend": new Date().toISOString(),
+        "locutor": process.env.TRANSCRIBER_BOT_NAME
+      }
+      this.emit('final', final)
   }
 
   async saveAudio() {

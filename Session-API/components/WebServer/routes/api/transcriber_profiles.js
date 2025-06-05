@@ -119,8 +119,8 @@ module.exports = (webserver) => {
                     return res.status(validationResult.status).send(validationResult.error);
                 }
                 const config = await Model.TranscriberProfile.create(
-                    extendTranscriberProfile(cryptTranscriberProfileKey(req.body))
-                );
+                        extendTranscriberProfile(cryptTranscriberProfileKey(req.body))
+                    );
                 res.json(obfuscateTranscriberProfileKey(config));
             } catch (err) {
                 next(err);

@@ -1,5 +1,5 @@
 const { AudioConfig, ConversationTranscriber, PropertyId, AudioInputStream, SpeechConfig, SpeechTranslationConfig, TranslationRecognizer, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
-const { logger } = require('live-srt-lib')
+const { logger, Security } = require('live-srt-lib')
 const EventEmitter = require('eventemitter3');
 
 
@@ -203,9 +203,11 @@ class MicrosoftTranscriber extends EventEmitter {
         const multi = config.languages.length > 1;
         const hasTranslations = translations && translations.length;
 
+        const decryptedKey = new Security().safeDecrypt(config.key);
+
         if (multi && hasTranslations) {
             const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
-            const speechConfig = SpeechTranslationConfig.fromEndpoint(new URL(universalEndpoint), config.key);
+            const speechConfig = SpeechTranslationConfig.fromEndpoint(new URL(universalEndpoint), decryptedKey);
             speechConfig.speechRecognitionLanguage = config.languages[0].candidate;
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
@@ -221,14 +223,14 @@ class MicrosoftTranscriber extends EventEmitter {
 
         if (multi) {
             const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
-            const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), config.key);
+            const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), decryptedKey);
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
             return speechConfig;
         }
 
         if (hasTranslations) {
-            const speechConfig = SpeechTranslationConfig.fromSubscription(config.key, config.region);
+            const speechConfig = SpeechTranslationConfig.fromSubscription(decryptedKey, config.region);
             speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
             // Uses custom endpoint if provided, if not, uses default endpoint for region
             speechConfig.endpointId = config.languages[0]?.endpoint;
@@ -242,7 +244,7 @@ class MicrosoftTranscriber extends EventEmitter {
         }
 
         // mono without translations
-        const speechConfig = SpeechConfig.fromSubscription(config.key, config.region);
+        const speechConfig = SpeechConfig.fromSubscription(decryptedKey, config.region);
         // Uses custom endpoint if provided, if not, uses default endpoint for region
         speechConfig.endpointId = config.languages[0]?.endpoint;
         return speechConfig;

@@ -1,4 +1,4 @@
-const { Model, logger } = require("live-srt-lib");
+const { Model, logger, Security } = require("live-srt-lib");
 
 function isValidLocale(locale) {
     const pattern = /^[a-z]{2}-[A-Z]{2}$/;
@@ -26,6 +26,21 @@ const validateTranscriberProfile = (body) => {
         return { error: 'Invalid TranscriberProfile language properties', status: 400 };
     }
 };
+
+const cryptTranscriberProfileKey = (body) => {
+    if (body.config.key) {
+        body.config.key = new Security().encrypt(body.config.key);
+    }
+
+    return body;
+}
+
+const obfuscateTranscriberProfileKey = (transcriberProfile) => {
+    if (transcriberProfile.config.key) {
+        transcriberProfile.config.key = "Secret key is hidden";
+    }
+    return transcriberProfile;
+}
 
 const extendTranscriberProfile = (body) => {
     const config = body.config;
@@ -72,7 +87,10 @@ module.exports = (webserver) => {
 
             try {
                 const configs = await Model.TranscriberProfile.findAll({where});
-                res.json(configs);
+                const obfuscatedConfigs = configs.map(cfg =>
+                  obfuscateTranscriberProfileKey(cfg.toJSON())
+                );
+                res.json(obfuscatedConfigs);
             } catch (err) {
                 next(err);
             }
@@ -86,7 +104,7 @@ module.exports = (webserver) => {
                 if (!config) {
                     return res.status(404).send('Transcriber config not found');
                 }
-                res.json(config);
+                res.json(obfuscateTranscriberProfileKey(config));
             } catch (err) {
                 next(err);
             }
@@ -100,8 +118,10 @@ module.exports = (webserver) => {
                 if (validationResult) {
                     return res.status(validationResult.status).send(validationResult.error);
                 }
-                const config = await Model.TranscriberProfile.create(extendTranscriberProfile(req.body));
-                res.json(config);
+                const config = await Model.TranscriberProfile.create(
+                    extendTranscriberProfile(cryptTranscriberProfileKey(req.body))
+                );
+                res.json(obfuscateTranscriberProfileKey(config));
             } catch (err) {
                 next(err);
             }

@@ -139,7 +139,7 @@ module.exports = (webserver) => {
                 if (validationResult) {
                     return res.status(validationResult.status).send(validationResult.error);
                 }
-                await config.update(req.body);
+                await config.update(extendTranscriberProfile(cryptTranscriberProfileKey(req.body)));
                 res.json(config);
             } catch (err) {
                 next(err);

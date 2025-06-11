@@ -9,7 +9,7 @@ LOG_LEVEL=debug # Level among error, warn, info, debug
 # Security
 # Warning: these two environment variables must be identical for both the session-api service and the transcriber.
 # If the SECURITY_SALT_FILEPATH variable is set, the file must be accessible to both services.
-SECURITY_CRYPT_KEY=ChangeMe # Key used to encrypt sensible data in database
+SECURITY_CRYPT_KEY= # Key used to encrypt sensible data in database
 SECURITY_SALT_FILEPATH= # Optionnaly pass a filepath to a salt.
 
 # App components registration (don't touch)

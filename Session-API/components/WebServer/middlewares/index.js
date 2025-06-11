@@ -1,8 +1,24 @@
 const { logger: appLogger } = require('live-srt-lib')
 
+function obfuscateKeyValues(obj) {
+    if (Array.isArray(obj)) {
+        return obj.map(obfuscateKeyValues);
+    } else if (obj && typeof obj === 'object') {
+        const newObj = {};
+        for (const [k, v] of Object.entries(obj)) {
+            if (k.includes('key')) {
+                newObj[k] = '***';
+            } else {
+                newObj[k] = obfuscateKeyValues(v);
+            }
+        }
+        return newObj;
+    }
+    return obj;
+}
 
 function logger(req, res, next) {
-    appLogger.debug(`[${Date.now()}] ${req.method} ${req.url}`, req.body);
+    appLogger.debug(`[${Date.now()}] ${req.method} ${req.url}`, obfuscateKeyValues(req.body));
 
     // log 400 error
     const originalJson = res.json;

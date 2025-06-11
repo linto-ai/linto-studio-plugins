@@ -258,6 +258,32 @@ make run-docker-dev-linto-studio
 
 You can now connect to LinTO Studio at the URL http://localhost:8003
 
+## Security
+
+Transcriber profiles may contain API keys.
+By default, these keys are not encrypted, but the API does not return them in GET requests.
+However, it is possible to encrypt them using two environment variables:
+
+- SECURITY_CRYPT_KEY → The security key
+- SECURITY_SALT_FILEPATH → A path to a file containing the salt (optional)
+
+For the salt, a file path is required as it further reduces the attack surface:
+to decrypt the key, access is needed to both the environment variables and the file system.
+
+### Keys manipulation
+
+The current keys can be encrypted using the following script from the Session API:
+
+```
+npm run encrypt-keys -- SECURITY_CRYPT_KEY=<my-key>  SECURITY_SALT_FILEPATH=<path-to-salt>
+```
+
+Additionally, if you wish to change the encryption keys, you can migrate all API keys using the following command:
+
+```
+npm run migrate-keys -- OLD_SECURITY_CRYPT_KEY=<my-key>  OLD_SECURITY_SALT_FILEPATH=<path-to-salt> NEW_SECURITY_CRYPT_KEY=<my-key>  NEW_SECURITY_SALT_FILEPATH=<path-to-salt>
+```
+
 ## Tests
 
 ### Unit tests

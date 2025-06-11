@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node Session-API.js",
-    "start-live": "npx -y nodemon Session-API.js"
+    "start-live": "npx -y nodemon Session-API.js",
+    "encrypt-keys": "node encrypt-keys.js",
+    "migrate-keys": "node migrate-keys.js"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [

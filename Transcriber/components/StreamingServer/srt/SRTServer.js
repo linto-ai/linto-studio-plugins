@@ -112,6 +112,7 @@ class MultiplexedSRTServer extends EventEmitter {
         if (!validation.isValid) {
             logger.debug(`Invalid stream: ${connection.fd}, voiding connection.`);
             // no worker to cleanup, nothing to do.
+            connection.close();
             connection = null;
             return;
         }

@@ -36,8 +36,6 @@ class RecognizerListener {
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
         await this.transcriber.stop();
-        // Wait 1 second before restarting the ASR
-        setTimeout(() => {this.transcriber.start()}, 2000);
     };
 
     handleSessionStopped(s, e) {

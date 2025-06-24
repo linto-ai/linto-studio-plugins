@@ -17,6 +17,12 @@ class MultiplexedSRTServer extends EventEmitter {
         this.workers = []; // Workers for SRT connections (gstreamer)
         this.asyncSrtServer = null;
         this.runningSessions = {}
+        this.runningChannels = {}
+        this.channelTimeoutSeconds = 5;
+
+        setInterval(() => {
+            this.checkTimedOutChannel();
+        }, 1000);
     }
 
     // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
@@ -37,6 +43,16 @@ class MultiplexedSRTServer extends EventEmitter {
                 logger.debug(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
             }
             sessionsToStop.forEach(session => this.stopRunningSession(session));
+        }
+    }
+
+    checkTimedOutChannel() {
+        const now = Date.now();
+        for (const value of Object.values(this.runningChannels)) {
+            if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
+                logger.warn(`Channel ${value.fd.channel.id} timeout, closing !`);
+                this.cleanupConnection(value.connection, value.fd, value.worker);
+            }
         }
     }
 
@@ -146,6 +162,8 @@ class MultiplexedSRTServer extends EventEmitter {
       }
 
       this.runningSessions[session.id].push({ connection, fd, worker });
+
+      this.runningChannels[fd.channel.id] = { connection, fd, worker, lastPacket: Date.now()};
     }
 
     stopRunningSession(session) {
@@ -185,6 +203,9 @@ class MultiplexedSRTServer extends EventEmitter {
         connection.on("data", async () => {
             if (worker && worker.connected) {
                 this.onClientData(connection, fd, worker);
+            }
+            if (this.runningChannels[fd.channel.id]) {
+                this.runningChannels[fd.channel.id].lastPacket = Date.now();
             }
         });
 
@@ -243,6 +264,9 @@ class MultiplexedSRTServer extends EventEmitter {
             if (this.runningSessions[fd.session.id].length === 0) {
                 delete this.runningSessions[fd.session.id];
             }
+        }
+        if (this.runningChannels[fd.channel.id]) {
+            delete this.runningChannels[fd.channel.id]
         }
     }
 }

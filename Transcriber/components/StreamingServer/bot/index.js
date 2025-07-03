@@ -16,7 +16,7 @@ class Bot extends EventEmitter {
     this.browser = null;
     this.page = null;
     this.cleanupStream = null; // To store the cleanup function scoped to init()
-    logger.debug('Bot instance created');
+    logger.info('Bot instance created');
   }
 
   async init() {
@@ -24,12 +24,12 @@ class Bot extends EventEmitter {
       logger.debug('Loading manifest...');
       this.manifest = require(`./${this.botType}.json`);
     } catch (error) {
-      logger.debug(`Error loading manifest: ${error.message}`);
+      logger.error(`Error loading manifest: ${error.message}`);
       throw error;
     }
 
     try {
-      logger.debug(`Initializing ${this.botType} Bot...`);
+      logger.info(`Initializing ${this.botType} Bot...`);
       let stream = null;
 
       this.cleanupStream = async () => {
@@ -43,7 +43,7 @@ class Bot extends EventEmitter {
         if (this.worker) {
           await this.worker.kill();
         }
-        logger.debug('Browser closed, stream destroyed, gstreamer worker killed');
+        logger.info('Browser closed, stream destroyed, gstreamer worker killed');
       };
 
       this.browser = await launch({
@@ -61,7 +61,7 @@ class Bot extends EventEmitter {
           '--disable-gpu'
         ],
       });
-      logger.debug('Browser launched');
+      logger.info('Browser launched');
 
       const context = this.browser.defaultBrowserContext();
       this.page = await context.newPage();
@@ -90,10 +90,10 @@ class Bot extends EventEmitter {
         });
       }
 
-      logger.debug(`Joining ${this.address}`);
+      logger.info(`Joining ${this.address}`);
 
       await this.page.goto(this.address, { timeout: 50000 }); // 50 seconds timeout
-      logger.debug('Page loaded');
+      logger.info('Page loaded');
 
       for (const rule of this.manifest.loginRules) {
         await this.execRule(rule);
@@ -106,9 +106,9 @@ class Bot extends EventEmitter {
       }
 
       stream = await getStream(this.page, { audio: true, video: false });
-      logger.debug('Screen sharing for audio capture started');
+      logger.info('Screen sharing for audio capture started');
       //######## Create gstreamer worker
-      logger.debug('Spawn GStreamer worker for transcoding');
+      logger.info('Spawn GStreamer worker for transcoding');
       this.worker = fork(path.join(__dirname, '../', 'GstreamerWorker.js'));
       this.worker.send({ type: 'init' });
       this.worker.on('message', (message) => {
@@ -119,7 +119,7 @@ class Bot extends EventEmitter {
           logger.error(`Worker ${this.worker.pid} error --> ${message.error}`);
         }
         if (message.type === 'playing') {
-          logger.debug(`Worker: ${this.worker.pid} --> transcoding session ${this.session.id}, channel ${this.channel.id}`);
+          logger.info(`Worker: ${this.worker.pid} --> transcoding session ${this.session.id}, channel ${this.channel.id}`);
         }
       });
       this.worker.on('error', (error) => {
@@ -128,7 +128,7 @@ class Bot extends EventEmitter {
 
       this.worker.on('exit', (code) => {
         // Remove the worker from the workers array
-        logger.debug(`Worker ${this.worker.pid} exited with code ${code}`);
+        logger.info(`Worker ${this.worker.pid} exited with code ${code}`);
       });
 
       //######## Handle stream events
@@ -138,22 +138,22 @@ class Bot extends EventEmitter {
       });
 
       stream.on('end', () => {
-        logger.debug('Stream ended');
+        logger.info('Stream ended');
         this.emit('session-end', this.session, this.channel.id);
       });
 
       this.emit('session-start', this.session, this.channel);
-      logger.debug('Session start event emitted');
+      logger.info('Session start event emitted');
 
 
     } catch (error) {
-      logger.debug(`Error during initialization: ${error.message}`);
+      logger.error(`Error during initialization: ${error.message}`);
       if (this.cleanupStream) {
         await this.cleanupStream();
       }
       return false
     }
-    logger.debug('Bot Initialization complete');
+    logger.info('Bot Initialization complete');
     return true
   }
 

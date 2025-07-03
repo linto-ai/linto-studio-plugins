@@ -32,24 +32,24 @@ class RecognizerListener {
     async handleCanceled(s, e) {
         // The ASR is cancelled until the end of the stream
         // and can be restarted with a new stream
-        logger.debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
         await this.transcriber.stop();
     };
 
     handleSessionStopped(s, e) {
-        logger.debug(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
+        logger.info(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
         this.transcriber.emit('closed', e.reason);
     };
 
     handleStartContinuousRecognitionAsync() {
-        logger.debug(`${this.name}: Microsoft ASR recognition started`);
+        logger.info(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
     };
 
     handleStartContinuousRecognitionAsyncError(error) {
-        logger.debug(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
+        logger.error(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
     };
 
     listen(recognizer) {
@@ -97,16 +97,16 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
     }
 
     handleCanceled(s, e) {
-        logger.debug(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
     };
 
     handleSessionStopped(s, e) {
         const reason = e.reason ? `: ${e.reason}` : '';
-        logger.debug(`${this.name}: Microsoft ASR session stopped${reason}`);
+        logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
     };
 
     handleStartContinuousRecognitionAsync() {
-        logger.debug(`${this.name}: Microsoft ASR recognition started`);
+        logger.info(`${this.name}: Microsoft ASR recognition started`);
     };
 }
 
@@ -161,7 +161,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     start() {
         const { transcriberProfile, translations, diarization } = this.channel;
-        logger.debug(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
+        logger.info(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
         this.startedAt = new Date().toISOString();
@@ -294,7 +294,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 pushStream.write(buffer);
             }
         } else {
-            logger.debug("Microsoft ASR transcriber can't decode buffer");
+            logger.warn("Microsoft ASR transcriber can't decode buffer");
         }
     }
 

@@ -40,7 +40,7 @@ class MultiplexedSRTServer extends EventEmitter {
             );
 
             if (sessionsToStop.length > 0) {
-                logger.debug(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
+                logger.warn(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
             }
             sessionsToStop.forEach(session => this.stopRunningSession(session));
         }
@@ -71,16 +71,16 @@ class MultiplexedSRTServer extends EventEmitter {
             }
             this.server.open();
             // log passphrase if set
-            logger.debug(`SRT server started on ${STREAMING_HOST}:${STREAMING_SRT_UDP_PORT} ${hasPassphrase ? 'with passphrase' : ''}`);
+            logger.info(`SRT server started on ${STREAMING_HOST}:${STREAMING_SRT_UDP_PORT} ${hasPassphrase ? 'with passphrase' : ''}`);
         } catch (error) {
-            logger.debug("Error starting SRT server", error);
+            logger.error("Error starting SRT server", error);
         }
     }
 
     async validateStream(connection) {
         const asyncSrt = new AsyncSRT();
         const streamId = await asyncSrt.getSockOpt(connection.fd, SRT.SRTO_STREAMID);
-        logger.debug(`Connection: ${connection.fd} --> Validating streamId ${streamId}`);
+        logger.info(`Connection: ${connection.fd} --> Validating streamId ${streamId}`);
 
         // Extract sessionId and channelId from streamId
         const [sessionId, channelIndexStr] = streamId.split(",");
@@ -88,45 +88,45 @@ class MultiplexedSRTServer extends EventEmitter {
         const session = this.sessions.find(s => s.id === sessionId);
         // Validate session
         if (!session) {
-            logger.debug(`Connection: ${connection.fd} --> session ${sessionId} not found.`);
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId} not found.`);
             return { isValid: false };
         }
         // Find channel by index in array, it is recomputed at each update and ordered by id and starting at 0
         const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
         const channel = sortedChannels[channelIndex];
         if (!channel) {
-            logger.debug(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
             return { isValid: false };
         }
         const channelId = channel.id;
 
         // Check if the channel's streamStatus is 'active'
         if (channel.streamStatus === 'active') {
-            logger.debug(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
             return { isValid: false };
         }
         // Check scheduleOn is after now
         const now = new Date();
         if (session.autoStart && session.scheduleOn && now < new Date(session.scheduleOn)) {
-            logger.debug(`Connection: ${connection.fd} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
             return { isValid: false };
         }
         // Check endOn is before now
         if (session.autoEnd && session.endOn && now > new Date(session.endOn)) {
-            logger.debug(`Connection: ${connection.fd} --> session ${sessionId}, endOn in the past. Now: ${now}, endOn: ${session.endOn}. Skipping.`);
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, endOn in the past. Now: ${now}, endOn: ${session.endOn}. Skipping.`);
             return { isValid: false };
         }
 
-        logger.debug(`Connection: ${connection.fd} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
+        logger.info(`Connection: ${connection.fd} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
         return { isValid: true, session, channel };
     }
 
     async onConnection(connection) {
-        logger.debug("Got new connection:", connection.fd);
+        logger.info("Got new connection:", connection.fd);
         // New connection, validate stream
         const validation = await this.validateStream(connection);
         if (!validation.isValid) {
-            logger.debug(`Invalid stream: ${connection.fd}, voiding connection.`);
+            logger.warn(`Invalid stream: ${connection.fd}, voiding connection.`);
             // no worker to cleanup, nothing to do.
             connection.close();
             connection = null;
@@ -184,7 +184,7 @@ class MultiplexedSRTServer extends EventEmitter {
                 this.cleanupConnection(connection, fd, worker);
             }
             if (message.type === 'playing') {
-                logger.debug(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channel.id}`);
+                logger.info(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channel.id}`);
             }
         });
 
@@ -194,7 +194,7 @@ class MultiplexedSRTServer extends EventEmitter {
         });
 
         worker.on('exit', (code, signal) => {
-            logger.debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
+            logger.info(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
         });
     }
 
@@ -210,12 +210,12 @@ class MultiplexedSRTServer extends EventEmitter {
         });
 
         connection.on("closing", async () => {
-            logger.debug(`Connection: ${connection.fd} --> closing`);
+            logger.info(`Connection: ${connection.fd} --> closing`);
             connection.close()
         });
 
         connection.on("closed", async () => {
-            logger.debug(`Connection: ${connection.fd} --> closed`);
+            logger.info(`Connection: ${connection.fd} --> closed`);
             if (worker && worker.connected) {
                 worker.send({ type: 'terminate' });
             }
@@ -237,7 +237,7 @@ class MultiplexedSRTServer extends EventEmitter {
         } catch (error) {
             logger.error(`Error reading chunks: ${error.message}`);
             if (error.message.includes("Connection was broken")) {
-                logger.debug("Connection was broken, cleaning up.");
+                logger.error("Connection was broken, cleaning up.");
                 this.cleanupConnection(connection, fd, worker);
             }
         }
@@ -246,7 +246,7 @@ class MultiplexedSRTServer extends EventEmitter {
     cleanupConnection(connection, fd, worker) {
         // Tell the streaming server controller to forward the session stop message to the broker
         this.emit('session-stop', fd.session, fd.channel.id)
-        logger.debug(`Connection: ${connection.fd} --> cleaning up.`);
+        logger.info(`Connection: ${connection.fd} --> cleaning up.`);
         if (connection) {
             connection.close();
             connection = null;

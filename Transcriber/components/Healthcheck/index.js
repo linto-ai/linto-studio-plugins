@@ -19,7 +19,7 @@ class Healthcheck extends Component {
 
         const port = parseInt(process.env.STREAMING_HEALTHCHECK_TCP, 10);
         this.healthCheckServer.listen(port, () => {
-            logger.debug(`HealthCheck server listening on port ${port}`);
+            logger.info(`HealthCheck server listening on port ${port}`);
         });
     }
 }

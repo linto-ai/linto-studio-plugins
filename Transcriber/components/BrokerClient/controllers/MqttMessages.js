@@ -3,7 +3,7 @@ const { logger } = require('live-srt-lib')
 // Handler for 'scheduler' messages
 function handleSchedulerMessage(scheduler) {
   if (scheduler.online && this.state == this.constructor.states.WAITING_SCHEDULER) {
-    logger.debug(`${this.uniqueId} scheduler online, registering...`);
+    logger.info(`${this.uniqueId} scheduler online, registering...`);
     this.client.publishStatus();
     this.app.components['StreamingServer'].startServers();
     this.state = this.constructor.states.READY;
@@ -43,7 +43,7 @@ function handleTranscriberMessage(parts, message) {
         this.app.components['StreamingServer'].stopBot(sessionId, channelId);
         break;
       default:
-        logger.debug(`Unknown action: ${action}`);
+        logger.warn(`Unknown action: ${action}`);
     }
   }
 }
@@ -63,7 +63,7 @@ module.exports = function () {
         handleTranscriberMessage.call(this, parts, message);
         break;
       default:
-        logger.debug(`Received message for unknown type ${type}`);
+        logger.warn(`Received message for unknown type ${type}`);
     }
   });
 };

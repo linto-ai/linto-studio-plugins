@@ -46,60 +46,60 @@ class MultiplexedRTMPServer extends EventEmitter {
             this.cleanupConnection(id);
 
           });
-          logger.debug(`RTMP server started on ${STREAMING_HOST}:${STREAMING_RTMP_TCP_PORT}`);
+          logger.info(`RTMP server started on ${STREAMING_HOST}:${STREAMING_RTMP_TCP_PORT}`);
       } catch (error) {
-          logger.debug("Error starting RTMP server", error);
+          logger.error("Error starting RTMP server", error);
       }
   }
 
   async validateStream(streamPath) {
     const [sessionId, channelIndexStr] = streamPath.split('/').filter(element => element !== "")
-    logger.debug(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
+    logger.info(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
 
       // Extract sessionId and channelId from streamId
       const channelIndex = parseInt(channelIndexStr, 10);
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
-          logger.debug(`Connection: ${streamPath} --> session ${sessionId} not found.`);
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId} not found.`);
           return { isValid: false };
       }
       // Find channel by "id" key (do not rely on position in array that changes upon updates)
       const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
       const channel = sortedChannels[channelIndex];
       if (!channel) {
-          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
           return { isValid: false };
       }
       const channelId = channel.id;
 
       // Check if the channel's streamStatus is 'active'
       if (channel.streamStatus === 'active') {
-          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
           return { isValid: false };
       }
       // Check scheduleOn is after now
       const now = new Date();
       if (session.autoStart && session.scheduleOn && now < new Date(session.scheduleOn)) {
-          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
           return { isValid: false };
       }
       // Check endOn is before now
       if (session.autoEnd && session.endOn && now > new Date(session.endOn)) {
-          logger.debug(`Connection: ${streamPath} --> session ${sessionId}, endOn in the past. Now: ${now}, endTime: ${session.endOn}. Skipping.`);
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, endOn in the past. Now: ${now}, endTime: ${session.endOn}. Skipping.`);
           return { isValid: false };
       }
 
-      logger.debug(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
+      logger.info(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
       return { isValid: true, session, channel };
   }
 
   async onConnection(sessionId, streamPath) {
-      logger.debug("Got new connection:", streamPath);
+      logger.info("Got new connection:", streamPath);
       // New connection, validate stream
       const validation = await this.validateStream(streamPath);
       if (!validation.isValid) {
-          logger.debug(`Invalid stream: ${streamPath}, voiding connection.`);
+          logger.warn(`Invalid stream: ${streamPath}, voiding connection.`);
           this.cleanupConnection(sessionId, null, null);
           return;
       }
@@ -144,12 +144,12 @@ class MultiplexedRTMPServer extends EventEmitter {
       });
 
       worker.on('exit', (code, signal) => {
-          logger.debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
+          logger.info(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
       });
   }
 
   cleanupConnection(sessionId) {
-      logger.debug(`Connection: ${sessionId} --> cleaning up.`);
+      logger.info(`Connection: ${sessionId} --> cleaning up.`);
       const [fd, worker] = this.workers.hasOwnProperty(sessionId) ? this.workers[sessionId] : [null, null];
 
       // Tell the streaming server controller to forward the session stop message to the broker

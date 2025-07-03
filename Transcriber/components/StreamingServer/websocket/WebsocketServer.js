@@ -36,7 +36,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
           );
 
           if (sessionsToStop.length > 0) {
-              logger.debug(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
+              logger.info(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
           }
           sessionsToStop.forEach(session => this.stopRunningSession(session));
       }
@@ -48,9 +48,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
           this.wss.on("connection", (ws, req) => {
               this.onConnection(ws, req);
           });
-          logger.debug(`WS server started on ${STREAMING_HOST}:${STREAMING_WS_TCP_PORT}`);
+          logger.info(`WS server started on ${STREAMING_HOST}:${STREAMING_WS_TCP_PORT}`);
       } catch (error) {
-          logger.debug("Error starting WS server", error);
+          logger.error("Error starting WS server", error);
       }
   }
 
@@ -80,7 +80,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
   async validateStream(req) {
     const streamId = this.stripStreamPrefix(req.url.substring(1))
-    logger.debug(`Connection: ${req.url} --> Validating streamId ${streamId}`);
+    logger.info(`Connection: ${req.url} --> Validating streamId ${streamId}`);
 
       // Extract sessionId and channelId from streamId
       const [sessionId, channelIndexStr] = streamId.split(",");
@@ -88,45 +88,45 @@ class MultiplexedWebsocketServer extends EventEmitter {
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
-          logger.debug(`Connection: ${req.url} --> session ${sessionId} not found.`);
+          logger.warn(`Connection: ${req.url} --> session ${sessionId} not found.`);
           return { isValid: false };
       }
       // Find channel by "id" key (do not rely on position in array that changes upon updates)
       const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
       const channel = sortedChannels[channelIndex];
       if (!channel) {
-          logger.debug(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelIndex} not found.`);
           return { isValid: false };
       }
       const channelId = channel.id;
 
       // Check if the channel's streamStatus is 'active'
       if (channel.streamStatus === 'active') {
-          logger.debug(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
           return { isValid: false };
       }
       // Check scheduleOn is after now
       const now = new Date();
       if (session.autoStart && session.scheduleOn && now < new Date(session.scheduleOn)) {
-          logger.debug(`Connection: ${req.url} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, scheduleOn in the future. Now: ${now}, scheduleOn: ${session.scheduleOn}. Skipping.`);
           return { isValid: false };
       }
       // Check endOn is before now
       if (session.autoEnd && session.endOn && now > new Date(session.endOn)) {
-          logger.debug(`Connection: ${req.url} --> session ${sessionId}, endOn in the past. Now: ${now}, endOn: ${session.endOn}. Skipping.`);
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, endOn in the past. Now: ${now}, endOn: ${session.endOn}. Skipping.`);
           return { isValid: false };
       }
 
-      logger.debug(`Connection: ${req.url} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
+      logger.info(`Connection: ${req.url} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
       return { isValid: true, session, channel };
   }
 
   async onConnection(ws, req) {
-      logger.debug("Got new connection:", req.url);
+      logger.info("Got new connection:", req.url);
       // New connection, validate stream
       const validation = await this.validateStream(req);
       if (!validation.isValid) {
-          logger.debug(`Invalid stream: ${req.url}, voiding connection.`);
+          logger.warn(`Invalid stream: ${req.url}, voiding connection.`);
           this.cleanupWebsocket(ws, null, null);
           return;
       }
@@ -160,16 +160,16 @@ class MultiplexedWebsocketServer extends EventEmitter {
     try {
         initMessage = JSON.parse(message);
     } catch (error) {
-        logger.debug('Invalid JSON init message', error);
+        logger.warn('Invalid JSON init message', error);
         ws.send(JSON.stringify({ type: 'error', message: `Invalid JSON init message: ${error}.` }));
         return null;
     }
 
     if (initMessage.type === 'init') {
-        logger.debug(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}`);
+        logger.info(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}`);
 
         if(initMessage.encoding == 'pcm' && initMessage.sampleRate != 16000) {
-            logger.debug(`Invalid sample rate: ${initMessage.sampleRate}`);
+            logger.warn(`Invalid sample rate: ${initMessage.sampleRate}`);
             ws.send(JSON.stringify({ type: 'error', message: `Invalid sample rate: ${initMessage.sampleRate}. Only 16000 is accepted.` }));
             return null
         }
@@ -180,7 +180,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
         return callback;
     } else {
-        logger.debug('Invalid init message type');
+        logger.warn('Invalid init message type');
         ws.send(JSON.stringify({ type: 'error', message: `Invalid init message type: ${initMessage.type}. It must be 'init'` }));
         return null;
     }
@@ -190,11 +190,11 @@ class MultiplexedWebsocketServer extends EventEmitter {
       this.emit('session-start', fd.session, fd.channel);
       this.addRunningSession(fd.session, ws, fd, null);
       ws.on("close", () => {
-          logger.debug(`Connection: ${ws} --> closed`);
+          logger.info(`Connection: ${ws} --> closed`);
           this.cleanupWebsocket(ws, fd);
       });
       ws.on("error", () => {
-          logger.debug(`Connection: ${ws} --> error`);
+          logger.error(`Connection: ${ws} --> error`);
           this.cleanupWebsocket(ws, fd);
       });
       return (message) => {
@@ -215,12 +215,12 @@ class MultiplexedWebsocketServer extends EventEmitter {
       this.handleWorkerEvents(ws, fd, worker);
 
       ws.on("close", () => {
-          logger.debug(`Connection: ${ws} --> closed`);
+          logger.info(`Connection: ${ws} --> closed`);
           worker.send({ type: 'terminate' });
           this.cleanupWebsocket(ws, fd, worker);
       });
       ws.on("error", () => {
-          logger.debug(`Connection: ${ws} --> error`);
+          logger.error(`Connection: ${ws} --> error`);
           worker.send({ type: 'terminate' });
           this.cleanupWebsocket(ws, fd, worker);
       });
@@ -248,7 +248,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
               this.cleanupWebsocket(ws, fd, worker);
           }
           if (message.type === 'playing') {
-              logger.debug(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channel.id}`);
+              logger.info(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channel.id}`);
           }
       });
 
@@ -258,7 +258,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
 
       worker.on('exit', (code, signal) => {
-          logger.debug(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
+          logger.info(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
           this.cleanupWebsocket(ws, fd, worker);
       });
   }
@@ -269,7 +269,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
         this.emit('session-stop', fd.session, fd.channel.id)
       }
 
-      logger.debug(`Connection: ${ws} --> cleaning up.`);
+      logger.info(`Connection: ${ws} --> cleaning up.`);
       if (ws) {
         if (ws.clients) {
           ws.clients.forEach(client => client.close());

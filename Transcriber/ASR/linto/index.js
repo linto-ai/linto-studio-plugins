@@ -77,7 +77,7 @@ class LintoTranscriber extends EventEmitter {
         });
 
         this.ws.on('error', (error) => {
-            logger.debug(`WebSocket error: ${error}`);
+            logger.warn(`WebSocket error: ${error}`);
             this.emit('error', LintoTranscriber.ERROR_MAP[4]);
             this.stop();
 
@@ -99,7 +99,7 @@ class LintoTranscriber extends EventEmitter {
         if (this.ws) {
             this.ws.send(buffer);
         } else {
-            logger.debug("Linto ASR transcriber can't decode buffer");
+            logger.warn("Linto ASR transcriber can't decode buffer");
         }
     }
 

@@ -24,7 +24,7 @@ async function transcodeToMp3(inputPath, outputPath) {
       .audioCodec('libmp3lame')
       .audioBitrate('64k')
       .on('end', () => {
-        logger.debug(`Transcoding to MP3 completed: ${outputPath}`);
+        logger.info(`Transcoding to MP3 completed: ${outputPath}`);
         resolve();
       })
       .on('error', (err) => {
@@ -56,7 +56,7 @@ async function concatAudioFiles(input1, input2, output) {
     ffmpeg(input1)
       .input(input2)
       .on('end', () => {
-        logger.debug(`Concat completed: ${output}`);
+        logger.info(`Concat completed: ${output}`);
         resolve()
       })
       .on('error', (err) => {
@@ -95,7 +95,7 @@ class ASR extends eventEmitter {
         this.audioFile = fs.createWriteStream(audioFilePath);
       }
       this.audioBuffer = new CircularBuffer();
-      logger.debug(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channel.id}`);
+      logger.info(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channel.id}`);
 
       // Use the FakeTranscriber if live transcripts are disabled
       if (!this.channel.enableLiveTranscripts) {
@@ -138,7 +138,7 @@ class ASR extends eventEmitter {
       this.state = ASR.states.ERROR
     })
     this.provider.on('closed', (code, reason) => {
-      logger.debug(`ASR connexion closed with code ${code}`);
+      logger.info(`ASR connexion closed with code ${code}`);
       this.state = ASR.states.CLOSED;
     });
     this.provider.on('transcribing', (transcription) => {
@@ -180,7 +180,7 @@ class ASR extends eventEmitter {
       await transcodeFn(pcmFilePath, outFilePath);
     }
 
-    logger.debug(`Audio file saved as ${outFilePath}`);
+    logger.info(`Audio file saved as ${outFilePath}`);
     fs.unlinkSync(pcmFilePath);
   }
 
@@ -195,7 +195,7 @@ class ASR extends eventEmitter {
         await this.provider.stop();
       }
     } catch (error) {
-      logger.debug(`Error when saving the audio file: ${error}`)
+      logger.error(`Error when saving the audio file: ${error}`)
       this.emit('error', error);
       return false;
     }

@@ -12,24 +12,25 @@ class Bot extends EventEmitter {
     this.enableDisplaySub = enableDisplaySub;
     this.session = session;
     this.channel = channel;
+    this.logger = logger.getChannelLogger(session.id, channel.id);
     this.address = address;
     this.browser = null;
     this.page = null;
     this.cleanupStream = null; // To store the cleanup function scoped to init()
-    logger.info('Bot instance created');
+    this.logger.info('Bot instance created');
   }
 
   async init() {
     try {
-      logger.debug('Loading manifest...');
+      this.logger.debug('Loading manifest...');
       this.manifest = require(`./${this.botType}.json`);
     } catch (error) {
-      logger.error(`Error loading manifest: ${error.message}`);
+      this.logger.error(`Error loading manifest: ${error.message}`);
       throw error;
     }
 
     try {
-      logger.info(`Initializing ${this.botType} Bot...`);
+      this.logger.info(`Initializing ${this.botType} Bot...`);
       let stream = null;
 
       this.cleanupStream = async () => {
@@ -37,13 +38,13 @@ class Bot extends EventEmitter {
           stream.destroy();
         }
         if (this.browser) {
-          logger.debug('Closing browser');
+          this.logger.debug('Closing browser');
           await this.browser.close();
         }
         if (this.worker) {
           await this.worker.kill();
         }
-        logger.info('Browser closed, stream destroyed, gstreamer worker killed');
+        this.logger.info('Browser closed, stream destroyed, gstreamer worker killed');
       };
 
       this.browser = await launch({
@@ -61,17 +62,17 @@ class Bot extends EventEmitter {
           '--disable-gpu'
         ],
       });
-      logger.info('Browser launched');
+      this.logger.info('Browser launched');
 
       const context = this.browser.defaultBrowserContext();
       this.page = await context.newPage();
       this.page.on('console', msg => {
         if (msg.type() === 'error') {
-          logger.debug(`Puppeteer error: ${msg.text()}`);
+          this.logger.debug(`Puppeteer error: ${msg.text()}`);
         }
       });
       this.page.on('pageerror', err => {
-          logger.debug(`Puppeteer global error: ${err.message}`);
+          this.logger.debug(`Puppeteer global error: ${err.message}`);
       });
 
       // block external domains
@@ -82,7 +83,7 @@ class Bot extends EventEmitter {
           const url = request.url();
 
           if (!url.includes(allowedDomain) && !url.includes('chrome-extension')) {
-            logger.debug(`Blocked request to: ${url}`);
+            this.logger.debug(`Blocked request to: ${url}`);
             request.abort();
           } else {
             request.continue();
@@ -90,10 +91,10 @@ class Bot extends EventEmitter {
         });
       }
 
-      logger.info(`Joining ${this.address}`);
+      this.logger.info(`Joining ${this.address}`);
 
       await this.page.goto(this.address, { timeout: 50000 }); // 50 seconds timeout
-      logger.info('Page loaded');
+      this.logger.info('Page loaded');
 
       for (const rule of this.manifest.loginRules) {
         await this.execRule(rule);
@@ -106,9 +107,9 @@ class Bot extends EventEmitter {
       }
 
       stream = await getStream(this.page, { audio: true, video: false });
-      logger.info('Screen sharing for audio capture started');
+      this.logger.info('Screen sharing for audio capture started');
       //######## Create gstreamer worker
-      logger.info('Spawn GStreamer worker for transcoding');
+      this.logger.info('Spawn GStreamer worker for transcoding');
       this.worker = fork(path.join(__dirname, '../', 'GstreamerWorker.js'));
       this.worker.send({ type: 'init' });
       this.worker.on('message', (message) => {
@@ -116,19 +117,19 @@ class Bot extends EventEmitter {
           this.emit('data', message.buf, this.session.id, this.channel.id);
         }
         if (message.type === 'error') {
-          logger.error(`Worker ${this.worker.pid} error --> ${message.error}`);
+          this.logger.error(`Worker ${this.worker.pid} error --> ${message.error}`);
         }
         if (message.type === 'playing') {
-          logger.info(`Worker: ${this.worker.pid} --> transcoding session ${this.session.id}, channel ${this.channel.id}`);
+          this.logger.info(`Worker: ${this.worker.pid} --> transcoding session ${this.session.id}, channel ${this.channel.id}`);
         }
       });
       this.worker.on('error', (error) => {
-        logger.error('Error from GStreamer worker:', error);
+        this.logger.error('Error from GStreamer worker:', error);
       });
 
       this.worker.on('exit', (code) => {
         // Remove the worker from the workers array
-        logger.info(`Worker ${this.worker.pid} exited with code ${code}`);
+        this.logger.info(`Worker ${this.worker.pid} exited with code ${code}`);
       });
 
       //######## Handle stream events
@@ -138,22 +139,22 @@ class Bot extends EventEmitter {
       });
 
       stream.on('end', () => {
-        logger.info('Stream ended');
+        this.logger.info('Stream ended');
         this.emit('session-end', this.session, this.channel.id);
       });
 
       this.emit('session-start', this.session, this.channel);
-      logger.info('Session start event emitted');
+      this.logger.info('Session start event emitted');
 
 
     } catch (error) {
-      logger.error(`Error during initialization: ${error.message}`);
+      this.logger.error(`Error during initialization: ${error.message}`);
       if (this.cleanupStream) {
         await this.cleanupStream();
       }
       return false
     }
-    logger.info('Bot Initialization complete');
+    this.logger.info('Bot Initialization complete');
     return true
   }
 
@@ -162,9 +163,9 @@ class Bot extends EventEmitter {
       await this.page.evaluate((canvasConfig) => {
         window.canvasConfiguration = canvasConfig;
       }, canvasConfig);
-      logger.debug(`Update canvas config to: ${canvasConfig}`);
+      this.logger.debug(`Update canvas config to: ${canvasConfig}`);
     } else {
-      logger.debug('Page is not initialized');
+      this.logger.debug('Page is not initialized');
     }
   }
 
@@ -177,9 +178,9 @@ class Bot extends EventEmitter {
           canvasStream.setText(text, final);
         }
       }, newText, final);
-      logger.debug(`Updated text to: ${newText}`);
+      this.logger.debug(`Updated text to: ${newText}`);
     } else {
-      logger.debug('Page is not initialized');
+      this.logger.debug('Page is not initialized');
     }
   }
 
@@ -187,82 +188,82 @@ class Bot extends EventEmitter {
     switch (rule.action) {
       case 'configureCanvas':
         await this.configureCanvas(rule.config);
-        logger.debug(`Configure canvas to ${rule.config}`);
+        this.logger.debug(`Configure canvas to ${rule.config}`);
         break;
       case 'goto':
         await this.page.goto(rule.url, { timeout: rule.timeout || 30000 });
-        logger.debug(`Navigated to ${rule.url}`);
+        this.logger.debug(`Navigated to ${rule.url}`);
         break;
       case 'type':
         await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
         await this.page.type(rule.selector, rule.value);
-        logger.debug(`Typed ${rule.value} into ${rule.selector}`);
+        this.logger.debug(`Typed ${rule.value} into ${rule.selector}`);
         break;
       case 'click':
         await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
         await this.page.click(rule.selector);
-        logger.debug(`Clicked on ${rule.selector}`);
+        this.logger.debug(`Clicked on ${rule.selector}`);
         break;
       case 'waitForSelector':
         await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
-        logger.debug(`Waited for selector ${rule.selector}`);
+        this.logger.debug(`Waited for selector ${rule.selector}`);
         break;
       case 'waitForTimeout':
         await new Promise(r => setTimeout(r, rule.timeout));
-        logger.debug(`Waited for ${rule.timeout} ms`);
+        this.logger.debug(`Waited for ${rule.timeout} ms`);
         break;
       case 'evaluate':
         await this.page.evaluate(rule.script);
-        logger.debug(`Evaluated script: ${rule.script}`);
+        this.logger.debug(`Evaluated script: ${rule.script}`);
         break;
       case 'select':
         await this.page.waitForSelector(rule.selector, { timeout: rule.timeout || 30000 });
         await this.page.select(rule.selector, rule.value);
-        logger.debug(`Selected ${rule.value} from ${rule.selector}`);
+        this.logger.debug(`Selected ${rule.value} from ${rule.selector}`);
         break;
       case 'hover':
         await this.page.hover(rule.selector);
-        logger.debug(`Hovered over ${rule.selector}`);
+        this.logger.debug(`Hovered over ${rule.selector}`);
         break;
       case 'focus':
         await this.page.focus(rule.selector);
-        logger.debug(`Focused on ${rule.selector}`);
+        this.logger.debug(`Focused on ${rule.selector}`);
         break;
       case 'uploadFile':
         const input = await this.page.$(rule.selector);
         await input.uploadFile(rule.filePath);
-        logger.debug(`Uploaded file ${rule.filePath} to ${rule.selector}`);
+        this.logger.debug(`Uploaded file ${rule.filePath} to ${rule.selector}`);
         break;
       case 'screenshot':
         await this.page.screenshot({ path: rule.path });
-        logger.debug(`Took screenshot and saved to ${rule.path}`);
+        this.logger.debug(`Took screenshot and saved to ${rule.path}`);
         break;
       case 'setViewport':
         await this.page.setViewport({ width: rule.width, height: rule.height });
-        logger.debug(`Set viewport to width: ${rule.width}, height: ${rule.height}`);
+        this.logger.debug(`Set viewport to width: ${rule.width}, height: ${rule.height}`);
         break;
       case 'press':
         await this.page.keyboard.press(rule.key);
-        logger.debug(`Pressed key ${rule.key}`);
+        this.logger.debug(`Pressed key ${rule.key}`);
         break;
       case 'setUserAgent':
         await this.page.setUserAgent(rule.userAgent);
-        logger.debug(`Set user agent to ${rule.userAgent}`);
+        this.logger.debug(`Set user agent to ${rule.userAgent}`);
         break;
       case 'setCookie':
         await this.page.setCookie(...rule.cookies);
-        logger.debug(`Set cookies`);
+        this.logger.debug(`Set cookies`);
         break;
       case 'deleteCookie':
         await this.page.deleteCookie(...rule.cookies);
-        logger.debug(`Deleted cookies`);
+        this.logger.debug(`Deleted cookies`);
         break;
       case 'clearInput':
         await this.page.evaluate(selector => document.querySelector(selector).value = '', rule.selector);
-        logger.debug(`Cleared input field ${rule.selector}`);
+        this.logger.debug(`Cleared input field ${rule.selector}`);
         break;
       default:
-        logger.debug(`Unknown action: ${rule.action}`);
+        this.logger.debug(`Unknown action: ${rule.action}`);
     }
   }
 

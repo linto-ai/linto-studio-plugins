@@ -17,56 +17,6 @@ function loadAsr(provider) {
   return AsrClass;
 }
 
-async function transcodeToMp3(inputPath, outputPath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .inputFormat('s16le')      // Specify the input format as signed 16-bit little-endian PCM
-      .inputOptions(['-ar 16000', '-ac 1'])
-      .audioCodec('libmp3lame')
-      .audioBitrate('64k')
-      .on('end', () => {
-        logger.info(`Transcoding to MP3 completed: ${outputPath}`);
-        resolve();
-      })
-      .on('error', (err) => {
-        logger.error(`Error during transcoding: ${err.message}`);
-        reject(err);
-      })
-      .save(outputPath);
-  });
-}
-
-async function transcodeToWav(inputPath, outputPath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .inputFormat('s16le')      // Specify the input format as signed 16-bit little-endian PCM
-      .inputOptions(["-ar 16000", "-ac 1"])
-      .audioCodec("pcm_s16le")
-      .output(outputPath)
-      .on("end", resolve)
-      .on("error", (err) => {
-        logger.error(`Error transcoding to WAV: ${err.message}`);
-        reject(err);
-      })
-      .run();
-  });
-}
-
-async function concatAudioFiles(input1, input2, output) {
-  return new Promise((resolve, reject) => {
-    ffmpeg(input1)
-      .input(input2)
-      .on('end', () => {
-        logger.info(`Concat completed: ${output}`);
-        resolve()
-      })
-      .on('error', (err) => {
-        logger.error(`Error during concat: ${err.message}`)
-        reject(err)
-      })
-      .mergeToFile(output, '/tmp');
-  });
-}
 
 class ASR extends eventEmitter {
   static states = {
@@ -81,6 +31,7 @@ class ASR extends eventEmitter {
     super();
     this.session = session;
     this.channel = channel;
+    this.logger = logger.getChannelLogger(this.session.id, this.channel.id);
     this.provider = null;
     this.state = ASR.states.CLOSED;
     this.init();
@@ -96,22 +47,22 @@ class ASR extends eventEmitter {
         this.audioFile = fs.createWriteStream(audioFilePath);
       }
       this.audioBuffer = new CircularBuffer();
-      logger.info(`Starting ${channel.transcriberProfile.config.type} ASR for session ${this.session.id}, channel ${this.channel.id}`);
+      this.logger.info(`Starting ${channel.transcriberProfile.config.type} ASR`);
 
       // Use the FakeTranscriber if live transcripts are disabled
       if (!this.channel.enableLiveTranscripts) {
-        this.provider = new FakeTranscriber(channel);
-        logger.info("ASR started with FakeTranscriber");
+        this.provider = new FakeTranscriber(session, channel);
+        this.logger.info("ASR started with FakeTranscriber");
       }
       else {
         const backend = loadAsr(channel.transcriberProfile.config.type);
-        this.provider = new backend(channel);
+        this.provider = new backend(this.session, this.channel);
       }
       this.state = ASR.states.CONNECTING;
       this.handleASREvents();
       await this.provider.start();
     } catch (error) {
-      logger.error(error);
+      this.logger.error(error);
       this.state = ASR.states.ERROR;
       this.emit('error', error);
     }
@@ -135,11 +86,11 @@ class ASR extends eventEmitter {
         "locutor": process.env.TRANSCRIBER_BOT_NAME
       }
       this.emit('final', final)
-      logger.error(msg)
+      this.logger.error(msg);
       this.state = ASR.states.ERROR
     })
     this.provider.on('closed', (code, reason) => {
-      logger.info(`ASR connexion closed with code ${code}`);
+      this.logger.info(`ASR connexion closed with code ${code}`);
       this.state = ASR.states.CLOSED;
     });
     this.provider.on('transcribing', (transcription) => {
@@ -164,9 +115,60 @@ class ASR extends eventEmitter {
       this.emit('final', final)
   }
 
+  async transcodeToMp3(inputPath, outputPath) {
+    return new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .inputFormat('s16le')      // Specify the input format as signed 16-bit little-endian PCM
+        .inputOptions(['-ar 16000', '-ac 1'])
+        .audioCodec('libmp3lame')
+        .audioBitrate('64k')
+        .on('end', () => {
+          this.logger.info(`Transcoding to MP3 completed: ${outputPath}`);
+          resolve();
+        })
+        .on('error', (err) => {
+          this.logger.error(`Error during transcoding: ${err.message}`);
+          reject(err);
+        })
+        .save(outputPath);
+    });
+  }
+
+  async transcodeToWav(inputPath, outputPath) {
+    return new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .inputFormat('s16le')      // Specify the input format as signed 16-bit little-endian PCM
+        .inputOptions(["-ar 16000", "-ac 1"])
+        .audioCodec("pcm_s16le")
+        .output(outputPath)
+        .on("end", resolve)
+        .on("error", (err) => {
+          this.logger.error(`Error transcoding to WAV: ${err.message}`);
+          reject(err);
+        })
+        .run();
+    });
+  }
+
+  async concatAudioFiles(input1, input2, output) {
+    return new Promise((resolve, reject) => {
+      ffmpeg(input1)
+        .input(input2)
+        .on('end', () => {
+          this.logger.info(`Concat completed: ${output}`);
+          resolve()
+        })
+        .on('error', (err) => {
+          this.logger.error(`Error during concat: ${err.message}`)
+          reject(err)
+        })
+        .mergeToFile(output, '/tmp');
+    });
+  }
+
   async saveAudio() {
     const fileExtension = this.channel.compressAudio ? '.mp3' : '.wav';
-    const transcodeFn = this.channel.compressAudio ? transcodeToMp3 : transcodeToWav;
+    const transcodeFn = this.channel.compressAudio ? this.transcodeToMp3.bind(this) : this.transcodeToWav.bind(this);
     const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
     let outFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}`) + fileExtension;
 
@@ -174,14 +176,14 @@ class ASR extends eventEmitter {
       const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-temp`) + fileExtension;
       const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-output`) + fileExtension;
       await transcodeFn(pcmFilePath, tempOutFilePath);
-      await concatAudioFiles(outFilePath, tempOutFilePath, tempOutputFilePath);
+      await this.concatAudioFiles(outFilePath, tempOutFilePath, tempOutputFilePath);
       fs.unlinkSync(tempOutFilePath);
       fs.renameSync(tempOutputFilePath, outFilePath);
     } else {
       await transcodeFn(pcmFilePath, outFilePath);
     }
 
-    logger.info(`Audio file saved as ${outFilePath}`);
+    this.logger.info(`Audio file saved as ${outFilePath}`);
     fs.unlinkSync(pcmFilePath);
   }
 
@@ -196,7 +198,7 @@ class ASR extends eventEmitter {
         await this.provider.stop();
       }
     } catch (error) {
-      logger.error(`Error when saving the audio file: ${error}`)
+      this.logger.error(`Error when saving the audio file: ${error}`)
       this.emit('error', error);
       return false;
     }

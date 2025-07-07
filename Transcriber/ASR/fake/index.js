@@ -1,7 +1,7 @@
 const EventEmitter = require('eventemitter3');
 
 class FakeTranscriber extends EventEmitter {
-    constructor(channel) {
+    constructor(session, channel) {
         super();
     }
 

@@ -19,9 +19,10 @@ class LintoTranscriber extends EventEmitter {
         'DEPTH_ZERO_SELF_SIGNED_CERT'
     ]);
 
-    constructor(channel) {
+    constructor(session, channel) {
         super();
         this.channel = channel;
+        this.logger = logger.getChannelLogger(session.id, channel.id);
         this.ws = null;
         this.emit('closed');
     }
@@ -54,7 +55,7 @@ class LintoTranscriber extends EventEmitter {
         this.ws = new WebSocket(endpoint);
 
         this.ws.on('open', () => {
-            logger.debug("WebSocket connection established");
+            this.logger.debug("WebSocket connection established");
             this.ws.send(JSON.stringify({ config: { sample_rate: 16000 } }));
             this.emit('ready');
         });
@@ -65,19 +66,19 @@ class LintoTranscriber extends EventEmitter {
                 const result = this.getMqttPayload(data.text);
                 this.lastEndTime = result.end;
                 this.emit('transcribed', result);
-                logger.debug(`ASR transcription: ${data.text}`);
+                this.logger.debug(`ASR transcription: ${data.text}`);
             } else if (data.partial) {
                 if (!this.startTime) {
                     this.startTime = Date.now();
                 }
                 const result = this.getMqttPayload(data.partial);
                 this.emit('transcribing', result);
-                logger.debug(`ASR partial transcription: ${data.partial}`);
+                this.logger.debug(`ASR partial transcription: ${data.partial}`);
             }
         });
 
         this.ws.on('error', (error) => {
-            logger.warn(`WebSocket error: ${error}`);
+            this.logger.warn(`WebSocket error: ${error}`);
             this.emit('error', LintoTranscriber.ERROR_MAP[4]);
             this.stop();
 
@@ -90,7 +91,7 @@ class LintoTranscriber extends EventEmitter {
 
         this.ws.on('close', (code, reason) => {
             const error = LintoTranscriber.ERROR_MAP[code] || 'UNKNOWN_ERROR';
-            logger.debug(`WebSocket closed: ${code} ${reason}`);
+            this.logger.debug(`WebSocket closed: ${code} ${reason}`);
             this.emit('closed', { code, reason, error });
         });
     }
@@ -99,7 +100,7 @@ class LintoTranscriber extends EventEmitter {
         if (this.ws) {
             this.ws.send(buffer);
         } else {
-            logger.warn("Linto ASR transcriber can't decode buffer");
+            this.logger.warn("Linto ASR transcriber can't decode buffer");
         }
     }
 

@@ -11,12 +11,12 @@ class RecognizerListener {
     }
 
     emitTranscribing(payload) {
-        logger.debug(`${this.name}: Microsoft ASR partial transcription: ${payload.text}`);
+        this.transcriber.logger.debug(`${this.name}: Microsoft ASR partial transcription: ${payload.text}`);
         this.transcriber.emit('transcribing', payload);
     }
 
     emitTranscribed(payload) {
-        logger.debug(`${this.name}: Microsoft ASR final transcription: ${payload.text}`);
+        this.transcriber.logger.debug(`${this.name}: Microsoft ASR final transcription: ${payload.text}`);
         this.transcriber.emit('transcribed', payload);
     }
 
@@ -33,24 +33,24 @@ class RecognizerListener {
     async handleCanceled(s, e) {
         // The ASR is cancelled until the end of the stream
         // and can be restarted with a new stream
-        logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
         await this.transcriber.stop();
     };
 
     handleSessionStopped(s, e) {
-        logger.info(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
         this.transcriber.emit('closed', e.reason);
     };
 
     handleStartContinuousRecognitionAsync() {
-        logger.info(`${this.name}: Microsoft ASR recognition started`);
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
     };
 
     handleStartContinuousRecognitionAsyncError(error) {
-        logger.error(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
+        this.transcriber.logger.error(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
     };
 
     listen(recognizer) {
@@ -98,16 +98,16 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
     }
 
     handleCanceled(s, e) {
-        logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
     };
 
     handleSessionStopped(s, e) {
         const reason = e.reason ? `: ${e.reason}` : '';
-        logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
     };
 
     handleStartContinuousRecognitionAsync() {
-        logger.info(`${this.name}: Microsoft ASR recognition started`);
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR recognition started`);
     };
 }
 
@@ -124,9 +124,10 @@ class MicrosoftTranscriber extends EventEmitter {
         8: 'FORBIDDEN',
     }
 
-    constructor(channel) {
+    constructor(session, channel) {
         super();
         this.channel = channel;
+        this.logger = logger.getChannelLogger(session.id, channel.id);
         this.recognizers = [];
         this.pushStreams = [];
         this.pushStream = AudioInputStream.createPushStream();
@@ -162,7 +163,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     start() {
         const { transcriberProfile, translations, diarization } = this.channel;
-        logger.info(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
+        this.logger.info(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
         this.startedAt = new Date().toISOString();
@@ -295,7 +296,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 pushStream.write(buffer);
             }
         } else {
-            logger.warn("Microsoft ASR transcriber can't decode buffer");
+            this.logger.warn("Microsoft ASR transcriber can't decode buffer");
         }
     }
 

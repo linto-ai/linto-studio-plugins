@@ -50,7 +50,7 @@ class MultiplexedSRTServer extends EventEmitter {
         const now = Date.now();
         for (const value of Object.values(this.runningChannels)) {
             if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
-                logger.warn(`Channel ${value.fd.channel.id} timeout, closing !`);
+                logger.warn('Channel timeout, closing !', {sessionId: fd.session.id, channelId: fd.channel.id});
                 this.cleanupConnection(value.connection, value.fd, value.worker);
             }
         }
@@ -173,33 +173,48 @@ class MultiplexedSRTServer extends EventEmitter {
       }
     }
 
+    getLogMeta(fd) {
+        const logMeta = {};
+        if (fd && fd.session && fd.session.id) {
+            logMeta.sessionId = fd.session.id;
+        }
+        if (fd && fd.channel && fd.channel.id) {
+            logMeta.channelId = fd.channel.id;
+        }
+        return logMeta;
+    }
+
     // Events sent by the worker
     handleWorkerEvents(connection, fd, worker) {
+        const logMeta = this.getLogMeta(fd);
+
         worker.on('message', async (message) => {
             if (message.type === 'data') {
                 this.emit('data', message.buf, fd.session.id, fd.channel.id);
             }
             if (message.type === 'error') {
-                logger.error(`Worker ${worker.pid} error --> ${message.error}`);
+                logger.error(`Worker ${worker.pid} error --> ${message.error}`, logMeta);
                 this.cleanupConnection(connection, fd, worker);
             }
             if (message.type === 'playing') {
-                logger.info(`Worker: ${worker.pid} --> transcoding session ${fd.session.id}, channel ${fd.channel.id}`);
+                logger.info(`Worker: ${worker.pid} --> transcoding`, logMeta);
             }
         });
 
         worker.on('error', (err) => {
-            logger.error(`Worker: ${worker.pid} --> Error:`, err);
+            logger.error(`Worker: ${worker.pid} --> Error:`, logMeta, err);
             this.cleanupConnection(connection, fd, worker);
         });
 
         worker.on('exit', (code, signal) => {
-            logger.info(`Worker: ${worker.pid} --> Exited, releasing session ${fd.session.id}, channel ${fd.channel.id}`);
+            logger.info(`Worker: ${worker.pid} --> Exited, releasing session`, logMeta);
         });
     }
 
 
     handleConnectionEvents(connection, fd, worker) {
+        const logMeta = this.getLogMeta(fd);
+
         connection.on("data", async () => {
             if (worker && worker.connected) {
                 this.onClientData(connection, fd, worker);
@@ -210,12 +225,12 @@ class MultiplexedSRTServer extends EventEmitter {
         });
 
         connection.on("closing", async () => {
-            logger.info(`Connection: ${connection.fd} --> closing`);
+            logger.info(`Connection: ${connection.fd} --> closing`, logMeta);
             connection.close()
         });
 
         connection.on("closed", async () => {
-            logger.info(`Connection: ${connection.fd} --> closed`);
+            logger.info(`Connection: ${connection.fd} --> closed`, logMeta);
             if (worker && worker.connected) {
                 worker.send({ type: 'terminate' });
             }
@@ -223,7 +238,7 @@ class MultiplexedSRTServer extends EventEmitter {
         });
 
         connection.on('error', (err) => {
-            logger.error(`Connection: ${connection.fd} --> error:`, err);
+            logger.error(`Connection: ${connection.fd} --> error:`, logMeta, err);
             this.cleanupConnection(connection, fd, worker);
         });
     }
@@ -235,9 +250,10 @@ class MultiplexedSRTServer extends EventEmitter {
             const serializedChunks = chunks.map(chunk => Array.from(chunk));
             worker.send({ type: 'data', chunks: serializedChunks });
         } catch (error) {
-            logger.error(`Error reading chunks: ${error.message}`);
+            const logMeta = this.getLogMeta(fd);
+            logger.error(`Error reading chunks: ${error.message}`, logMeta);
             if (error.message.includes("Connection was broken")) {
-                logger.error("Connection was broken, cleaning up.");
+                logger.error("Connection was broken, cleaning up.", logMeta);
                 this.cleanupConnection(connection, fd, worker);
             }
         }
@@ -246,7 +262,7 @@ class MultiplexedSRTServer extends EventEmitter {
     cleanupConnection(connection, fd, worker) {
         // Tell the streaming server controller to forward the session stop message to the broker
         this.emit('session-stop', fd.session, fd.channel.id)
-        logger.info(`Connection: ${connection.fd} --> cleaning up.`);
+        logger.info(`Connection: ${connection.fd} --> cleaning up.`, this.getLogMeta(fd));
         if (connection) {
             connection.close();
             connection = null;

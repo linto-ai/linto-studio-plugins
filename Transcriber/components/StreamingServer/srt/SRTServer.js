@@ -152,6 +152,7 @@ class MultiplexedSRTServer extends EventEmitter {
         // - call scheduler to update session status to active
         // - start buffering audio in circular buffer
         // - start transcription
+        logger.info(`Session ${session.name} starts.`, {sessionId: session.id, channelId: channel.id});
         this.emit('session-start', fd.session, fd.channel);
         this.addRunningSession(session, connection, fd, worker);
     }

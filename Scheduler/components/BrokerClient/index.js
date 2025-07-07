@@ -367,7 +367,7 @@ class BrokerClient extends Component {
 
   async publishSessions() {
     const sessions = await Model.Session.findAll({
-      attributes: ['id', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd'],
+      attributes: ['id', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'name'],
       where: { status: ['active', 'ready'] },
       include: [
         {

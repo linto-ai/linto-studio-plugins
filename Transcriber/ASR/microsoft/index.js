@@ -202,11 +202,13 @@ class MicrosoftTranscriber extends EventEmitter {
     getSpeechConfig(config, translations) {
         const multi = config.languages.length > 1;
         const hasTranslations = translations && translations.length;
+        let usedEndpoint = null;
 
         const decryptedKey = new Security().safeDecrypt(config.key);
 
         if (multi && hasTranslations) {
             const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
+            usedEndpoint = universalEndpoint;
             const speechConfig = SpeechTranslationConfig.fromEndpoint(new URL(universalEndpoint), decryptedKey);
             speechConfig.speechRecognitionLanguage = config.languages[0].candidate;
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
@@ -223,6 +225,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
         if (multi) {
             const universalEndpoint = `wss://${config.region}.stt.speech.microsoft.com/speech/universal/v2`;
+            usedEndpoint = universalEndpoint;
             const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), decryptedKey);
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
@@ -234,6 +237,7 @@ class MicrosoftTranscriber extends EventEmitter {
             speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
             // Uses custom endpoint if provided, if not, uses default endpoint for region
             speechConfig.endpointId = config.languages[0]?.endpoint;
+            usedEndpoint = config.languages[0]?.endpoint;
 
             const targetLanguages = this.getTargetLanguages();
             for (const targetLanguage of targetLanguages) {
@@ -247,6 +251,9 @@ class MicrosoftTranscriber extends EventEmitter {
         const speechConfig = SpeechConfig.fromSubscription(decryptedKey, config.region);
         // Uses custom endpoint if provided, if not, uses default endpoint for region
         speechConfig.endpointId = config.languages[0]?.endpoint;
+        usedEndpoint = config.languages[0]?.endpoint;
+
+        this.logger.info(`ASR is using endpoint ${usedEndpoint}`);
         return speechConfig;
     }
 

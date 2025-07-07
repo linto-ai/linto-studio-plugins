@@ -1,7 +1,8 @@
 const eventEmitter = require('eventemitter3');
 const path = require('path');
 const fs = require('fs');
-const { CircularBuffer, logger } = require("live-srt-lib");
+const { CircularBuffer } = require("live-srt-lib");
+const logger = require('../logger')
 const ffmpeg = require('fluent-ffmpeg');
 const ASR_ERROR = require('./error.js');
 const FakeTranscriber = require('./fake/index.js');

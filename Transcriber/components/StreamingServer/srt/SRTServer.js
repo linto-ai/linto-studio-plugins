@@ -1,8 +1,8 @@
 const EventEmitter = require('eventemitter3');
-const { logger } = require('live-srt-lib')
 const { SRT, SRTServer, AsyncSRT } = require("linto-node-srt");
 const { fork } = require('child_process');
 const path = require('path');
+const logger = require('../../../logger')
 
 const {
     STREAMING_PASSPHRASE,

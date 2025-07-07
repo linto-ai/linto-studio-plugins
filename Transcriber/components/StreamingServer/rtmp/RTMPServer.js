@@ -1,7 +1,7 @@
 const { fork } = require('child_process');
 const EventEmitter = require('eventemitter3');
 const NodeMediaServer = require('node-media-server');
-const { CustomErrors, logger } = require("live-srt-lib");
+const logger = require('../../../logger')
 const path = require('path');
 
 const {

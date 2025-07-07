@@ -1,4 +1,5 @@
-const { Component, logger } = require('live-srt-lib');
+const { Component } = require('live-srt-lib');
+const logger = require('../../logger')
 const net = require('net');
 
 class Healthcheck extends Component {

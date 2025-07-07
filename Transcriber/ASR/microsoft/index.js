@@ -1,5 +1,6 @@
 const { AudioConfig, ConversationTranscriber, PropertyId, AudioInputStream, SpeechConfig, SpeechTranslationConfig, TranslationRecognizer, SpeechRecognizer, ResultReason, AutoDetectSourceLanguageConfig, AutoDetectSourceLanguageResult, SourceLanguageConfig } = require('microsoft-cognitiveservices-speech-sdk');
-const { logger, Security } = require('live-srt-lib')
+const { Security } = require('live-srt-lib')
+const logger = require('../../logger')
 const EventEmitter = require('eventemitter3');
 
 

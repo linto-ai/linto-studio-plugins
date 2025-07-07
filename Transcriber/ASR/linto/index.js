@@ -1,5 +1,5 @@
 const WebSocket = require('ws');
-const { logger } = require('live-srt-lib')
+const logger = require('../../logger')
 const EventEmitter = require('eventemitter3');
 
 class LintoTranscriber extends EventEmitter {

@@ -1,4 +1,4 @@
-const { logger } = require('live-srt-lib')
+const logger = require('../../../logger')
 const { fork } = require('child_process');
 const path = require('path');
 const { launch, getStream } = require('puppeteer-stream');

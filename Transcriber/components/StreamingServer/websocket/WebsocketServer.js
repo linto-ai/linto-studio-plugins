@@ -1,9 +1,8 @@
 const { fork } = require('child_process');
 const EventEmitter = require('eventemitter3');
-const { CustomErrors, logger } = require("live-srt-lib");
 const path = require('path');
-const url = require('url');
 const WebSocket = require('ws');
+const logger = require('../../../logger')
 
 const {
     STREAMING_HOST,

@@ -1,5 +1,6 @@
-const { MqttClient, Component, logger } = require('live-srt-lib')
-const { v4: uuidv4 } = require('uuid');
+const { MqttClient, Component } = require('live-srt-lib')
+const { getAppId } = require('../../appContext');
+const logger = require('../../logger')
 class BrokerClient extends Component {
 
   static states = {
@@ -15,7 +16,7 @@ class BrokerClient extends Component {
     this._state = BrokerClient.states.DISCONNECTED;
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.sessions = []; //sessions will be updated by the system/out/sessions/statuses messages (see controllers/MqttMessages.js)
-    this.uniqueId = uuidv4(); //unique ID for this instance / path for MQTT
+    this.uniqueId = getAppId(); //unique ID for this instance / path for MQTT
 
     this.domainSpecificValues = {
       srt_mode: this.srt_mode,

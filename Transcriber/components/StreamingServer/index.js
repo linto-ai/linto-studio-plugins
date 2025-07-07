@@ -1,4 +1,5 @@
-const { Component, CustomErrors, logger } = require("live-srt-lib");
+const { Component } = require("live-srt-lib");
+const logger = require('../../logger')
 const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
 const MultiplexedWebsocketServer = require('./websocket/WebsocketServer.js');

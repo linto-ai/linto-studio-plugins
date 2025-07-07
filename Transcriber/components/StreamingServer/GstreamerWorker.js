@@ -1,5 +1,5 @@
 const gstreamer = require("gstreamer-superficial");
-const { logger } = require('live-srt-lib')
+const logger = require('../../logger')
 
 let pipeline;
 

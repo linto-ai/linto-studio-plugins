@@ -1,4 +1,4 @@
-const { logger } = require('live-srt-lib')
+const logger = require('../../../logger')
 
 // Handler for 'scheduler' messages
 function handleSchedulerMessage(scheduler) {

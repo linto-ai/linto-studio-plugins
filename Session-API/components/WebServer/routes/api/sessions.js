@@ -539,5 +539,78 @@ module.exports = (webserver) => {
                 next(err);
             }
         }
+    }, {
+        path: '/sessions/:id/delete-captions',
+        method: 'delete',
+        controller: async (req, res, next) => {
+            const sessionId = req.params.id;
+            const { start_time, end_time } = req.query;
+            const timeRegex = /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/;
+
+            if (start_time && !timeRegex.test(start_time)) {
+              return res.status(400).json({ error: "Invalid start_time format. Expected HH:mm:ss or null" });
+            }
+
+            if (end_time && !timeRegex.test(end_time)) {
+              return res.status(400).json({ error: "Invalid end_time format. Expected HH:mm:ss or null" });
+            }
+
+            function toSeconds(t) {
+              const [h, m, s] = t.split(':');
+              return +h * 3600 + +m * 60 + parseFloat(s);
+            }
+
+            const startSecs = start_time ? toSeconds(start_time) : null;
+            const endSecs   = end_time   ? toSeconds(end_time)   : null;
+
+            // Build removal conditions: abs_start >= startSecs AND abs_end <= endSecs
+            const removalConditions = [];
+            if (startSecs !== null) removalConditions.push(`abs_start >= ${startSecs}`);
+            if (endSecs   !== null) removalConditions.push(`abs_end   <= ${endSecs}`);
+            const whereRemove = removalConditions.length
+              ? removalConditions.join(' AND ')
+              : 'FALSE';
+
+            try {
+                // First, check if the session exists and is active
+                const session = await Model.Session.findByPk(sessionId);
+                if (!session) {
+                    throw new ApiError(404, 'Session not found');
+                }
+
+                await Model.Channel.update(
+                  {
+                    closedCaptions: Model.sequelize.literal(`(
+                      WITH base AS (
+                        SELECT ("closedCaptions"->0->>'astart')::timestamptz AS base
+                        FROM channels
+                        WHERE "sessionId" = '${sessionId}'
+                      ), elems AS (
+                        SELECT elem,
+                          -- compute absolute start in seconds from base + relative start
+                          EXTRACT(EPOCH FROM ((elem->>'astart')::timestamptz - base))
+                            + (elem->>'start')::numeric AS abs_start,
+                          -- compute absolute end in seconds
+                          COALESCE(
+                            EXTRACT(EPOCH FROM ((elem->>'aend')::timestamptz - base)),
+                            EXTRACT(EPOCH FROM ((elem->>'astart')::timestamptz - base))
+                              + (elem->>'end')::numeric
+                          ) AS abs_end
+                        FROM base, jsonb_array_elements("closedCaptions"::jsonb) AS elem
+                      )
+                      SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb)
+                      FROM elems
+                      WHERE NOT (${whereRemove})
+                    )`)
+                  },
+                  { where: { sessionId } }
+                );
+
+                const result = await getSessionResult(session.id, true);
+                res.json(result);
+            } catch (err) {
+                next(err);
+            }
+        }
     }];
 };

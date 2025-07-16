@@ -7,6 +7,16 @@ class ApiError extends Error {
     }
 }
 
+function parseBoolean(v) {
+    if (v === "true" || v === true) {
+        return true;
+    }
+    if (v === "false" || v === false) {
+        return false;
+    }
+    return null;
+}
+
 module.exports = (webserver) => {
     return [
     {
@@ -37,6 +47,33 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             const limit = req.query.limit ?? 10
             const offset = req.query.offset ?? 0
+            const searchName = req.query.searchName
+            const organizationId = req.query.organizationId;
+            const visibility = req.query.visibility;
+            const autoStart = parseBoolean(req.query.autoStart);
+            const autoEnd = parseBoolean(req.query.autoEnd);
+
+            let where = {}
+
+            if (searchName) {
+                where.name = { [Model.Op.startsWith]: searchName }
+            }
+
+            if (organizationId) {
+                where.organizationId = organizationId;
+            }
+
+            if (visibility) {
+                where.visibility = visibility;
+            }
+
+            if (typeof autoStart === 'boolean') {
+                where.autoStart = autoStart;
+            }
+
+            if (typeof autoEnd === 'boolean') {
+                where.autoEnd = autoEnd;
+            }
 
             try {
                 const results = await Model.SessionTemplate.findAndCountAll({
@@ -49,6 +86,7 @@ module.exports = (webserver) => {
                         },
                         order: [['id', 'ASC']]
                     },
+                    where: where
                 });
 
                 res.json({

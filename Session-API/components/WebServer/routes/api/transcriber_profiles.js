@@ -5,7 +5,7 @@ function isValidLocale(locale) {
     return pattern.test(locale);
 }
 
-const validateTranscriberProfile = (body) => {
+const validateTranscriberProfile = (body, update=false) => {
     const config = body.config;
     if (!config) {
         return { error: 'TranscriberProfile object is missing', status: 400 };
@@ -16,7 +16,7 @@ const validateTranscriberProfile = (body) => {
     if (config.type === 'linto' && (!config.languages.every(lang => lang.candidate && lang.endpoint))) {
         return { error: 'Invalid Linto TranscriberProfile endpoint or languages', status: 400 };
     }
-    if (config.type === 'microsoft' && (!config.languages.every(lang => isValidLocale(lang.candidate)) || !config.region || !config.key)) {
+    if (config.type === 'microsoft' && (!config.languages.every(lang => isValidLocale(lang.candidate)) || !config.region || (!config.key && !update))) {
         return { error: 'Invalid Microsoft TranscriberProfile languages, region, or key', status: 400 };
     }
     if (config.languages.some(lang => typeof lang !== 'object')) {
@@ -135,11 +135,18 @@ module.exports = (webserver) => {
                 if (!config) {
                     return res.status(404).send('Transcriber config not found');
                 }
-                const validationResult = validateTranscriberProfile(req.body);
+                const validationResult = validateTranscriberProfile(req.body, true);
                 if (validationResult) {
                     return res.status(validationResult.status).send(validationResult.error);
                 }
-                await config.update(extendTranscriberProfile(cryptTranscriberProfileKey(req.body)));
+                let body = req.body;
+                if (body.config.key) {
+                        body = cryptTranscriberProfileKey(req.body);
+                }
+                else {
+                        body.config.key = config.config.key;
+                }
+                await config.update(extendTranscriberProfile(body));
                 res.json(config);
             } catch (err) {
                 next(err);

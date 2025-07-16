@@ -30,10 +30,21 @@ class RecognizerListener {
         }
     }
 
+    formatErrorMsg(e) {
+        let msg = `${this.name}: Microsoft ASR canceled`;
+        if (e.errorDetails) {
+            msg = `${msg} - ${e.errorDetails}`;
+        }
+        if (e.errorCode && MicrosoftTranscriber.ERROR_MAP[e.errorCode]) {
+            msg = `${msg} - ${MicrosoftTranscriber.ERROR_MAP[e.errorCode]}`;
+        }
+        return msg;
+    }
+
     async handleCanceled(s, e) {
         // The ASR is cancelled until the end of the stream
         // and can be restarted with a new stream
-        this.transcriber.logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        this.transcriber.logger.info(`${this.formatErrorMsg(e)}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
         await this.transcriber.stop();
@@ -98,7 +109,7 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
     }
 
     handleCanceled(s, e) {
-        this.transcriber.logger.info(`${this.name}: Microsoft ASR canceled: ${e.errorDetails}`);
+        this.transcriber.logger.info(`${this.formatErrorMsg(e)}`);
     };
 
     handleSessionStopped(s, e) {
@@ -163,7 +174,21 @@ class MicrosoftTranscriber extends EventEmitter {
 
     start() {
         const { transcriberProfile, translations, diarization } = this.channel;
-        this.logger.info(`Starting Microsoft ASR with translations=${translations} and diarization=${diarization}`);
+        let msg = 'Starting Microsoft ASR';
+
+        if (translations && translations.length > 0) {
+            msg = `${msg} - translations=${translations}`;
+        } else {
+            msg = `${msg} - without translation`;
+        }
+
+        if (diarization) {
+            msg = `${msg} - with diarization`;
+        } else {
+            msg = `${msg} - without diarization`;
+        }
+
+        this.logger.info(msg);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
         this.startedAt = new Date().toISOString();
@@ -220,6 +245,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 speechConfig.addTargetLanguage(targetLanguage);
             }
 
+            this.logger.info(`ASR is using endpoint ${usedEndpoint}`);
             return speechConfig;
         }
 
@@ -229,6 +255,7 @@ class MicrosoftTranscriber extends EventEmitter {
             const speechConfig = SpeechConfig.fromEndpoint(new URL(universalEndpoint), decryptedKey);
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_ContinuousLanguageId, 'true');
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
+            this.logger.info(`ASR is using endpoint ${usedEndpoint}`);
             return speechConfig;
         }
 
@@ -244,6 +271,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 speechConfig.addTargetLanguage(targetLanguage);
             }
 
+            this.logger.info(`ASR is using endpoint ${usedEndpoint}`);
             return speechConfig;
         }
 

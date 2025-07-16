@@ -76,6 +76,7 @@ class ASR extends eventEmitter {
       this.state = ASR.states.READY;
     });
     this.provider.on('error', error => {
+      this.logger.error(error);
       const msg = ASR_ERROR[error]
       const final = {
         "astart": this.provider.startedAt,
@@ -90,7 +91,14 @@ class ASR extends eventEmitter {
       this.state = ASR.states.ERROR
     })
     this.provider.on('closed', (code, reason) => {
-      this.logger.info(`ASR connexion closed with code ${code}`);
+      let msg = 'ASR connexion closed';
+      if (code) {
+        msg = `${msg} - Code: ${code}`;
+      }
+      if (reason) {
+        msg = `${msg} - Reason: ${reason}`;
+      }
+      this.logger.info(msg);
       this.state = ASR.states.CLOSED;
     });
     this.provider.on('transcribing', (transcription) => {

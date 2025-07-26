@@ -1,4 +1,4 @@
-PACKAGE_DIRS := . Transcriber Session-API Scheduler migration lib
+PACKAGE_DIRS := . Transcriber Session-API Scheduler Microsoft-Teams-Scheduler migration lib
 
 # Load .env as override if it exists
 ENV_FILE_ARGS = --env-file .envdefault.docker $(if $(wildcard .env),--env-file .env)

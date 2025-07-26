@@ -1,0 +1,35 @@
+{
+  "name": "live-transcription-open-source-toolbox-msteams-scheduler",
+  "version": "1.0.0",
+  "description": "Live Transcription Open Source Toolbox : Microsoft Teams Scheduler",
+  "main": "microsoft-teams-scheduler.js",
+  "scripts": {
+    "start": "node microsoft-teams-scheduler.js",
+    "start-live": "npx -y nodemon microsoft-teams-scheduler.js"
+  },
+  "author": "European Commission - DGSCIC",
+  "contributors": [
+    {
+      "name": "Damien Laine",
+      "email": "damien.laine@gmail.com",
+      "organization": "LINAGORA",
+      "role": "contractor"
+    },
+    {
+      "name": "Jean-Sébastien Bevilacqua",
+      "email": "jsbevilacqua@linagora.com",
+      "organization": "LINAGORA",
+      "role": "contractor"
+    }
+  ],
+  "license": "EUPL",
+  "dependencies": {
+    "@azure/identity": "^3.3.0",
+    "@microsoft/microsoft-graph-client": "^3.0.4",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "isomorphic-fetch": "^3.0.0",
+    "live-srt-lib": "file:../lib",
+    "util": "^0.12.5"
+  }
+}

@@ -26,3 +26,10 @@ services:
     env_file:
       - .envdefault
       - .envtest
+
+  msteams-scheduler:
+    healthcheck:
+      disable: true
+    env_file:
+      - .envdefault
+      - .envtest

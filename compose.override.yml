@@ -28,3 +28,11 @@ services:
       - ./Scheduler:/usr/src/app/scheduler
       - /usr/src/app/scheduler/node_modules
     command: ["npm run start-live"]
+
+  msteams-scheduler:
+    healthcheck:
+      disable: true
+    volumes:
+      - ./Microsoft-Teams-Scheduler:/usr/src/app/msteams-scheduler
+      - /usr/src/app/msteams-scheduler/node_modules
+    command: ["npm run start-live"]

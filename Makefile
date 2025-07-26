@@ -1,4 +1,4 @@
-PACKAGE_DIRS := . Transcriber Session-API Scheduler migration lib
+PACKAGE_DIRS := . Transcriber Session-API Scheduler Microsoft-Teams-Scheduler migration lib
 
 install-local: $(PACKAGE_DIRS)
 

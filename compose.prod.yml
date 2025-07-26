@@ -45,3 +45,6 @@ services:
 
   scheduler:
     restart: always
+
+  msteams-scheduler:
+    restart: always

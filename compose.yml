@@ -88,6 +88,22 @@ services:
         condition: service_completed_successfully
     networks:
       - internal
+  msteams-scheduler:
+    build:
+      context: .
+      dockerfile: Microsoft-Teams-Scheduler/Dockerfile
+    env_file:
+      - .envdefault.docker
+    environment:
+      - DEBUG=msteams-scheduler:*
+    depends_on:
+      broker:
+        condition: service_started
+      migration:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
 
 networks:
   internal:

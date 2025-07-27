@@ -3,4 +3,5 @@ module.exports = {
     ...require('./sessions.json'),
     ...require('./templates.json'),
     ...require('./bots.json'),
+    ...require('./msteams_users.json'),
   }

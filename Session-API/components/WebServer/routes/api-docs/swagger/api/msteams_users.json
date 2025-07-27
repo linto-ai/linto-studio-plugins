@@ -1,0 +1,99 @@
+{
+  "/msteams/users": {
+    "get": {
+      "tags": ["msteams"],
+      "summary": "List Microsoft Teams user subscriptions",
+      "responses": {
+        "200": {
+          "description": "List of users",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/MsTeamsUser" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "post": {
+      "tags": ["msteams"],
+      "summary": "Create a Microsoft Teams user subscription",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/MsTeamsUserRequest" }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "description": "User successfully subscribed",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MsTeamsUser" }
+            }
+          }
+        },
+        "500": {
+          "description": "Subscription creation failed",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "error": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "/msteams/users/{id}": {
+    "put": {
+      "tags": ["msteams"],
+      "summary": "Update a subscription userId",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/MsTeamsUserRequest" }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated user",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MsTeamsUser" }
+            }
+          }
+        }
+      }
+    },
+    "delete": {
+      "tags": ["msteams"],
+      "summary": "Delete a subscription",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "responses": {
+        "200": { "description": "User deleted" }
+      }
+    }
+  }
+}

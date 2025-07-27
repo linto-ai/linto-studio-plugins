@@ -1,0 +1,16 @@
+{
+  "MsTeamsUser": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "userId": { "type": "string" }
+    }
+  },
+  "MsTeamsUserRequest": {
+    "type": "object",
+    "properties": {
+      "userId": { "type": "string" }
+    },
+    "required": ["userId"]
+  }
+}

@@ -5,5 +5,6 @@ module.exports = (webserver) => {
         ...require('./sessions.js')(webserver),
         ...require('./templates.js')(webserver),
         ...require('./bots.js')(webserver),
+        ...require('./msteams_users.js')(webserver),
     ];
 }

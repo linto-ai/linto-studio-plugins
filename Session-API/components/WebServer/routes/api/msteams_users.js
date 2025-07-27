@@ -1,7 +1,8 @@
 const axios = require('axios');
 
 module.exports = (webserver) => {
-    const base = process.env.MSTEAMS_SCHEDULER_PUBLIC_BASE || 'http://localhost:8081';
+    const base = process.env.MSTEAMS_SCHEDULER_BASE_URL
+        || process.env.MSTEAMS_SCHEDULER_PUBLIC_BASE;
 
     return [{
         path: '/msteams/users',

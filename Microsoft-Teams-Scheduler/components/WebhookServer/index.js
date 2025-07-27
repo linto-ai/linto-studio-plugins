@@ -13,9 +13,9 @@ class WebhookServer extends Component {
     this.id = this.constructor.name;
 
     const credential = new ClientSecretCredential(
-      process.env.AZURE_TENANT_ID,
-      process.env.AZURE_CLIENT_ID,
-      process.env.AZURE_CLIENT_SECRET
+      process.env.MSTEAMS_SCHEDULER_AZURE_TENANT_ID,
+      process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_ID,
+      process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET
     );
     const authProvider = new TokenCredentialAuthenticationProvider(credential, {
       scopes: ['https://graph.microsoft.com/.default']
@@ -28,7 +28,7 @@ class WebhookServer extends Component {
     this.express = express().use(express.json({ limit: '1mb' }));
     this.express.post('/notifications', this.handleNotification.bind(this));
 
-    const port = process.env.PORT || 8080;
+    const port = process.env.MSTEAMS_SCHEDULER_PORT || 8080;
     this.httpServer = this.express.listen(port, async () => {
       logger.info(`Teams webhook listening on :${port}`);
       try {
@@ -47,8 +47,8 @@ class WebhookServer extends Component {
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
     return this.graph.api('/subscriptions').post({
       changeType: 'created,updated,deleted',
-      notificationUrl: `${process.env.PUBLIC_BASE}/notifications`,
-      resource: `/users/${process.env.USER_ID}/events`,
+      notificationUrl: `${process.env.MSTEAMS_SCHEDULER_PUBLIC_BASE}/notifications`,
+      resource: `/users/${process.env.MSTEAMS_SCHEDULER_USER_ID}/events`,
       expirationDateTime: expires,
       clientState: 'linagora-webhook'
     });
@@ -64,7 +64,7 @@ class WebhookServer extends Component {
       logger.debug(`[${n.changeType}] event ${n.resourceData.id}`);
       if (n.changeType !== 'deleted') {
         const ev = await this.graph
-          .api(`/users/${process.env.USER_ID}/events/${n.resourceData.id}`)
+          .api(`/users/${process.env.MSTEAMS_SCHEDULER_USER_ID}/events/${n.resourceData.id}`)
           .select('subject,start,end')
           .get();
         await Model.MsTeamsEvent.upsert({

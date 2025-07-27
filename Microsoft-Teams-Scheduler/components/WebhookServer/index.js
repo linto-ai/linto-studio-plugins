@@ -35,8 +35,21 @@ class WebhookServer extends Component {
     this.httpServer = this.express.listen(port, async () => {
       logger.info(`Teams webhook listening on :${port}`);
       try {
-        if (process.env.MSTEAMS_SCHEDULER_USER_ID) {
-          await Model.MsTeamsUser.upsert({ userId: process.env.MSTEAMS_SCHEDULER_USER_ID });
+        const envUserId = process.env.MSTEAMS_SCHEDULER_USER_ID;
+        if (envUserId) {
+          // remove any previous default user not matching env value
+          await Model.MsTeamsUser.destroy({
+            where: { defaultUser: true, userId: { [Model.Op.ne]: envUserId } }
+          });
+          // ensure current default user exists
+          const [user] = await Model.MsTeamsUser.findOrCreate({
+            where: { userId: envUserId },
+            defaults: { userId: envUserId, defaultUser: true }
+          });
+          if (!user.defaultUser) {
+            user.defaultUser = true;
+            await user.save();
+          }
         }
 
         const users = await Model.MsTeamsUser.findAll();

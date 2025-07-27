@@ -25,30 +25,53 @@ class WebhookServer extends Component {
     this.client = new MqttClient({ uniqueId: 'teams-scheduler', pub: 'teams-scheduler', subs: [] });
     this.client.on('ready', () => this.client.publishStatus());
 
-    this.express = express().use(express.json({ limit: '1mb' }));
-    this.express.post('/notifications', this.handleNotification.bind(this));
+    this.express = express();
+    this.express.use(express.json({ limit: '1mb' }));
+    this.express.set('trust proxy', true);
+
+    require('./routes/router.js')(this);
 
     const port = process.env.MSTEAMS_SCHEDULER_PORT || 8080;
     this.httpServer = this.express.listen(port, async () => {
       logger.info(`Teams webhook listening on :${port}`);
       try {
-        const sub = await this.ensureSubscription();
-        logger.info(`Subscription created: ${sub.id} valid until ${sub.expirationDateTime}`);
+        if (process.env.MSTEAMS_SCHEDULER_USER_ID) {
+          await Model.MsTeamsUser.upsert({ userId: process.env.MSTEAMS_SCHEDULER_USER_ID });
+        }
+
+        const users = await Model.MsTeamsUser.findAll();
+        for (const u of users) {
+          try {
+            const sub = await this.ensureSubscription(u.userId);
+            logger.info(`Subscription created for ${u.userId}: ${sub.id} valid until ${sub.expirationDateTime}`);
+          } catch (err) {
+            logger.error(`Failed to create subscription for ${u.userId}:`, err.message);
+          }
+        }
       } catch (err) {
-        logger.error('Failed to create subscription:', err.message);
+        logger.error('Failed to initialize subscriptions:', err.message);
       }
+    });
+
+    this.express.use((req, res, next) => {
+      res.status(404);
+      res.end();
+    });
+    this.express.use((err, req, res, next) => {
+      res.status(err.status || 500);
+      res.json({ error: err.message });
     });
 
     setInterval(() => this.checkEvents(), 60 * 1000);
     return this.init();
   }
 
-  async ensureSubscription() {
+  async ensureSubscription(userId = process.env.MSTEAMS_SCHEDULER_USER_ID) {
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
     return this.graph.api('/subscriptions').post({
       changeType: 'created,updated,deleted',
       notificationUrl: `${process.env.MSTEAMS_SCHEDULER_PUBLIC_BASE}/notifications`,
-      resource: `/users/${process.env.MSTEAMS_SCHEDULER_USER_ID}/events`,
+      resource: `/users/${userId}/events`,
       expirationDateTime: expires,
       clientState: 'linagora-webhook'
     });

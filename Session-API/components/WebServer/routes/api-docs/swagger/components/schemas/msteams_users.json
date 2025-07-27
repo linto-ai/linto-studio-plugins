@@ -3,7 +3,8 @@
     "type": "object",
     "properties": {
       "id": { "type": "string" },
-      "userId": { "type": "string" }
+      "userId": { "type": "string" },
+      "defaultUser": { "type": "boolean" }
     }
   },
   "MsTeamsUserRequest": {

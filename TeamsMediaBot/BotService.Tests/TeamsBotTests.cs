@@ -16,8 +16,10 @@ namespace BotService.Tests
         {
             var writer = new Mock<ISrtWriter>();
             var bot = new TeamsBot(NullLogger<TeamsBot>.Instance, writer.Object);
-            await bot.JoinMeetingAsync(new Uri("https://test"), CancellationToken.None);
+            var config = new SrtConfiguration("localhost", 9000, 120, "");
+            await bot.JoinMeetingAsync(new Uri("https://test"), config, CancellationToken.None);
             await bot.HandleAudioFrameAsync(new byte[160], CancellationToken.None);
+            writer.Verify(w => w.Configure("localhost", 9000, 120, ""), Times.Once);
             writer.Verify(w => w.SendAsync(It.IsAny<ReadOnlyMemory<byte>>(), CancellationToken.None), Times.Once);
         }
     }

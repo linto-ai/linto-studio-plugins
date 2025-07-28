@@ -17,9 +17,10 @@ namespace BotService
             _writer = writer;
         }
 
-        public async Task JoinMeetingAsync(Uri joinUrl, CancellationToken cancellationToken)
+        public async Task JoinMeetingAsync(Uri joinUrl, SrtConfiguration srtConfig, CancellationToken cancellationToken)
         {
             _logger.LogInformation("Joining meeting {JoinUrl}", joinUrl);
+            _writer.Configure(srtConfig.Host, srtConfig.Port, srtConfig.Latency, srtConfig.StreamId);
             // TODO: Implement real Graph call join logic
             await Task.Delay(1000, cancellationToken); // placeholder
             _logger.LogInformation("Joined meeting");

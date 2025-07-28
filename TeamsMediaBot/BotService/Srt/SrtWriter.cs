@@ -9,16 +9,17 @@ namespace BotService.Srt
     public interface ISrtWriter : IAsyncDisposable
     {
         Task SendAsync(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken);
+        void Configure(string host, int port, int latency, string streamId);
     }
 
     public sealed class SrtWriter : ISrtWriter
     {
         private readonly ILogger<SrtWriter> _logger;
         private IntPtr _socket;
-        private readonly string _hostname;
-        private readonly int _port;
-        private readonly int _latency;
-        private readonly string _streamId;
+        private string _hostname;
+        private int _port;
+        private int _latency;
+        private string _streamId;
 
         public SrtWriter(ILogger<SrtWriter> logger)
         {
@@ -27,6 +28,20 @@ namespace BotService.Srt
             _port = int.TryParse(Environment.GetEnvironmentVariable("SRT_PORT"), out var p) ? p : 9000;
             _latency = int.TryParse(Environment.GetEnvironmentVariable("SRT_LATENCY"), out var l) ? l : 120;
             _streamId = Environment.GetEnvironmentVariable("SRT_STREAM_ID") ?? string.Empty;
+        }
+
+        public SrtWriter(ILogger<SrtWriter> logger, string host, int port, int latency, string streamId)
+            : this(logger)
+        {
+            Configure(host, port, latency, streamId);
+        }
+
+        public void Configure(string host, int port, int latency, string streamId)
+        {
+            _hostname = host;
+            _port = port;
+            _latency = latency;
+            _streamId = streamId;
         }
 
         public async Task SendAsync(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken)

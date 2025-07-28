@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using BotService.Srt;
 
 namespace BotService.Controllers
 {
@@ -22,10 +23,11 @@ namespace BotService.Controllers
             if (string.IsNullOrWhiteSpace(request.JoinUrl))
                 return BadRequest();
 
-            await _bot.JoinMeetingAsync(new Uri(request.JoinUrl), cancellationToken);
+            var config = new SrtConfiguration(request.SrtHost, request.SrtPort, request.SrtLatency, request.SrtStreamId);
+            await _bot.JoinMeetingAsync(new Uri(request.JoinUrl), config, cancellationToken);
             return Ok();
         }
     }
 
-    public record JoinRequest(string JoinUrl);
+    public record JoinRequest(string JoinUrl, string SrtHost, int SrtPort, int SrtLatency, string SrtStreamId);
 }

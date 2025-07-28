@@ -9,6 +9,7 @@ SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, t
 MSTEAMS_SCHEDULER_COMPONENTS=WebhookServer
 SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
+BOTSERVICE_COMPONENTS=BrokerClient
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

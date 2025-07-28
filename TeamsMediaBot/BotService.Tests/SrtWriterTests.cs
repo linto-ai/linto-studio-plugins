@@ -14,6 +14,7 @@ namespace BotService.Tests
         {
             var logger = NullLogger<SrtWriter>.Instance;
             var writer = new SrtWriter(logger);
+            writer.Configure("localhost", 9000, 120, "");
             await writer.SendAsync(new byte[160], CancellationToken.None);
             await writer.DisposeAsync();
         }

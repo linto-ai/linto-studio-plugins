@@ -21,3 +21,5 @@ profiles.json
 # Ignore .DS_Store files (for macOS)
 .DS_Store
 letsencrypt
+bin/
+obj/

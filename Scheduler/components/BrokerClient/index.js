@@ -164,8 +164,9 @@ class BrokerClient extends Component {
       if (chosenTranscriber) {
         // retrieve bot data
         const botData = await this.getStartBotData(botId);
-        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, botData, 2, false, true);
-        logger.debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${botData.session.id}, channel ${botData.channelId}`);
+        // forward the start command to the botservice
+        this.client.publish('botservice/in/startbot', botData, 2, false, true);
+        logger.debug(`Bot scheduled via botservice for session ${botData.session.id}, channel ${botData.channel.id}`);
       } else {
         logger.error('No transcriber available to start bot.');
       }
@@ -194,8 +195,7 @@ class BrokerClient extends Component {
   }
 
   async stopBot(botId) {
-    // find the transcriberId for the channel
-    // publish the stopbot command to the transcriber
+    // forward the stop command to the botservice
     try {
       logger.debug(`Stopping bot ${botId}`)
       const bot = await Model.Bot.findByPk(botId, {include: Model.Channel});
@@ -205,12 +205,7 @@ class BrokerClient extends Component {
         where: {id: bot.id}
       });
 
-      if (!channel?.transcriberId) {
-        logger.warn(`No transcriberId in channel ${channel.id}`);
-        return;
-      }
-
-      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
+      this.client.publish('botservice/in/stopbot', { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
     } catch (error) {
       logger.error('Failed to stop bot:', error);
     }

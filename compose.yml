@@ -88,6 +88,22 @@ services:
         condition: service_completed_successfully
     networks:
       - internal
+
+  botservice:
+    build:
+      context: .
+      dockerfile: BotService/Dockerfile
+    env_file:
+      - .envdefault.docker
+    environment:
+      - DEBUG=botservice:*
+    depends_on:
+      broker:
+        condition: service_started
+      transcriber:
+        condition: service_started
+    networks:
+      - internal
   msteams-scheduler:
     build:
       context: .

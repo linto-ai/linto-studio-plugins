@@ -34,18 +34,7 @@ function handleTranscriberMessage(parts, message) {
   const [direction, uniqueId, ...subparts] = parts;
   if (direction === 'in' && uniqueId === this.uniqueId) {
     const action = subparts.join('/');
-    switch (action) {
-      case 'startbot':
-        const { session, channel, address, botType, enableDisplaySub, subSource } = JSON.parse(message);
-        this.app.components['StreamingServer'].startBot(session, channel, address, botType, enableDisplaySub, subSource);
-        break;
-      case 'stopbot':
-        const { sessionId, channelId } = JSON.parse(message);
-        this.app.components['StreamingServer'].stopBot(sessionId, channelId);
-        break;
-      default:
-        logger.warn(`Unknown action: ${action}`);
-    }
+    logger.warn(`Unknown action: ${action}`);
   }
 }
 

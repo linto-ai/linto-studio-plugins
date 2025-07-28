@@ -1,0 +1,16 @@
+version: '3.9'
+services:
+  teams-bot:
+    build:
+      context: .
+      dockerfile: BotService.Dockerfile
+    environment:
+      AZURE_TENANT_ID: "${AZURE_TENANT_ID}"
+      AZURE_CLIENT_ID: "${AZURE_CLIENT_ID}"
+      AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET}"
+      SRT_HOST: "srt-receiver"
+      SRT_PORT: "9000"
+      SRT_LATENCY: "120"
+      SRT_STREAM_ID: "bot"
+    ports:
+      - "5000:80"

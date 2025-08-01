@@ -17,7 +17,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `scheduler/in/#`, `translator/out/+/status`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `botservice/out/+/status`, `scheduler/in/#`, `translator/out/+/status`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
@@ -301,6 +301,10 @@ class BrokerClient extends Component {
   async updateBotServiceStatus(botServiceStatus) {
     const { uniqueId, activeBots, timestamp } = botServiceStatus;
 
+    const previousService = this.botservices.get(uniqueId);
+    const isNewService = !previousService;
+    const botCountChanged = previousService && previousService.activeBots !== activeBots;
+
     // Update or add the BotService in our map
     this.botservices.set(uniqueId, {
       uniqueId,
@@ -314,12 +318,16 @@ class BrokerClient extends Component {
     for (const [id, service] of this.botservices.entries()) {
       if (Date.now() - service.lastSeen > staleTimeout) {
         this.botservices.delete(id);
-        logger.debug(`BotService ${id} removed (stale)`);
+        logger.info(`BotService ${id} disconnected (stale)`);
       }
     }
 
-    logger.debug(`BotService ${uniqueId} status updated: ${activeBots} active bots`);
-    logger.debug(`Total BotServices: ${this.botservices.size}`);
+    // Log only meaningful changes
+    if (isNewService) {
+      logger.info(`BotService ${uniqueId} connected with ${activeBots} active bots`);
+    } else if (botCountChanged) {
+      logger.info(`BotService ${uniqueId} now has ${activeBots} active bots`);
+    }
   }
 
   // Select the BotService with the least active bots

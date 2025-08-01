@@ -1,4 +1,4 @@
-const logger = require('../../../logger')
+const { logger } = require('live-srt-lib');
 const { launch, getStream } = require('puppeteer-stream');
 const EventEmitter = require('events');
 const path = require('path');
@@ -10,7 +10,7 @@ class Bot extends EventEmitter {
     this.enableDisplaySub = enableDisplaySub;
     this.session = session;
     this.channel = channel;
-    this.logger = logger.getChannelLogger(session.id, channel.id);
+    this.logger = logger;
     this.address = address;
     this.browser = null;
     this.page = null;

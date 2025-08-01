@@ -20,6 +20,9 @@ SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
 BOTSERVICE_COMPONENTS=BrokerClient
 
+# Service networking configuration
+SERVICE_HOSTNAME= # Docker hostname for service-to-service communication (e.g., emeeting-transcriber-1)
+
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
 MIN_AUDIO_BUFFER=200 # Send audio to ASR when buffer is at least MIN_AUDIO_BUFFER milliseconds long

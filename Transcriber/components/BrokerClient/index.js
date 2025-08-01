@@ -21,7 +21,8 @@ class BrokerClient extends Component {
 
     this.domainSpecificValues = {
       srt_mode: this.srt_mode,
-      uniqueId: this.uniqueId
+      uniqueId: this.uniqueId,
+      hostname: process.env.SERVICE_HOSTNAME || this.uniqueId
     }
 
     this.pub = `transcriber/out/${this.uniqueId}`;

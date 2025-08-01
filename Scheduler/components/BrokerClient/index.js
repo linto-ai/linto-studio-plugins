@@ -150,10 +150,23 @@ class BrokerClient extends Component {
       ]
     });
 
+    // Select the optimal Transcriber for this bot
+    const selectedTranscriber = await this.selectTranscriber();
+    if (!selectedTranscriber) {
+      throw new Error('No Transcriber available for bot');
+    }
+
+    const channel = session.channels[0];
+    const websocketUrl = `ws://${selectedTranscriber.hostname}:${process.env.STREAMING_WS_TCP_PORT || 8890}/session/${session.id}/channel/${channel.id}`;
+
     return {
-      session, channel: session.channels[0], address: bot.url,
+      session, 
+      channel, 
+      address: bot.url,
       botType: bot.provider,
-      enableDisplaySub: bot.enableDisplaySub, subSource: bot.subSource
+      enableDisplaySub: bot.enableDisplaySub, 
+      subSource: bot.subSource,
+      websocketUrl
     }
   }
 
@@ -347,6 +360,53 @@ class BrokerClient extends Component {
     }
 
     return selectedService;
+  }
+
+  // Select the Transcriber with the least active channels
+  async selectTranscriber() {
+    try {
+      // Fetch active channels and count them by transcriberId
+      const activeChannelsCount = await Model.Channel.findAll({
+        where: {
+          streamStatus: 'active',
+          transcriberId: {
+            [Model.Op.not]: null, // Exclude channels with null transcriberId
+          }
+        },
+        attributes: [
+          'transcriberId',
+          [Model.sequelize.fn('COUNT', Model.sequelize.col('transcriberId')), 'activeCount']
+        ],
+        group: 'transcriberId',
+        raw: true
+      });
+
+      // Filter to include only those transcribers currently registered and online
+      const validTranscriberCounts = activeChannelsCount.filter(c =>
+        this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online)
+      );
+
+      // Sort to find the least used transcriber that is online
+      let chosenTranscriber = null;
+      let leastActiveCount = Infinity;
+      validTranscriberCounts.forEach(c => {
+        const transcriber = this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online);
+        if (transcriber && c.activeCount < leastActiveCount) {
+          chosenTranscriber = transcriber;
+          leastActiveCount = c.activeCount;
+        }
+      });
+
+      // Use the first online transcriber if none found by active channel count
+      if (!chosenTranscriber) {
+        chosenTranscriber = this.transcribers.find(t => t.online);
+      }
+
+      return chosenTranscriber;
+    } catch (error) {
+      logger.error('Failed to select transcriber:', error);
+      return null;
+    }
   }
 
   async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {

@@ -10,7 +10,7 @@ module.exports = async function () {
       return;
     }
 
-    //`transcriber/out/+/status`
+    //`transcriber/out/+/status` or `botservice/out/+/status`
     const [type, direction, uniqueId, action] = topic.split('/');
     switch (type) {
       case 'transcriber':
@@ -33,20 +33,26 @@ module.exports = async function () {
           this.updateSession(transcriberId, sessionId, channelId, newStreamStatus);
         }
         break;
-      case 'scheduler':
-        if (direction === 'in') {
-          if (topic.includes('botservice/status')) {
-            // Handle BotService status updates
-            const botServiceStatus = JSON.parse(message.toString());
+      case 'botservice':
+        if (action === 'status') {
+          const botServiceStatus = JSON.parse(message.toString());
+          if (botServiceStatus.online) {
             await this.updateBotServiceStatus(botServiceStatus);
           } else {
-            const { botId } = JSON.parse(message.toString());
-            if (action === 'startbot') {
-              await this.startBot(botId);
-            }
-            if (action === 'stopbot') {
-              await this.stopBot(botId);
-            }
+            // BotService went offline
+            this.botservices.delete(botServiceStatus.uniqueId);
+            logger.info(`BotService ${botServiceStatus.uniqueId} disconnected`);
+          }
+        }
+        break;
+      case 'scheduler':
+        if (direction === 'in') {
+          const { botId } = JSON.parse(message.toString());
+          if (action === 'startbot') {
+            await this.startBot(botId);
+          }
+          if (action === 'stopbot') {
+            await this.stopBot(botId);
           }
         }
         break;

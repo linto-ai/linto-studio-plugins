@@ -1,26 +1,37 @@
 const { Component, MqttClient, logger } = require('live-srt-lib');
 const WebSocket = require('ws');
 const Bot = require('../../bot');
+const { v4: uuidv4 } = require('uuid');
 
 class BrokerClient extends Component {
   constructor(app) {
     super(app);
     this.id = this.constructor.name;
-    this.uniqueId = 'botservice';
+    this.uniqueId = `botservice-${uuidv4()}`;
     this.pub = 'botservice/out';
-    this.subs = ['botservice/in/#'];
+    this.subs = ['botservice/in/#', `botservice-${this.uniqueId}/in/#`];
     this.bots = new Map();
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs });
+    this.statusInterval = null;
     this.init();
   }
 
   init() {
     this.client.on('ready', () => {
       this.client.publishStatus();
+      this.publishBotServiceStatus();
+      
+      // Publish status every 10 seconds
+      this.statusInterval = setInterval(() => {
+        this.publishBotServiceStatus();
+      }, 10000);
     });
 
     this.client.on('message', (topic, message) => {
-      const [, direction, action] = topic.split('/');
+      const parts = topic.split('/');
+      const direction = parts[1];
+      const action = parts[2];
+      
       if (direction !== 'in') return;
       try {
         const data = JSON.parse(message.toString());
@@ -33,6 +44,16 @@ class BrokerClient extends Component {
         logger.error('Invalid message', e);
       }
     });
+  }
+
+  publishBotServiceStatus() {
+    const status = {
+      uniqueId: this.uniqueId,
+      activeBots: this.bots.size,
+      timestamp: Date.now()
+    };
+    this.client.publish('scheduler/in/botservice/status', status, 1, false, true);
+    logger.debug(`Published BotService status: ${this.uniqueId} with ${this.bots.size} active bots`);
   }
 
   async startBot({ session, channel, address, botType, enableDisplaySub }) {
@@ -61,6 +82,8 @@ class BrokerClient extends Component {
     const ok = await bot.init();
     if (!ok) {
       await this.stopBot(session.id, channel.id);
+    } else {
+      this.publishBotServiceStatus();
     }
   }
 
@@ -75,6 +98,18 @@ class BrokerClient extends Component {
       try { await record.bot.dispose(); } catch (e) {}
     }
     this.bots.delete(key);
+    this.publishBotServiceStatus();
+  }
+
+  destroy() {
+    if (this.statusInterval) {
+      clearInterval(this.statusInterval);
+    }
+    // Stop all bots
+    for (const [key] of this.bots) {
+      const [sessionId, channelId] = key.split('_');
+      this.stopBot(sessionId, channelId);
+    }
   }
 }
 

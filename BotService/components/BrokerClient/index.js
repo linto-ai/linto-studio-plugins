@@ -8,7 +8,7 @@ class BrokerClient extends Component {
     super(app);
     this.id = this.constructor.name;
     this.uniqueId = `botservice-${uuidv4()}`;
-    this.pub = 'botservice/out';
+    this.pub = `botservice/out/${this.uniqueId}`;
     this.subs = ['botservice/in/#', `botservice-${this.uniqueId}/in/#`];
     this.bots = new Map();
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
@@ -57,11 +57,11 @@ class BrokerClient extends Component {
     this.lastPublishedBotCount = currentBotCount;
   }
 
-  async startBot({ session, channel, address, botType, enableDisplaySub }) {
+  async startBot({ session, channel, address, botType, enableDisplaySub, websocketUrl }) {
     const key = `${session.id}_${channel.id}`;
     await this.stopBot(session.id, channel.id); // cleanup if existing
     const bot = new Bot(session, channel, address, botType, enableDisplaySub);
-    const ws = new WebSocket(channel.streamEndpoints.ws);
+    const ws = new WebSocket(websocketUrl);
     this.bots.set(key, { bot, ws });
 
     ws.on('open', () => {

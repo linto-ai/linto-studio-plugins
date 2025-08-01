@@ -48,6 +48,7 @@ services:
         required: false
     environment:
       - DEBUG=transcriber:*
+      - SERVICE_HOSTNAME=emeeting-transcriber-1
     depends_on:
       - broker
     ports:
@@ -105,6 +106,7 @@ services:
       - .envdefault.docker
     environment:
       - DEBUG=botservice:*
+      - SERVICE_HOSTNAME=emeeting-botservice-1
     depends_on:
       broker:
         condition: service_started

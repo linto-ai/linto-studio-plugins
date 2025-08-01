@@ -48,7 +48,14 @@ class BrokerClient extends Component {
         }
       ]
     });
-    logger.debug('Session API update --> Publishing non terminated sessions on broker:  2: ', sessions.length);
+    logger.debug(`Session API update --> Publishing ${sessions.length} non terminated sessions on broker`);
+    
+    // Log session details for debugging
+    sessions.forEach(session => {
+      const channelIds = session.channels.map(c => c.id);
+      logger.debug(`Publishing session ${session.id} (status: ${session.status}) with channels: [${channelIds.join(', ')}]`);
+    });
+    
     this.client.publish('statuses', sessions, 1, true, true);
   }
 

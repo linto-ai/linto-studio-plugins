@@ -55,12 +55,18 @@ module.exports = async function () {
         break;
       case 'scheduler':
         if (direction === 'in') {
-          const { botId } = JSON.parse(message.toString());
-          if (action === 'startbot') {
-            await this.startBot(botId);
-          }
-          if (action === 'stopbot') {
-            await this.stopBot(botId);
+          if (topic.includes('botservice/status')) {
+            // Handle BotService status updates
+            const botServiceStatus = JSON.parse(message.toString());
+            await this.updateBotServiceStatus(botServiceStatus);
+          } else {
+            const { botId } = JSON.parse(message.toString());
+            if (action === 'startbot') {
+              await this.startBot(botId);
+            }
+            if (action === 'stopbot') {
+              await this.stopBot(botId);
+            }
           }
         }
         break;

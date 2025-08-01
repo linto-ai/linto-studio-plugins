@@ -10,7 +10,7 @@ echo " $DB_HOST:$DB_PORT "
 /wait-for-it.sh $DB_HOST:$DB_PORT --timeout=20 -s -- echo " $DB_HOST:$DB_PORT is up"
 
 # Set default UID and GID (defaults to www-data: 33:33 if not specified)
-USER_ID=${MSTEAMS_SCHEDULER_USER_ID:-33}
+USER_ID=${USER_ID:-33}
 GROUP_ID=${GROUP_ID:-33}
 
 # Default values for user and group names

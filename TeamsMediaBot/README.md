@@ -40,3 +40,22 @@ docker run -e AZURE_TENANT_ID=... -e AZURE_CLIENT_ID=... -e AZURE_CLIENT_SECRET=
 ```
 dotnet test
 ```
+
+
+## Create APP in Azure
+
+1. Entra > Inscriptions d'applications > Nouvelle inscription
+- Name: LinTO BOT
+- Inscrire une application à intégrer à Microsoft Entra ID (application que vous développez)
+- Qui peut utiliser cette application ou accéder à cette API ? -> Comptes dans cet annuaire d'organisation uniquement (LINAGORA uniquement - Locataire unique)
+- Créer un Secret associé
+2. Donner les autorisations
+- autorisations d'application:
+Calendars.*
+Calls.*
+OnlineMeetings.Read.All
+
+- autorisations déléguées:
+Calendars.*
+
+-> Accorder un consentement d'administrateur pour Tenant

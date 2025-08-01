@@ -29,12 +29,16 @@ class BrokerClient extends Component {
       const direction = parts[1];
       const action = parts[2];
       
+      logger.debug(`BotService received MQTT message: ${topic} - ${message.toString()}`);
+      
       if (direction !== 'in') return;
       try {
         const data = JSON.parse(message.toString());
         if (action === 'startbot') {
+          logger.info(`Starting bot for session ${data.session.id}, channel ${data.channel.id}`);
           this.startBot(data).catch(err => logger.error('startBot error', err));
         } else if (action === 'stopbot') {
+          logger.info(`Stopping bot for session ${data.sessionId}, channel ${data.channelId}`);
           this.stopBot(data.sessionId, data.channelId).catch(err => logger.error('stopBot error', err));
         }
       } catch (e) {
@@ -59,10 +63,12 @@ class BrokerClient extends Component {
 
   async startBot({ session, channel, address, botType, enableDisplaySub, websocketUrl }) {
     const key = `${session.id}_${channel.id}`;
+    logger.info(`Starting bot with key: ${key} (session: ${session.id}, channel: ${channel.id})`);
     await this.stopBot(session.id, channel.id); // cleanup if existing
     const bot = new Bot(session, channel, address, botType, enableDisplaySub);
     const ws = new WebSocket(websocketUrl);
     this.bots.set(key, { bot, ws });
+    logger.info(`Bot stored with key: ${key}`);  
 
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'init', encoding: 'pcm', sampleRate: 16000 }));
@@ -90,8 +96,16 @@ class BrokerClient extends Component {
 
   async stopBot(sessionId, channelId) {
     const key = `${sessionId}_${channelId}`;
+    logger.info(`BotService ${this.uniqueId} attempting to stop bot ${key}`);
+    logger.info(`Current active bots: ${JSON.stringify([...this.bots.keys()])}`);
+    
     const record = this.bots.get(key);
-    if (!record) return;
+    if (!record) {
+      logger.info(`No bot found for key ${key}, ignoring stop request`);
+      return;
+    }
+    
+    logger.info(`Stopping bot ${key} - closing WebSocket and disposing bot`);
     if (record.ws) {
       try { record.ws.close(); } catch (e) {}
     }
@@ -100,6 +114,7 @@ class BrokerClient extends Component {
     }
     this.bots.delete(key);
     this.publishBotServiceStatus(); // Publication on bot stop
+    logger.info(`Bot ${key} stopped successfully`);
   }
 
   destroy() {

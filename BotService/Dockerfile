@@ -15,6 +15,23 @@ RUN apt-get update && apt-get install -y \
         libsrt-gnutls-dev \
         libssl-dev \
         netcat-openbsd \
+        # Chrome/Chromium dependencies \
+        libnss3 \
+        libnspr4 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxrandr2 \
+        libgbm1 \
+        libxss1 \
+        libasound2 \
+        libatspi2.0-0 \
+        libgtk-3-0 \
+        libgdk-pixbuf2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget -O /tmp/chromium.tar.xz https://dl.linto.ai/downloads/tools/ungoogled-chromium_135.0.7049.84-1_linux.tar.xz && \

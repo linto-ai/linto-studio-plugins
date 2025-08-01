@@ -22,6 +22,14 @@ function handleSystemMessage(parts, message) {
     const action = systemParts.join('/');
     if (action === 'statuses') {
       const sessions = JSON.parse(message);
+      logger.debug(`Transcriber ${this.uniqueId} received ${sessions.length} sessions`);
+      
+      // Log session details for debugging
+      sessions.forEach(session => {
+        const channelIds = session.channels.map(c => c.id);
+        logger.debug(`Received session ${session.id} (status: ${session.status}) with channels: [${channelIds.join(', ')}]`);
+      });
+      
       this.handleSessions(sessions);
     }
   } else {

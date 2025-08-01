@@ -1,4 +1,4 @@
-const { MqttClient, Component, Model, logger } = require('live-srt-lib')
+const { MqttClient, Component, Model, logger, Utils } = require('live-srt-lib')
 
 class BrokerClient extends Component {
 
@@ -157,7 +157,9 @@ class BrokerClient extends Component {
     }
 
     const channel = session.channels[0];
-    const websocketUrl = `ws://${selectedTranscriber.hostname}:${process.env.STREAMING_WS_TCP_PORT || 8890}/session/${session.id}/channel/${channel.id}`;
+    // Calculate the channel index using the same logic as setChannelsEndpoints and streaming servers
+    const channelIndex = Utils.getChannelIndex(session.channels, channel.id);
+    const websocketUrl = `ws://${selectedTranscriber.hostname}:${process.env.STREAMING_WS_TCP_PORT || 8890}/${process.env.STREAMING_WS_ENDPOINT || 'transcriber-ws'}/${session.id},${channelIndex}`;
 
     return {
       session, 
@@ -175,7 +177,22 @@ class BrokerClient extends Component {
     try {
       logger.debug(`Stopping bot ${botId}`)
       const bot = await Model.Bot.findByPk(botId, {include: Model.Channel});
+      
+      if (!bot) {
+        logger.error(`Bot ${botId} not found in database`);
+        return;
+      }
+      
+      logger.debug(`Found bot ${botId}: url=${bot.url}, provider=${bot.provider}, channelId=${bot.channelId}`);
+      
       const channel = bot.channel;
+      if (!channel) {
+        logger.error(`Channel not found for bot ${botId}`);
+        return;
+      }
+      
+      logger.debug(`Bot ${botId} channel: id=${channel.id}, sessionId=${channel.sessionId}`);
+      logger.debug(`Sending stopbot command with sessionId=${channel.sessionId}, channelId=${channel.id}`);
 
       await Model.Bot.destroy({
         where: {id: bot.id}
@@ -500,7 +517,14 @@ class BrokerClient extends Component {
         }
       ]
     });
-    logger.debug('Publishing all ACTIVE and READY sessions on broker: ', sessions.length);
+    logger.debug(`Publishing ${sessions.length} ACTIVE and READY sessions on broker`);
+    
+    // Log session details for debugging
+    sessions.forEach(session => {
+      const channelIds = session.channels.map(c => c.id);
+      logger.debug(`Session ${session.id} (status: ${session.status}) has channels: [${channelIds.join(', ')}]`);
+    });
+    
     // Publish the sessions to the broker
     this.client.publish('system/out/sessions/statuses', sessions, 1, true, true);
   }

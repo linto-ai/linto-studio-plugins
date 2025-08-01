@@ -1,4 +1,4 @@
-const { Model, logger } = require("live-srt-lib")
+const { Model, logger, Utils } = require("live-srt-lib")
 const bcp47 = require('language-tags');
 class ApiError extends Error {
     constructor(status, message) {
@@ -129,10 +129,12 @@ async function setChannelsEndpoints(sessionId, transaction) {
         transaction
     });
 
-
-    for (const [index, channel] of channels.entries()) {
+    for (const channel of channels) {
+        // Use the common utility function to calculate channel index
+        const channelIndex = Utils.getChannelIndex(channels, channel.id);
+        
         await Model.Channel.update({
-            streamEndpoints: getEndpoints(sessionId, index),
+            streamEndpoints: getEndpoints(sessionId, channelIndex),
         }, {
             transaction,
             where: {

@@ -11,6 +11,7 @@ class BrokerClient extends Component {
     this.pub = `botservice/out/${this.uniqueId}`;
     this.subs = ['botservice/in/#', `botservice-${this.uniqueId}/in/#`];
     this.bots = new Map();
+    this.botSubscriptions = new Map(); // Track subscriptions for each bot
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
     this.lastPublishedBotCount = -1; // Track last published count to avoid spam
     this.init();
@@ -26,6 +27,14 @@ class BrokerClient extends Component {
 
     this.client.on('message', (topic, message) => {
       const parts = topic.split('/');
+      
+      // Handle transcription messages
+      if (parts[0] === 'transcriber' && parts[1] === 'out') {
+        this.handleTranscription(topic, message);
+        return;
+      }
+      
+      // Handle bot commands
       const direction = parts[1];
       const action = parts[2];
 
@@ -57,6 +66,69 @@ class BrokerClient extends Component {
     this.client.publishStatus({ activeBots: currentBotCount });
     logger.info(`BotService ${this.uniqueId} now has ${currentBotCount} active bots`);
     this.lastPublishedBotCount = currentBotCount;
+  }
+
+  async subscribeToBotTranscriptions(sessionId, channelId) {
+    const key = `${sessionId}_${channelId}`;
+    const topics = [
+      `transcriber/out/${sessionId}/${channelId}/partial`,
+      `transcriber/out/${sessionId}/${channelId}/final`
+    ];
+    
+    try {
+      await this.client.subscribe(topics);
+      this.botSubscriptions.set(key, topics);
+      logger.debug(`Subscribed to transcriptions for bot ${key}`);
+    } catch (error) {
+      logger.error(`Failed to subscribe to transcriptions for bot ${key}:`, error);
+    }
+  }
+
+  async unsubscribeFromBotTranscriptions(sessionId, channelId) {
+    const key = `${sessionId}_${channelId}`;
+    const topics = this.botSubscriptions.get(key);
+    
+    if (topics) {
+      try {
+        await this.client.unsubscribe(topics);
+        this.botSubscriptions.delete(key);
+        logger.debug(`Unsubscribed from transcriptions for bot ${key}`);
+      } catch (error) {
+        logger.error(`Failed to unsubscribe from transcriptions for bot ${key}:`, error);
+      }
+    }
+  }
+
+  handleTranscription(topic, message) {
+    // Parse: transcriber/out/sessionId/channelId/type
+    const parts = topic.split('/');
+    const [, , sessionId, channelId, type] = parts;
+    
+    const key = `${sessionId}_${channelId}`;
+    const botRecord = this.bots.get(key);
+    
+    if (!botRecord) {
+      logger.debug(`Received transcription for unknown bot ${key}, ignoring`);
+      return;
+    }
+    
+    try {
+      const transcription = JSON.parse(message.toString());
+      const isPartial = type === 'partial';
+      const isFinal = type === 'final';
+      
+      if (isPartial || isFinal) {
+        // Afficher les captions sur le bot
+        if (botRecord.bot && typeof botRecord.bot.updateCaptions === 'function') {
+          botRecord.bot.updateCaptions(transcription.text, isFinal);
+          logger.debug(`Updated captions for bot ${key}: "${transcription.text}" (final: ${isFinal})`);
+        } else {
+          logger.warn(`Bot ${key} does not support updateCaptions method`);
+        }
+      }
+    } catch (e) {
+      logger.error(`Error parsing transcription for bot ${key}:`, e);
+    }
   }
 
   async startBot({ session, channel, address, botType, enableDisplaySub, websocketUrl }) {
@@ -129,6 +201,8 @@ class BrokerClient extends Component {
     if (!ok) {
       await this.stopBot(session.id, channel.id);
     } else {
+      // Subscribe to transcriptions after successful bot initialization
+      await this.subscribeToBotTranscriptions(session.id, channel.id);
       this.publishBotServiceStatus(); // Publication on bot start
     }
   }
@@ -145,6 +219,10 @@ class BrokerClient extends Component {
     }
     
     logger.info(`Stopping bot ${key} - closing WebSocket and disposing bot`);
+    
+    // Unsubscribe from transcriptions BEFORE cleaning up the bot
+    await this.unsubscribeFromBotTranscriptions(sessionId, channelId);
+    
     if (record.ws) {
       try { record.ws.close(); } catch (e) {}
     }
@@ -156,12 +234,14 @@ class BrokerClient extends Component {
     logger.info(`Bot ${key} stopped successfully`);
   }
 
-  destroy() {
-    // Stop all bots
+  async destroy() {
+    // Stop all bots (this will also unsubscribe from transcriptions)
+    const stopPromises = [];
     for (const [key] of this.bots) {
       const [sessionId, channelId] = key.split('_');
-      this.stopBot(sessionId, channelId);
+      stopPromises.push(this.stopBot(sessionId, channelId));
     }
+    await Promise.all(stopPromises);
   }
 }
 

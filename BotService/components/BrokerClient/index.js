@@ -28,9 +28,7 @@ class BrokerClient extends Component {
       const parts = topic.split('/');
       const direction = parts[1];
       const action = parts[2];
-      
-      logger.debug(`BotService received MQTT message: ${topic} - ${message.toString()}`);
-      
+
       if (direction !== 'in') return;
       try {
         const data = JSON.parse(message.toString());
@@ -67,12 +65,44 @@ class BrokerClient extends Component {
     await this.stopBot(session.id, channel.id); // cleanup if existing
     const bot = new Bot(session, channel, address, botType, enableDisplaySub);
     const ws = new WebSocket(websocketUrl);
+    
+    // Buffer for audio data until WebSocket is ready
+    let audioBuffer = [];
+    let websocketReady = false;
+    
     this.bots.set(key, { bot, ws });
     logger.info(`Bot stored with key: ${key}`);  
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'init', encoding: 'pcm', sampleRate: 16000 }));
+      logger.debug(`WebSocket opened for bot ${key}, sending init message`);
+      ws.send(JSON.stringify({ type: 'init', encoding: 'webm', sampleRate: 16000 }));
     });
+
+    ws.on('message', (message) => {
+      try {
+        const msg = JSON.parse(message.toString());
+        if (msg.type === 'ack') {
+          logger.debug(`Received ACK from Transcriber for bot ${key}, starting audio stream`);
+          websocketReady = true;
+          
+          // Send buffered audio data
+          if (audioBuffer.length > 0) {
+            logger.debug(`Sending ${audioBuffer.length} buffered audio chunks for bot ${key}`);
+            audioBuffer.forEach(buffer => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(buffer);
+              }
+            });
+            audioBuffer = []; // Clear buffer
+          }
+        } else {
+          logger.debug(`Received message from Transcriber for bot ${key}:`, msg);
+        }
+      } catch (e) {
+        logger.error(`Error parsing WebSocket message for bot ${key}:`, e);
+      }
+    });
+
     ws.on('close', () => this.stopBot(session.id, channel.id));
     ws.on('error', err => {
       logger.error('WebSocket error', err);
@@ -81,7 +111,16 @@ class BrokerClient extends Component {
 
     bot.on('data', (buffer) => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(buffer);
+        if (websocketReady) {
+          // WebSocket is ready, send audio directly
+          ws.send(buffer);
+        } else {
+          // Buffer audio until we receive ACK
+          audioBuffer.push(buffer);
+          if (audioBuffer.length === 1) {
+            logger.debug(`Buffering audio for bot ${key} until ACK received`);
+          }
+        }
       }
     });
     bot.on('session-end', () => this.stopBot(session.id, channel.id));

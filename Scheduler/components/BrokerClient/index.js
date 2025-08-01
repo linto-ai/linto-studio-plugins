@@ -22,6 +22,7 @@ class BrokerClient extends Component {
     this.timeoutId = null
     this.emit("connecting");
     this.transcribers = new Array(); // internal scheduler representation of system transcribers.
+    this.botservices = new Map(); // internal scheduler representation of available BotServices
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
@@ -117,59 +118,21 @@ class BrokerClient extends Component {
   // Choose the least used transcriber to start a bot
   // we do this cause bot handling needs to be scheduled on the instance with the least load
   async startBot(botId) {
-    // search all channels with active streamStatus
-    // count the number of active channels for each transcriberId, choose the one with the least active channels
-    // ignore channels with transcriberId = null or set to an id that is not in the transcribers array
-    // if no transcriber is found, use the first transcriber in the transcribers array
-    // publish the startbot command to the chosen transcriber
-
     try {
-      // Fetch active channels and count them by transcriberId
-      const activeChannelsCount = await Model.Channel.findAll({
-        where: {
-          streamStatus: 'active',
-          transcriberId: {
-            [Model.Op.not]: null, // Exclude channels with null transcriberId
-          }
-        },
-        attributes: [
-          'transcriberId',
-          [Model.sequelize.fn('COUNT', Model.sequelize.col('transcriberId')), 'activeCount']
-        ],
-        group: 'transcriberId',
-        raw: true
-      });
-
-      // Filter to include only those transcribers currently registered and online
-      const validTranscriberCounts = activeChannelsCount.filter(c =>
-        this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online)
-      );
-
-      // Sort to find the least used transcriber that is online
-      let chosenTranscriber = null;
-      let leastActiveCount = Infinity;
-      validTranscriberCounts.forEach(c => {
-        const transcriber = this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online);
-        if (transcriber && c.activeCount < leastActiveCount) {
-          chosenTranscriber = transcriber;
-          leastActiveCount = c.activeCount;
-        }
-      });
-
-      // Use the first online transcriber if none found by active channel count
-      if (!chosenTranscriber) {
-        chosenTranscriber = this.transcribers.find(t => t.online);
+      // Select the BotService with the least active bots
+      const selectedBotService = this.selectBotService();
+      
+      if (!selectedBotService) {
+        logger.error('No BotService available to start bot.');
+        return;
       }
 
-      if (chosenTranscriber) {
-        // retrieve bot data
-        const botData = await this.getStartBotData(botId);
-        // forward the start command to the botservice
-        this.client.publish('botservice/in/startbot', botData, 2, false, true);
-        logger.debug(`Bot scheduled via botservice for session ${botData.session.id}, channel ${botData.channel.id}`);
-      } else {
-        logger.error('No transcriber available to start bot.');
-      }
+      // Retrieve bot data
+      const botData = await this.getStartBotData(botId);
+      
+      // Forward the start command to the selected BotService
+      this.client.publish(`botservice-${selectedBotService.uniqueId}/in/startbot`, botData, 2, false, true);
+      logger.debug(`Bot scheduled via BotService ${selectedBotService.uniqueId} for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
       logger.error('Failed to start bot:', error);
     }
@@ -332,6 +295,50 @@ class BrokerClient extends Component {
       { where: { name: translator.name } }
     );
     logger.debug(`Translator ${translator.name} offline`);
+  }
+
+  // Handle BotService status updates
+  async updateBotServiceStatus(botServiceStatus) {
+    const { uniqueId, activeBots, timestamp } = botServiceStatus;
+
+    // Update or add the BotService in our map
+    this.botservices.set(uniqueId, {
+      uniqueId,
+      activeBots,
+      timestamp,
+      lastSeen: Date.now()
+    });
+
+    // Clean up stale BotServices (not seen for more than 30 seconds)
+    const staleTimeout = 30000;
+    for (const [id, service] of this.botservices.entries()) {
+      if (Date.now() - service.lastSeen > staleTimeout) {
+        this.botservices.delete(id);
+        logger.debug(`BotService ${id} removed (stale)`);
+      }
+    }
+
+    logger.debug(`BotService ${uniqueId} status updated: ${activeBots} active bots`);
+    logger.debug(`Total BotServices: ${this.botservices.size}`);
+  }
+
+  // Select the BotService with the least active bots
+  selectBotService() {
+    if (this.botservices.size === 0) {
+      return null;
+    }
+
+    let selectedService = null;
+    let minActiveBots = Infinity;
+
+    for (const service of this.botservices.values()) {
+      if (service.activeBots < minActiveBots) {
+        minActiveBots = service.activeBots;
+        selectedService = service;
+      }
+    }
+
+    return selectedService;
   }
 
   async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {

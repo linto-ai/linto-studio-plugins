@@ -13,6 +13,7 @@
     "eventemitter3": "^5.0.1",
     "live-srt-lib": "file:../lib",
     "puppeteer-stream": "^3.0.15",
+    "uuid": "^9.0.0",
     "ws": "^8.13.0"
   }
 }

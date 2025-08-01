@@ -11,20 +11,17 @@ class BrokerClient extends Component {
     this.pub = 'botservice/out';
     this.subs = ['botservice/in/#', `botservice-${this.uniqueId}/in/#`];
     this.bots = new Map();
-    this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs });
-    this.statusInterval = null;
+    this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
+    this.lastPublishedBotCount = -1; // Track last published count to avoid spam
     this.init();
   }
 
   init() {
     this.client.on('ready', () => {
-      this.client.publishStatus();
-      this.publishBotServiceStatus();
-      
-      // Publish status every 10 seconds
-      this.statusInterval = setInterval(() => {
-        this.publishBotServiceStatus();
-      }, 10000);
+      // Publish initial status with bot count as additional payload
+      this.client.publishStatus({ activeBots: this.bots.size });
+      this.lastPublishedBotCount = this.bots.size;
+      logger.info(`BotService ${this.uniqueId} ready with ${this.bots.size} active bots`);
     });
 
     this.client.on('message', (topic, message) => {
@@ -47,13 +44,17 @@ class BrokerClient extends Component {
   }
 
   publishBotServiceStatus() {
-    const status = {
-      uniqueId: this.uniqueId,
-      activeBots: this.bots.size,
-      timestamp: Date.now()
-    };
-    this.client.publish('scheduler/in/botservice/status', status, 1, false, true);
-    logger.debug(`Published BotService status: ${this.uniqueId} with ${this.bots.size} active bots`);
+    const currentBotCount = this.bots.size;
+    
+    // Only publish if bot count changed
+    if (currentBotCount === this.lastPublishedBotCount) {
+      return;
+    }
+    
+    // Use the standard publishStatus method which includes LWT
+    this.client.publishStatus({ activeBots: currentBotCount });
+    logger.info(`BotService ${this.uniqueId} now has ${currentBotCount} active bots`);
+    this.lastPublishedBotCount = currentBotCount;
   }
 
   async startBot({ session, channel, address, botType, enableDisplaySub }) {
@@ -83,7 +84,7 @@ class BrokerClient extends Component {
     if (!ok) {
       await this.stopBot(session.id, channel.id);
     } else {
-      this.publishBotServiceStatus();
+      this.publishBotServiceStatus(); // Publication on bot start
     }
   }
 
@@ -98,13 +99,10 @@ class BrokerClient extends Component {
       try { await record.bot.dispose(); } catch (e) {}
     }
     this.bots.delete(key);
-    this.publishBotServiceStatus();
+    this.publishBotServiceStatus(); // Publication on bot stop
   }
 
   destroy() {
-    if (this.statusInterval) {
-      clearInterval(this.statusInterval);
-    }
     // Stop all bots
     for (const [key] of this.bots) {
       const [sessionId, channelId] = key.split('_');

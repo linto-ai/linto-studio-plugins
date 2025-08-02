@@ -21,11 +21,46 @@ namespace BotService.Controllers
         public async Task<IActionResult> Join([FromBody] JoinRequest request, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(request.JoinUrl))
-                return BadRequest();
+                return BadRequest("JoinUrl is required");
 
-            var config = new SrtConfiguration(request.SrtHost, request.SrtPort, request.SrtLatency, request.SrtStreamId);
-            await _bot.JoinMeetingAsync(new Uri(request.JoinUrl), config, cancellationToken);
-            return Ok();
+            try
+            {
+                var config = new SrtConfiguration(request.SrtHost, request.SrtPort, request.SrtLatency, request.SrtStreamId);
+                await _bot.JoinMeetingAsync(new Uri(request.JoinUrl), config, cancellationToken);
+                return Ok(new { message = "Meeting join initiated successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        [HttpGet("test-connection")]
+        public async Task<IActionResult> TestConnection()
+        {
+            try
+            {
+                var isConnected = await _bot.TestGraphConnectionAsync();
+                return Ok(new { connected = isConnected });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        [HttpPost("messages")]
+        public async Task<IActionResult> Messages([FromBody] object activity)
+        {
+            try
+            {
+                await _bot.HandleWebhookActivityAsync(activity);
+                return Ok();
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
         }
     }
 

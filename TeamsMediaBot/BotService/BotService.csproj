@@ -10,6 +10,11 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.18" />
     <PackageReference Include="Microsoft.Graph.Communications.Calls" Version="1.1.0" />
     <PackageReference Include="Microsoft.Graph.Communications.Calls.Media" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Graph.Communications.Core" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Graph.Communications.Client" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Graph.Communications.Common" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Graph" Version="5.56.0" />
+    <PackageReference Include="Azure.Identity" Version="1.12.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>

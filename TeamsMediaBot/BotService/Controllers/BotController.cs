@@ -94,6 +94,37 @@ namespace BotService.Controllers
                 return InternalServerError(new Exception(ex.Message));
             }
         }
+
+        [HttpPost]
+        [Route("test-join")]
+        public async Task<IHttpActionResult> TestJoin([FromBody] TestJoinRequest request, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(request.JoinUrl))
+                return BadRequest("JoinUrl is required");
+
+            try
+            {
+                // Create a dummy WebSocket config that won't be used
+                var dummyConfig = new WebSocketConfiguration(
+                    "ws://dummy/audio",
+                    "test-stream",
+                    "PCM16",
+                    16000,
+                    1);
+
+                // This will now continue even if WebSocket fails
+                await _bot.JoinMeetingAsync(new Uri(request.JoinUrl), dummyConfig, cancellationToken);
+                return Ok(new { 
+                    message = "Teams meeting join test completed",
+                    joinUrl = request.JoinUrl,
+                    note = "WebSocket connection skipped for testing"
+                });
+            }
+            catch (Exception ex)
+            {
+                return InternalServerError(new Exception(ex.Message));
+            }
+        }
     }
 
     public class JoinRequest
@@ -104,5 +135,10 @@ namespace BotService.Controllers
         public string AudioFormat { get; set; }
         public int? SampleRate { get; set; }
         public int? Channels { get; set; }
+    }
+
+    public class TestJoinRequest
+    {
+        public string JoinUrl { get; set; }
     }
 }

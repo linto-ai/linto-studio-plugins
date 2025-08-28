@@ -1,0 +1,109 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  "version": "3.0.0",
+  "manifestVersion": "1.23",
+  "id": "3de07549-a8a2-401e-b13e-1f87dba511ef",
+  "name": {
+    "short": "TEST2"
+  },
+  "developer": {
+    "name": "lin",
+    "websiteUrl": "https://linagora.com",
+    "privacyUrl": "https://dummy.com",
+    "termsOfUseUrl": "https://dummy.com"
+  },
+  "description": {
+    "short": "test",
+    "full": "test"
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#ffffff",
+  "configurableTabs": [
+    {
+      "configurationUrl": "https://macaw-literate-extremely.ngrok-free.app/teams-app-configure",
+      "canUpdateConfiguration": false,
+      "scopes": [
+        "team",
+        "groupChat"
+      ],
+      "context": [
+        "meetingSidePanel",
+        "channelTab",
+        "meetingDetailsTab"
+      ]
+    }
+  ],
+  "validDomains": [
+    "macaw-literate-extremely.ngrok-free.app"
+  ],
+  "webApplicationInfo": {
+    "id": "b43ae9ee-4b95-4a27-a1be-062ddfc45417"
+  },
+  "devicePermissions": [
+    "geolocation",
+    "media",
+    "notifications",
+    "midi",
+    "openExternal"
+  ],
+  "defaultInstallScope": "meetings",
+  "defaultGroupCapability": {
+    "team": "tab",
+    "groupchat": "tab",
+    "meetings": "tab"
+  },
+  "meetingExtensionDefinition": {
+    "scenes": [],
+    "supportsStreaming": true,
+    "supportsAnonymousGuestUsers": true
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChannelMeeting.ReadBasic.Group",
+          "type": "Application"
+        },
+        {
+          "name": "TeamsTab.Create.Group",
+          "type": "Application"
+        },
+        {
+          "name": "TeamsTab.ReadWrite.Group",
+          "type": "Application"
+        },
+        {
+          "name": "ChannelMeetingActiveSpeaker.Read.Group",
+          "type": "Delegated"
+        },
+        {
+          "name": "ChannelMeetingAudioVideo.Stream.Group",
+          "type": "Delegated"
+        },
+        {
+          "name": "Calls.AccessMedia.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "Calls.JoinGroupCalls.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "TeamsTab.Create.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "TeamsTab.Read.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "MicrophoneStream.Read.User",
+          "type": "Delegated"
+        }
+      ]
+    }
+  }
+}

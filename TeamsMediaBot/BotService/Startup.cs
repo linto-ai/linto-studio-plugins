@@ -78,6 +78,7 @@ namespace BotService
             services.AddSingleton<TeamsBot>();
             services.AddTransient<Controllers.BotController>();
             services.AddTransient<Controllers.CallbacksController>();
+            services.AddTransient<Controllers.TeamsAppController>();
         }
 
         private IConfiguration LoadConfiguration()

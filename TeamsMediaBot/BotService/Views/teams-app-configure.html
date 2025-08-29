@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LinTO Bot Configuration</title>
+    <script src="https://res.cdn.office.net/teams-js/2.7.1/js/MicrosoftTeams.min.js" integrity="sha384-CYjxRYPHB5AWtLittcci6DeNK1kK7kCLqBNED65Ja6kqPF1t5NvGOuWTFIKg8SVB" crossorigin="anonymous"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #444;
+            margin-bottom: 20px;
+        }
+        p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #6264a7;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #5558a1;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loading" class="loading">Initializing...</div>
+        <div id="content" style="display:none;">
+            <h2>LinTO Media Bot</h2>
+            <p>LinTO Bot will join your Teams meeting to capture and process audio in real-time.</p>
+            <p>Click "Save" to add LinTO Bot to this meeting.</p>
+            <button id="saveBtn" onclick="saveConfig()">Save Configuration</button>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Teams SDK
+        microsoftTeams.app.initialize().then(() => {
+            console.log("Teams SDK initialized");
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('content').style.display = 'block';
+            
+            // Enable the save button in Teams
+            microsoftTeams.pages.config.setValidityState(true);
+        });
+
+        // Register save handler
+        microsoftTeams.pages.config.registerOnSaveHandler((saveEvent) => {
+            // Configure the tab with minimal settings
+            microsoftTeams.pages.config.setConfig({
+                entityId: "linto-bot-" + Date.now(), // Unique ID
+                contentUrl: window.location.origin + "/teams-app-tab", // Tab content URL
+                suggestedDisplayName: "LinTO Bot",
+                removeUrl: window.location.origin + "/teams-app-remove" // Optional remove URL
+            });
+            
+            // Notify Teams that save was successful
+            saveEvent.notifySuccess();
+        });
+
+        function saveConfig() {
+            // Trigger Teams save
+            microsoftTeams.pages.config.setValidityState(true);
+            // Show feedback
+            document.getElementById('saveBtn').innerText = 'Ready - Click Save in Teams';
+        }
+    </script>
+</body>
+</html>

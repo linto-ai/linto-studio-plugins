@@ -2,7 +2,7 @@
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
   "version": "3.0.0",
   "manifestVersion": "1.23",
-  "id": "3de07549-a8a2-401e-b13e-1f87dba511ef",
+  "id": "087de9b3-9326-41bb-b713-112ba5b77e6e",
   "name": {
     "short": "TEST2"
   },
@@ -31,7 +31,7 @@
       ],
       "context": [
         "meetingSidePanel",
-        "channelTab",
+        "channelTab", 
         "meetingDetailsTab"
       ]
     }

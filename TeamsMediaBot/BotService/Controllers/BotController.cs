@@ -135,6 +135,11 @@ namespace BotService.Controllers
         public string AudioFormat { get; set; }
         public int? SampleRate { get; set; }
         public int? Channels { get; set; }
+        
+        // Additional fields for Teams context
+        public string MeetingId { get; set; }
+        public string ChatId { get; set; }
+        public string TenantId { get; set; }
     }
 
     public class TestJoinRequest

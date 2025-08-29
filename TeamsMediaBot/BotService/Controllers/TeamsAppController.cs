@@ -120,10 +120,25 @@ namespace BotService.Controllers
             // Use the ngrok URL directly
             const baseUrl = 'https://macaw-literate-extremely.ngrok-free.app';
             const timestamp = Date.now();
+            
+            // Get thread ID from meeting context if available
+            let threadId = '';
+            if (teamsContext && teamsContext.meeting && teamsContext.meeting.id) {
+                try {
+                    // Decode the base64 meeting ID to get thread ID
+                    const decodedMeetingId = atob(teamsContext.meeting.id);
+                    // Extract thread ID by removing '0#' prefix and '#0' suffix
+                    threadId = decodedMeetingId.replace(/^0#|#0$/g, '');
+                    console.log('Extracted thread ID:', threadId);
+                } catch (error) {
+                    console.error('Failed to decode meeting ID:', error);
+                }
+            }
+            
             const config = {
                 entityId: 'linto-bot-' + timestamp,
-                contentUrl: baseUrl + '/teams-app-tab',
-                websiteUrl: baseUrl + '/teams-app-tab', // Required for mobile clients
+                contentUrl: baseUrl + '/teams-app-tab' + (threadId ? '?threadId=' + encodeURIComponent(threadId) : ''),
+                websiteUrl: baseUrl + '/teams-app-tab' + (threadId ? '?threadId=' + encodeURIComponent(threadId) : ''),
                 suggestedDisplayName: 'LinTO Bot'
             };
             
@@ -188,6 +203,10 @@ namespace BotService.Controllers
     <div id='context' class='context'>Loading meeting context...</div>
     
     <script>
+        // Get thread ID from URL if available
+        const urlParams = new URLSearchParams(window.location.search);
+        const threadIdFromUrl = urlParams.get('threadId');
+        
         // Initialize Teams SDK
         microsoftTeams.app.initialize().then(() => {
             console.log('Teams SDK initialized on tab page');
@@ -195,13 +214,33 @@ namespace BotService.Controllers
             // Get Teams context to show we're properly loaded
             microsoftTeams.app.getContext().then((context) => {
                 console.log('Tab context:', context);
+                
+                let extractedThreadId = threadIdFromUrl;
+                
+                // Try to extract thread ID from meeting context if not in URL
+                if (!extractedThreadId && context.meeting?.id) {
+                    try {
+                        const decodedMeetingId = atob(context.meeting.id);
+                        extractedThreadId = decodedMeetingId.replace(/^0#|#0$/g, '');
+                    } catch (error) {
+                        console.error('Failed to decode meeting ID:', error);
+                    }
+                }
+                
                 const contextDiv = document.getElementById('context');
                 contextDiv.innerHTML = `
                     <strong>Meeting Context:</strong><br>
                     Meeting ID: ${context.meeting?.id || 'N/A'}<br>
+                    Thread ID: ${extractedThreadId || 'N/A'}<br>
                     Chat ID: ${context.chat?.id || 'N/A'}<br>
                     User: ${context.user?.displayName || 'N/A'}
                 `;
+                
+                // Store thread ID for bot operations
+                if (extractedThreadId) {
+                    window.meetingThreadId = extractedThreadId;
+                    console.log('Meeting thread ID available:', extractedThreadId);
+                }
             }).catch(err => {
                 console.error('Failed to get context:', err);
                 document.getElementById('context').innerHTML = 'Failed to load meeting context';

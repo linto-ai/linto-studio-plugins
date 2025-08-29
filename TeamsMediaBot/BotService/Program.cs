@@ -23,7 +23,7 @@ namespace BotService
                     .CreateLogger();
             }
 
-            string baseAddress = "http://localhost:5113/";
+            string baseAddress = "http://*:5113/";
 
             try
             {

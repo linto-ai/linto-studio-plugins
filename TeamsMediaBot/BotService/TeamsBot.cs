@@ -20,6 +20,8 @@ using Microsoft.Graph.Communications.Resources;
 using Azure.Identity;
 using BotService.WebSocket;
 using BotService.Authentication;
+using BotService.Audio;
+using BotService.Teams;
 
 namespace BotService
 {
@@ -35,7 +37,7 @@ namespace BotService
         private readonly string _clientSecret;
         private readonly string _baseUrl;
         private ICall _currentCall;
-        // Media session removed for now - using service-hosted media
+        private AudioSocketListener _audioListener;
 
         public TeamsBot(ILogger<TeamsBot> logger, IWebSocketAudioStreamer audioStreamer, IConfiguration configuration)
         {
@@ -157,7 +159,7 @@ namespace BotService
                     _logger.LogInformation("- Join URL: {JoinUrl}", meetingJoinUrl);
                     _logger.LogInformation("- Tenant ID: {TenantId}", meetingInfo.TenantId);
                     
-                    // Use ServiceHostedMediaConfig for simplicity (Microsoft handles media)
+                    // For now, use ServiceHostedMediaConfig until we resolve Media Platform setup
                     var mediaConfig = new ServiceHostedMediaConfig();
                     
                     // Create call with proper meeting join info
@@ -459,14 +461,34 @@ namespace BotService
         {
             try
             {
-                _logger.LogInformation("Media Platform creation skipped - using simplified approach");
-                _logger.LogInformation("Will use ApplicationHostedMediaConfig without media platform for now");
+                _logger.LogInformation("Media Platform creation - will implement when ready for ApplicationHostedMedia");
+                _logger.LogInformation("Currently using ServiceHostedMediaConfig for compatibility");
+                
+                // TODO: Implement when we have proper media certificate and ApplicationHostedMediaConfig
+                // For now, using ServiceHostedMediaConfig which doesn't require MediaPlatform
                 return null;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to create Media Platform: {Error}", ex.Message);
                 return null;
+            }
+        }
+        
+        private void SetupAudioCapture(ICall call)
+        {
+            try
+            {
+                _logger.LogInformation("🎙️ Audio capture setup...");
+                
+                // TODO: Implement when using ApplicationHostedMediaConfig
+                // For now, ServiceHostedMediaConfig doesn't provide direct audio access
+                _logger.LogInformation("ServiceHostedMediaConfig in use - audio handled by Microsoft servers");
+                _logger.LogInformation("To get raw audio frames, need to switch to ApplicationHostedMediaConfig");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to setup audio capture");
             }
         }
         
@@ -482,10 +504,16 @@ namespace BotService
                     case CallState.Established:
                         _logger.LogInformation("🎉 BOT SUCCESSFULLY JOINED THE TEAMS MEETING!");
                         _logger.LogInformation("🎙️ Ready to receive and stream audio");
+                        
+                        // Set up audio capture 
+                        SetupAudioCapture(sender);
                         break;
+                        
                     case CallState.Terminated:
                         _logger.LogInformation("📞 Call ended - cleaning up resources");
+                        _audioListener?.Unsubscribe();
                         break;
+                        
                     case CallState.Incoming:
                         _logger.LogInformation("📞 Incoming call - auto-answering");
                         break;

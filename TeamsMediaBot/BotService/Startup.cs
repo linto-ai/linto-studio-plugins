@@ -85,8 +85,15 @@ namespace BotService
         {
             var config = new Configuration();
             
-            // Load from appsettings.json
+            // Load from .env file first
             var basePath = AppDomain.CurrentDomain.BaseDirectory;
+            var envPath = Path.Combine(basePath, ".env");
+            if (File.Exists(envPath))
+            {
+                LoadEnvFile(config, envPath);
+            }
+            
+            // Load from appsettings.json
             var appSettingsPath = Path.Combine(basePath, "appsettings.json");
             if (File.Exists(appSettingsPath))
             {
@@ -124,6 +131,22 @@ namespace BotService
             }
             
             return config;
+        }
+        
+        private void LoadEnvFile(Configuration config, string envPath)
+        {
+            var lines = File.ReadAllLines(envPath);
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#"))
+                    continue;
+                
+                var parts = line.Split(new[] { '=' }, 2);
+                if (parts.Length == 2)
+                {
+                    config[parts[0].Trim()] = parts[1].Trim();
+                }
+            }
         }
         
         private void LoadConfigFromJson(Configuration config, JObject jObject)

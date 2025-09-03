@@ -1,8 +1,12 @@
+using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Web.Http;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using BotService.WebSocket;
 
 namespace BotService.Controllers
 {
@@ -11,6 +15,12 @@ namespace BotService.Controllers
     /// </summary>
     public class TeamsAppController : ApiController
     {
+        private readonly BotService.IConfiguration _configuration;
+        
+        public TeamsAppController(BotService.IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
 
         /// <summary>
         /// Serves the Teams app configuration page
@@ -194,13 +204,30 @@ namespace BotService.Controllers
             margin-top: 20px; 
             font-size: 12px;
         }
+        .btn {
+            background-color: #6264a7;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .btn:hover { background-color: #5b5fc7; }
+        .btn:disabled { 
+            background-color: #ccc; 
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
     <h2>LinTO Media Bot</h2>
     <p class='status'>✅ Bot is ready to process audio in this meeting</p>
-    <p>The bot will automatically join when invited to process audio streams.</p>
     <div id='context' class='context'>Loading meeting context...</div>
+    <button id='joinBtn' class='btn' onclick='joinMeeting()' disabled>Join Meeting (loading...)</button>
+    <div id='joinStatus' class='status' style='display:none;'>Bot joining...</div>
     
     <script>
         // Get thread ID from URL if available
@@ -240,6 +267,11 @@ namespace BotService.Controllers
                 if (extractedThreadId) {
                     window.meetingThreadId = extractedThreadId;
                     console.log('Meeting thread ID available:', extractedThreadId);
+                    // Enable join button
+                    document.getElementById('joinBtn').disabled = false;
+                    document.getElementById('joinBtn').textContent = 'Join Meeting & Start Audio Capture';
+                } else {
+                    document.getElementById('joinBtn').textContent = 'No thread ID available';
                 }
             }).catch(err => {
                 console.error('Failed to get context:', err);
@@ -248,6 +280,48 @@ namespace BotService.Controllers
         }).catch(err => {
             console.error('Failed to initialize Teams SDK:', err);
         });
+        
+        function joinMeeting() {
+            if (!window.meetingThreadId) {
+                alert('No meeting thread ID available');
+                return;
+            }
+            
+            document.getElementById('joinBtn').disabled = true;
+            document.getElementById('joinBtn').textContent = 'Joining...';
+            document.getElementById('joinStatus').style.display = 'block';
+            
+            const joinData = {
+                threadId: window.meetingThreadId,
+                webSocketUrl: 'ws://localhost:8080/audio'
+            };
+            
+            fetch('/teams-app-join', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(joinData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Join response:', data);
+                if (data.success) {
+                    document.getElementById('joinStatus').innerHTML = '✅ Bot joined successfully!';
+                    document.getElementById('joinBtn').textContent = 'Bot Active in Meeting';
+                } else {
+                    document.getElementById('joinStatus').innerHTML = '❌ Failed to join meeting';
+                    document.getElementById('joinBtn').disabled = false;
+                    document.getElementById('joinBtn').textContent = 'Retry Join';
+                }
+            })
+            .catch(error => {
+                console.error('Join error:', error);
+                document.getElementById('joinStatus').innerHTML = '❌ Join request failed';
+                document.getElementById('joinBtn').disabled = false;
+                document.getElementById('joinBtn').textContent = 'Retry Join';
+            });
+        }
     </script>
 </body>
 </html>";
@@ -255,6 +329,69 @@ namespace BotService.Controllers
             response.Content = new StringContent(html);
             response.Content.Headers.ContentType = new MediaTypeHeaderValue("text/html");
             return response;
+        }
+        
+        /// <summary>
+        /// Triggers the bot to join the meeting using the thread ID
+        /// </summary>
+        [HttpPost]
+        [Route("teams-app-join")]
+        public async Task<HttpResponseMessage> JoinMeeting()
+        {
+            try
+            {
+                Serilog.Log.Information("HTTP POST /teams-app-join - Bot join requested");
+                
+                var content = await Request.Content.ReadAsStringAsync();
+                var joinRequest = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(content);
+                
+                var threadId = (string)joinRequest?.threadId;
+                var webSocketUrl = (string)joinRequest?.webSocketUrl ?? "ws://localhost:8080/audio";
+                
+                if (string.IsNullOrEmpty(threadId))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                    {
+                        Content = new StringContent("Thread ID is required")
+                    };
+                }
+                
+                Serilog.Log.Information("Joining meeting with thread ID: {ThreadId}", threadId);
+                
+                // Create services directly for simplicity
+                var logger = Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamsBot>.Instance;
+                var audioStreamer = new WebSocketAudioStreamer(Microsoft.Extensions.Logging.Abstractions.NullLogger<WebSocketAudioStreamer>.Instance);
+                
+                var teamsBot = new TeamsBot(logger, audioStreamer, _configuration);
+                
+                // Create WebSocket configuration
+                var wsConfig = new WebSocketConfiguration(webSocketUrl);
+                
+                // Build a dummy join URL with the thread ID for the bot
+                var joinUrl = new Uri($"https://teams.microsoft.com/l/meetup-join/{Uri.EscapeDataString(threadId)}/0");
+                
+                // Trigger the bot to join the meeting
+                await teamsBot.JoinMeetingAsync(joinUrl, wsConfig, default);
+                
+                Serilog.Log.Information("✅ Bot join process initiated successfully");
+                
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(new { 
+                        success = true, 
+                        message = "Bot join initiated",
+                        threadId = threadId 
+                    }))
+                };
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Error(ex, "Failed to join meeting");
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent($"Error: {ex.Message}")
+                };
+            }
         }
         
         /// <summary>

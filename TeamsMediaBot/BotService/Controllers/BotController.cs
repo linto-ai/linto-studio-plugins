@@ -79,21 +79,6 @@ namespace BotService.Controllers
             }
         }
 
-        [HttpPost]
-        [Route("~/api/callbacks")]
-        public async Task<IHttpActionResult> Callbacks([FromBody] object callbackData)
-        {
-            try
-            {
-                // Handle Communications SDK callbacks
-                await _bot.HandleCommunicationsCallbackAsync(callbackData);
-                return Ok();
-            }
-            catch (Exception ex)
-            {
-                return InternalServerError(new Exception(ex.Message));
-            }
-        }
 
         [HttpPost]
         [Route("test-join")]

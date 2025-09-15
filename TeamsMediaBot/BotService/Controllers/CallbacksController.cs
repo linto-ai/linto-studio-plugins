@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Graph.Communications.Core.Notifications;
 using Newtonsoft.Json;
 
 namespace BotService.Controllers
@@ -16,10 +17,12 @@ namespace BotService.Controllers
     public class CallbacksController : ApiController
     {
         private readonly ILogger<CallbacksController> _logger;
+        private readonly TeamsBot _teamsBot;
 
-        public CallbacksController(ILogger<CallbacksController> logger)
+        public CallbacksController(ILogger<CallbacksController> logger, TeamsBot teamsBot)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _teamsBot = teamsBot ?? throw new ArgumentNullException(nameof(teamsBot));
         }
 
         /// <summary>
@@ -37,21 +40,25 @@ namespace BotService.Controllers
                 var content = await Request.Content.ReadAsStringAsync();
                 _logger.LogDebug("Callback payload: {Payload}", content);
 
-                // Parse the notification
+                // Parse and process the notification through TeamsBot
                 if (!string.IsNullOrEmpty(content))
                 {
                     try
                     {
-                        var notification = JsonConvert.DeserializeObject(content);
-                        _logger.LogInformation("Successfully parsed callback notification");
+                        _logger.LogInformation("Processing Communications SDK notification through TeamsBot");
                         
-                        // Here you would typically process the notification
-                        // For example: call state changes, media events, etc.
-                        ProcessNotification(notification);
+                        // Forward to TeamsBot for proper handling
+                        await _teamsBot.HandleCommunicationsCallbackAsync(content);
+                        
+                        _logger.LogInformation("Successfully processed callback notification");
                     }
                     catch (JsonException ex)
                     {
                         _logger.LogError(ex, "Failed to parse callback JSON");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to process callback through TeamsBot");
                     }
                 }
 

@@ -32,12 +32,14 @@ namespace BotService
         private readonly GraphServiceClient _graphClient;
         private readonly ICommunicationsClient? _communicationsClient;
         private readonly IMediaPlatform? _mediaPlatform;
+        private readonly Audio.MediaPlatformSettings _mediaPlatformSettings;
+        private readonly BotMediaStream _botMediaStream;
         private readonly string _tenantId;
         private readonly string _clientId;
         private readonly string _clientSecret;
         private readonly string _baseUrl;
         private ICall _currentCall;
-        private AudioSocketListener _audioListener;
+        private Microsoft.Skype.Bots.Media.ILocalMediaSession _currentMediaSession;
 
         public TeamsBot(ILogger<TeamsBot> logger, IWebSocketAudioStreamer audioStreamer, IConfiguration configuration)
         {
@@ -55,7 +57,9 @@ namespace BotService
                 ?? "https://42b93925edd3.ngrok-free.app"; // fallback to current ngrok URL
 
             _graphClient = CreateGraphClient();
+            _mediaPlatformSettings = new Audio.MediaPlatformSettings(_logger);
             _mediaPlatform = CreateMediaPlatform();
+            _botMediaStream = new BotMediaStream(_logger, _audioStreamer);
             _communicationsClient = CreateCommunicationsClient();
         }
 
@@ -120,97 +124,79 @@ namespace BotService
                 _logger.LogInformation("✅ Communications SDK is ready - Joining Teams meeting!");
                 _logger.LogInformation("Meeting join URL: {JoinUrl}", meetingJoinUrl);
                 
-                _logger.LogInformation("Creating call to join Teams meeting...");
-                
-                // Parse the meeting URL to get join info
-                var meetingInfo = JoinURLParser.Parse(meetingJoinUrl);
-                _logger.LogInformation("Parsed meeting - Tenant: {Tenant}, Meeting: {Meeting}", 
-                    meetingInfo.TenantId, meetingInfo.MeetingId);
+                // Parse the meeting URL using the new JoinInfo utility
+                var joinInfo = JoinInfo.Parse(meetingJoinUrl);
+                _logger.LogInformation("Parsed meeting info: {JoinInfo}", joinInfo.ToString());
 
-                try 
+                // Create media session for ApplicationHostedMedia
+                Microsoft.Skype.Bots.Media.ILocalMediaSession mediaSession = null;
+                Microsoft.Graph.Communications.Calls.Media.ApplicationHostedMediaConfig mediaConfig = null;
+
+                if (_mediaPlatform != null)
                 {
-                    _logger.LogInformation("Initiating meeting join with Communications SDK...");
-                    _logger.LogInformation("Using join URL: {JoinURL}", meetingJoinUrl);
-                    
-                    // Use the Communications Client to join the meeting
-                    // The exact API call will depend on the specific SDK version and requirements
-                    _logger.LogInformation("Communications client ready for meeting join");
-                    _logger.LogInformation("Meeting tenant: {Tenant}", meetingInfo.TenantId);
-                    
-                    // For now, we simulate the join process since we need to study the exact API
-                    _logger.LogInformation("🎯 READY TO IMPLEMENT: Real meeting join with Communications SDK");
-                    _logger.LogInformation("All infrastructure is in place:");
-                    _logger.LogInformation("- Communications client: ✅ Initialized");
-                    _logger.LogInformation("- Authentication: ✅ Working");  
-                    _logger.LogInformation("- Meeting URL: ✅ Parsed");
-                    _logger.LogInformation("- Azure Bot Service: ✅ Configured");
-                    _logger.LogInformation("- Callbacks endpoint: ✅ Ready");
-                    
-                    await Task.Delay(2000, cancellationToken);
-                    
-                    // Skip media session creation for now - will implement once we verify the exact Media SDK API
-                    _logger.LogInformation("🚀 Preparing for media session creation...");
-                    
-                    // Try a direct meeting join approach for public meetings
-                    _logger.LogInformation("🚀 Attempting direct meeting join...");
-                    
-                    // Create proper call with MediaConfig for media bot
-                    _logger.LogInformation("Creating Teams call with media configuration...");
-                    _logger.LogInformation("- Join URL: {JoinUrl}", meetingJoinUrl);
-                    _logger.LogInformation("- Tenant ID: {TenantId}", meetingInfo.TenantId);
-                    
-                    // For now, use ServiceHostedMediaConfig until we resolve Media Platform setup
-                    var mediaConfig = new ServiceHostedMediaConfig();
-                    
-                    // Create call with proper meeting join info
-                    var call = await _communicationsClient.Calls().AddAsync(new Call
+                    try
                     {
-                        CallbackUri = $"{_baseUrl}/api/callbacks",
-                        Direction = CallDirection.Outgoing,
-                        Subject = $"LinTO Bot joining meeting",
-                        Source = new ParticipantInfo
-                        {
-                            Identity = new IdentitySet
-                            {
-                                Application = new Identity
-                                {
-                                    Id = _clientId,
-                                    DisplayName = "LinTO Media Bot"
-                                }
-                            }
-                        },
-                        ChatInfo = new ChatInfo
-                        {
-                            ThreadId = meetingInfo.ThreadId,
-                            MessageId = meetingInfo.MessageId ?? "0"
-                        },
-                        // Skip MeetingInfo for now - will resolve type issues
-                        // MeetingInfo will be determined by Teams from the ChatInfo
-                        MediaConfig = mediaConfig,
-                        RequestedModalities = new List<Modality> { Modality.Audio },
-                        TenantId = meetingInfo.TenantId
-                    });
-                    
-                    _logger.LogInformation("🎉 CALL CREATED SUCCESSFULLY!");
-                    _logger.LogInformation("Call ID: {CallId}", call.Id);
-                    
-                    // Subscribe to call state changes
-                    call.OnUpdated += OnCallUpdated;
+                        _logger.LogInformation("Creating local media session for raw audio access...");
+                        mediaSession = _mediaPlatformSettings.CreateLocalMediaSession(_mediaPlatform);
+                        
+                        // Initialize BotMediaStream with media sockets
+                        _botMediaStream.Initialize(mediaSession.MediaSockets);
+                        
+                        // Create ApplicationHostedMediaConfig
+                        mediaConfig = _mediaPlatformSettings.CreateApplicationHostedMediaConfig();
+                        
+                        _logger.LogInformation("✅ Media session configured for raw audio access");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to create media session, falling back to ServiceHostedMedia");
+                        mediaConfig = null;
+                        mediaSession = null;
+                    }
+                }
 
-                    // Store call reference for later use
-                    _currentCall = call;
-                    
-                    _logger.LogInformation("✅ Meeting join request sent successfully!");
-                }
-                catch (Exception joinEx)
+                // Fallback to ServiceHostedMediaConfig if ApplicationHostedMedia fails
+                if (mediaConfig == null)
                 {
-                    _logger.LogError(joinEx, "Failed to join meeting: {Error}", joinEx.Message);
-                    throw;
+                    _logger.LogInformation("Using ServiceHostedMediaConfig (no raw audio access)");
+                    mediaConfig = new Microsoft.Graph.Communications.Calls.Media.ServiceHostedMediaConfig();
                 }
+
+                // Create JoinMeetingParameters using the Microsoft pattern
+                var joinMeetingParameters = new JoinMeetingParameters(
+                    chatInfo: joinInfo.ToChatInfo(),
+                    meetingInfo: joinInfo.ToMeetingInfo(),
+                    mediaSession: mediaSession,
+                    tenantId: joinInfo.TenantId)
+                {
+                    // Optional: Set removal timeout
+                    RemoveFromDefaultRoutingGroup = false
+                };
+
+                _logger.LogInformation("Joining meeting with JoinMeetingParameters...");
+                
+                // Join the meeting using the Communications SDK pattern
+                var call = await _communicationsClient.Calls().AddAsync(
+                    joinMeetingParameters, 
+                    scenarioId: Guid.NewGuid());
+                
+                _logger.LogInformation("🎉 MEETING JOIN INITIATED SUCCESSFULLY!");
+                _logger.LogInformation("Call ID: {CallId}", call.Id);
+                _logger.LogInformation("Call State: {State}", call.Resource?.State);
+                
+                // Subscribe to call state changes
+                call.OnUpdated += OnCallUpdated;
+
+                // Store references for later use
+                _currentCall = call;
+                _currentMediaSession = mediaSession;
+                
+                _logger.LogInformation("✅ Meeting join request completed - waiting for connection...");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to join meeting with Communications SDK");
+                _logger.LogError(ex, "Failed to join meeting with Communications SDK: {Message}", ex.Message);
+                _logger.LogError("Inner exception: {InnerException}", ex.InnerException?.Message);
                 throw;
             }
         }
@@ -437,23 +423,47 @@ namespace BotService
         {
             try
             {
-                _logger.LogInformation("Received Communications SDK callback: {CallbackData}", callbackData?.ToString() ?? "null");
+                _logger.LogInformation("Received Communications SDK callback");
                 
-                if (_communicationsClient != null)
+                if (_communicationsClient != null && callbackData != null)
                 {
-                    // Process the callback through the Communications client
-                    // await _communicationsClient.ProcessNotificationAsync(callbackData.ToString()); // TODO: Implement when SDK is fully configured
-                    await Task.CompletedTask; // Temporary to avoid async warning
+                    var jsonContent = callbackData.ToString();
+                    _logger.LogDebug("Processing callback JSON: {CallbackData}", jsonContent);
+                    
+                    try
+                    {
+                        // Parse the notification to understand its type
+                        var notification = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(jsonContent);
+                        
+                        // Log the notification type for debugging
+                        string resourceUrl = notification?.value?[0]?.resourceUrl?.ToString();
+                        string changeType = notification?.value?[0]?.changeType?.ToString();
+                        
+                        _logger.LogInformation("Notification - ResourceUrl: {ResourceUrl}, ChangeType: {ChangeType}", 
+                            resourceUrl, changeType);
+                        
+                        // Process through the Communications Client
+                        await _communicationsClient.ProcessNotificationAsync(jsonContent);
+                        
+                        _logger.LogInformation("✅ Communications callback processed successfully");
+                    }
+                    catch (Exception processEx)
+                    {
+                        _logger.LogWarning(processEx, "Failed to process notification through Communications Client, but continuing");
+                        // Don't rethrow - we want to acknowledge the callback even if processing fails
+                    }
                 }
                 else
                 {
-                    _logger.LogWarning("Communications client not initialized, cannot process callback");
+                    _logger.LogWarning("Communications client not initialized or callback data is null");
                 }
+                
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to handle Communications callback");
-                throw;
+                // Don't rethrow - we want to return 200 OK to Teams
             }
         }
 
@@ -461,16 +471,20 @@ namespace BotService
         {
             try
             {
-                _logger.LogInformation("Media Platform creation - will implement when ready for ApplicationHostedMedia");
-                _logger.LogInformation("Currently using ServiceHostedMediaConfig for compatibility");
+                _logger.LogInformation("Creating Media Platform for ApplicationHostedMedia...");
                 
-                // TODO: Implement when we have proper media certificate and ApplicationHostedMediaConfig
-                // For now, using ServiceHostedMediaConfig which doesn't require MediaPlatform
-                return null;
+                // Create MediaPlatformInstanceSettings
+                var instanceSettings = _mediaPlatformSettings.CreateInstanceSettings(_baseUrl);
+                
+                // Create the MediaPlatform
+                var mediaPlatform = _mediaPlatformSettings.CreateMediaPlatform(instanceSettings);
+                
+                _logger.LogInformation("✅ Media Platform created successfully");
+                return mediaPlatform;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to create Media Platform: {Error}", ex.Message);
+                _logger.LogWarning(ex, "Failed to create Media Platform, will use ServiceHostedMedia: {Error}", ex.Message);
                 return null;
             }
         }

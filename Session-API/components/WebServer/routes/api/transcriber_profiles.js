@@ -135,19 +135,32 @@ module.exports = (webserver) => {
                 if (!config) {
                     return res.status(404).send('Transcriber config not found');
                 }
-                const validationResult = validateTranscriberProfile(req.body, true);
-                if (validationResult) {
-                    return res.status(validationResult.status).send(validationResult.error);
+
+                // Check if config is provided in the request body
+                if (!req.body.config) {
+                    return res.status(400).send('Config object is required');
                 }
-                let body = req.body;
-                if (body.config.key) {
-                        body = cryptTranscriberProfileKey(req.body);
+
+                // Merge existing config with partial update
+                const mergedConfig = {
+                    ...config.config,
+                    ...req.body.config
+                };
+
+                // Handle API key encryption if a new key is provided
+                if (req.body.config.key) {
+                    mergedConfig.key = new Security().encrypt(req.body.config.key);
                 }
-                else {
-                        body.config.key = config.config.key;
-                }
+
+                // Prepare the body with merged config and all other fields from request
+                const body = {
+                    ...req.body,
+                    config: mergedConfig
+                };
+
+                // Apply extensions and update
                 await config.update(extendTranscriberProfile(body));
-                res.json(config);
+                res.json(obfuscateTranscriberProfileKey(config));
             } catch (err) {
                 next(err);
             }

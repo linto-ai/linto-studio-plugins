@@ -99,7 +99,8 @@
       "tags": [
         "transcriber_profiles"
       ],
-      "summary": "Update a transcriber config by ID",
+      "summary": "Update a transcriber config by ID (partial update)",
+      "description": "Updates a transcriber profile with partial data. Only fields provided in the request body will be updated. The config field is merged with the existing configuration.",
       "parameters": [
         {
           "name": "id",
@@ -115,7 +116,7 @@
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/TranscriberProfileRequest"
+              "$ref": "#/components/schemas/TranscriberProfileUpdateRequest"
             }
           }
         }

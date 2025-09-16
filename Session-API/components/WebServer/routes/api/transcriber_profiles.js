@@ -292,6 +292,7 @@ module.exports = (webserver) => {
                     mergedConfig.apiKey = new Security().encrypt(req.body.config.apiKey);
                 }
 
+
                 // Prepare the body with merged config and all other fields from request
                 const body = {
                     ...req.body,

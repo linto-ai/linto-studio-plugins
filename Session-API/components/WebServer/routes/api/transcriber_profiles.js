@@ -239,6 +239,7 @@ module.exports = (webserver) => {
                     mergedConfig.credentials = new Security().encrypt(req.body.config.credentials);
                 }
 
+
                 // Prepare the body with merged config and all other fields from request
                 const body = {
                     ...req.body,

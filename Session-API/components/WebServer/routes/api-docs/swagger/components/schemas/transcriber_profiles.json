@@ -76,7 +76,8 @@
           "type": "string",
           "enum": [
             "microsoft",
-            "linto"
+            "linto",
+            "amazon"
           ]
         },
         "name": {
@@ -115,6 +116,36 @@
         },
         "endpoint": {
           "type": "string"
+        },
+        "certificate": {
+          "type": "string",
+          "format": "binary",
+          "description": "X.509 certificate file (.crt) for AWS IAM Roles Anywhere authentication"
+        },
+        "privateKey": {
+          "type": "string",
+          "format": "binary",
+          "description": "Private key file (.pem) for AWS IAM Roles Anywhere authentication"
+        },
+        "passphrase": {
+          "type": "string",
+          "description": "Passphrase for the private key (if encrypted)"
+        },
+        "credentials": {
+          "type": "string",
+          "description": "Auto-generated encrypted bundle containing certificate, private key, and passphrase (read-only, set by server)"
+        },
+        "trustAnchorArn": {
+          "type": "string",
+          "description": "AWS IAM Roles Anywhere Trust Anchor ARN"
+        },
+        "profileArn": {
+          "type": "string",
+          "description": "AWS IAM Roles Anywhere Profile ARN"
+        },
+        "roleArn": {
+          "type": "string",
+          "description": "AWS IAM Role ARN to assume"
         }
       },
       "oneOf": [
@@ -162,7 +193,8 @@
           "type": "string",
           "enum": [
             "microsoft",
-            "linto"
+            "linto",
+            "amazon"
           ]
         },
         "name": {
@@ -200,6 +232,36 @@
         },
         "endpoint": {
           "type": "string"
+        },
+        "certificate": {
+          "type": "string",
+          "format": "binary",
+          "description": "X.509 certificate file (.crt) for AWS IAM Roles Anywhere authentication"
+        },
+        "privateKey": {
+          "type": "string",
+          "format": "binary",
+          "description": "Private key file (.pem) for AWS IAM Roles Anywhere authentication"
+        },
+        "passphrase": {
+          "type": "string",
+          "description": "Passphrase for the private key (if encrypted)"
+        },
+        "credentials": {
+          "type": "string",
+          "description": "Auto-generated encrypted bundle containing certificate, private key, and passphrase (read-only, set by server)"
+        },
+        "trustAnchorArn": {
+          "type": "string",
+          "description": "AWS IAM Roles Anywhere Trust Anchor ARN"
+        },
+        "profileArn": {
+          "type": "string",
+          "description": "AWS IAM Roles Anywhere Profile ARN"
+        },
+        "roleArn": {
+          "type": "string",
+          "description": "AWS IAM Role ARN to assume"
         }
       }
     }

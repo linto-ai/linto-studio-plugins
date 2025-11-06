@@ -2,6 +2,8 @@ services:
   transcriber:
     healthcheck:
       disable: true
+    environment:
+      - DEVELOPMENT=true
     volumes:
       - ./Transcriber:/usr/src/app/transcriber
       - /usr/src/app/transcriber/node_modules
@@ -10,6 +12,8 @@ services:
   sessionapi:
     healthcheck:
       disable: true
+    environment:
+      - DEVELOPMENT=true
     volumes:
       - ./Session-API:/usr/src/app/sessionapi
       - /usr/src/app/sessionapi/node_modules
@@ -18,6 +22,8 @@ services:
   scheduler:
     healthcheck:
       disable: true
+    environment:
+      - DEVELOPMENT=true
     volumes:
       - ./Scheduler:/usr/src/app/scheduler
       - /usr/src/app/scheduler/node_modules

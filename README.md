@@ -221,6 +221,21 @@ In order to launch the Docker containers, 3 Docker Compose files are provided:
 
 To make use of Docker Compose, it is recommended to refer to the quickstart section which guides you step by step through the complete launch of the service.
 
+### Development vs Production Mode
+
+The docker-entrypoint.sh scripts used in each service image (Transcriber, Session-API, Scheduler, migration) support two modes of operation controlled by the `DEVELOPMENT` environment variable:
+
+**Development Mode (`DEVELOPMENT=true`):**
+- Skips all file ownership changes to preserve host file ownership on volume mounts
+- Enabled by default in `compose.override.yml` for local development
+- Recommended when using volume mounts for live code reloading
+
+**Production Mode (default):**
+- Adjusts file ownership to the configured `USER_ID` and `GROUP_ID` (defaults to 33:33)
+- Excludes `node_modules` directories from ownership changes for performance
+- Ensures proper permissions for containerized deployment
+- Used in production and when `DEVELOPMENT` is unset or not equal to "true"
+
 
 ## Integration with LinTO Studio
 

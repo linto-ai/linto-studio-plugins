@@ -79,9 +79,6 @@ function setup_user() {
         useradd -m -u "$USER_ID" -g "$GROUP_NAME" "$USER_NAME"
     fi
 
-    # Adjust ownership of the application directories
-    safe_chown "/usr/src/app" "$USER_NAME" "$GROUP_NAME"
-
     # Get the user's home directory from the system
     USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
 
@@ -91,16 +88,47 @@ function setup_user() {
         mkdir -p "$USER_HOME"
     fi
 
-    # Grant full permissions to the user on their home directory
-    echo "Granting full permissions to $USER_NAME on $USER_HOME"
-    safe_chown "$USER_HOME" "$USER_NAME" "$GROUP_NAME"
-    safe_chmod "$USER_HOME" "744"
+    # Adjust ownership based on environment mode
+    if [ "${DEVELOPMENT}" = "true" ]; then
+        echo "Development mode: skipping ownership changes to preserve volume mounts"
+    else
+        # Production mode: adjust ownership but exclude node_modules for performance
+        echo "Adjusting ownership of application directories (excluding node_modules)"
 
-    # Grant full permisisions on AUDIO_STORAGE_PATH
-    AUDIO_STORAGE_PATH="${AUDIO_STORAGE_PATH:-/audio-storage}"
-    mkdir -p $AUDIO_STORAGE_PATH
-    safe_chown "$AUDIO_STORAGE_PATH" "$USER_NAME" "$GROUP_NAME"
-    safe_chmod "$AUDIO_STORAGE_PATH" "744"
+        # Change ownership of top-level files and directories, excluding node_modules
+        find /usr/src/app -maxdepth 1 ! -name node_modules -exec chown "$USER_NAME:$GROUP_NAME" {} \;
+
+        # Change ownership of transcriber directory excluding its node_modules
+        if [ -d /usr/src/app/transcriber ]; then
+            find /usr/src/app/transcriber -path /usr/src/app/transcriber/node_modules -prune -o -exec chown "$USER_NAME:$GROUP_NAME" {} \;
+        fi
+
+        # Change ownership of lib directory excluding its node_modules
+        if [ -d /usr/src/app/lib ]; then
+            find /usr/src/app/lib -path /usr/src/app/lib/node_modules -prune -o -exec chown "$USER_NAME:$GROUP_NAME" {} \;
+        fi
+
+        # Grant full permissions to the user on their home directory
+        echo "Granting full permissions to $USER_NAME on $USER_HOME"
+        safe_chown "$USER_HOME" "$USER_NAME" "$GROUP_NAME"
+        safe_chmod "$USER_HOME" "744"
+
+        # Grant full permissions on AUDIO_STORAGE_PATH
+        AUDIO_STORAGE_PATH="${AUDIO_STORAGE_PATH:-/audio-storage}"
+        mkdir -p $AUDIO_STORAGE_PATH
+        chown "$USER_NAME:$GROUP_NAME" "$AUDIO_STORAGE_PATH"
+        chmod -R u+rwx "$AUDIO_STORAGE_PATH"
+    fi
+
+    # Ensure npm cache directory exists and has correct permissions
+    NPM_CACHE_DIR="$USER_HOME/.npm"
+    if [ ! -d "$NPM_CACHE_DIR" ]; then
+        echo "Creating npm cache directory: $NPM_CACHE_DIR"
+        mkdir -p "$NPM_CACHE_DIR"
+    fi
+    echo "Setting ownership of npm cache directory"
+    chown -R "$USER_NAME:$GROUP_NAME" "$NPM_CACHE_DIR"
+    chmod -R u+rwx "$NPM_CACHE_DIR"
 }
 
 setup_user

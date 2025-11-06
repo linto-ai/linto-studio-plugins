@@ -11,15 +11,27 @@ class Router {
             for (let path in routes[level]) {
                 const route = routes[level][path]
                 const method = route.method
-                webServer.express[method](
-                    level + route.path,
-                    middlewares.logger,
-                    ifHasElse(
-                        Array.isArray(route.controller),
-                        () => Object.values(route.controller),
-                        () => route.controller
-                    )
-                )
+
+                // Build middleware chain
+                const middlewareChain = [middlewares.logger]
+
+                // Add route-specific middleware if present
+                if (route.middleware) {
+                    if (Array.isArray(route.middleware)) {
+                        middlewareChain.push(...route.middleware)
+                    } else {
+                        middlewareChain.push(route.middleware)
+                    }
+                }
+
+                // Add controller(s)
+                if (Array.isArray(route.controller)) {
+                    middlewareChain.push(...Object.values(route.controller))
+                } else {
+                    middlewareChain.push(route.controller)
+                }
+
+                webServer.express[method](level + route.path, ...middlewareChain)
             }
         }
     }

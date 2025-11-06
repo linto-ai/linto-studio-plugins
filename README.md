@@ -321,8 +321,8 @@ After creating the `.envtest` file (as documented at the beginning of integratio
 
 ## Custom ASR
 
-There are currently two ASRs available: Microsoft and LinTO.
-They are located in Transcriber/components/ASR/linto and Transcriber/components/ASR/microsoft.
+There are currently three ASRs available: Microsoft, LinTO, and Amazon.
+They are located in Transcriber/ASR/linto, Transcriber/ASR/microsoft, and Transcriber/ASR/amazon.
 You can use them as inspiration to create your own ASR.
 
 Here are the rules to follow:

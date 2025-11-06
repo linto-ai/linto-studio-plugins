@@ -46,11 +46,34 @@
         "transcriber_profiles"
       ],
       "summary": "Create a new transcriber config",
+      "description": "For Amazon profiles, use **multipart/form-data** to upload certificate (.crt) and privateKey (.pem) files. The private key **must** be in PKCS#8 format (BEGIN PRIVATE KEY or BEGIN ENCRYPTED PRIVATE KEY). Traditional RSA format (BEGIN RSA PRIVATE KEY) is **not supported** - convert using: `openssl pkcs8 -topk8 -in old.pem -out new.pem`. For other profiles (Microsoft, LinTO), use application/json.",
       "requestBody": {
         "content": {
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/TranscriberProfileRequest"
+            }
+          },
+          "multipart/form-data": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "config": {
+                  "type": "string",
+                  "description": "JSON string containing the profile configuration. For Amazon: {\"type\":\"amazon\",\"name\":\"...\",\"description\":\"...\",\"languages\":[{\"candidate\":\"en-US\"}],\"region\":\"us-east-1\",\"trustAnchorArn\":\"arn:aws:...\",\"profileArn\":\"arn:aws:...\",\"roleArn\":\"arn:aws:...\"}. Optional: add \"passphrase\":\"...\" if private key is encrypted."
+                },
+                "certificate": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "Certificate file (.crt) signed by your CA - required for Amazon profiles only. Click 'Choose File' to select your certificate file."
+                },
+                "privateKey": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "Private key file (.pem) in PKCS#8 format - required for Amazon profiles only. Click 'Choose File' to select your key file. IMPORTANT: Key must start with '-----BEGIN PRIVATE KEY-----' or '-----BEGIN ENCRYPTED PRIVATE KEY-----'. If your key starts with '-----BEGIN RSA PRIVATE KEY-----', convert it first: openssl pkcs8 -topk8 -in old.pem -out new.pem"
+                }
+              },
+              "required": ["config"]
             }
           }
         }
@@ -58,6 +81,9 @@
       "responses": {
         "201": {
           "description": "Created"
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
         }
       }
     }
@@ -100,7 +126,7 @@
         "transcriber_profiles"
       ],
       "summary": "Update a transcriber config by ID (partial update)",
-      "description": "Updates a transcriber profile with partial data. Only fields provided in the request body will be updated. The config field is merged with the existing configuration.",
+      "description": "Updates a transcriber profile with partial data. Only fields provided in the request body will be updated. The config field is merged with the existing configuration. For Amazon profiles, use **multipart/form-data** to update certificate (.crt) and/or privateKey (.pem) files. Private keys **must** be in PKCS#8 format - convert if needed: `openssl pkcs8 -topk8 -in old.pem -out new.pem`.",
       "parameters": [
         {
           "name": "id",
@@ -118,6 +144,28 @@
             "schema": {
               "$ref": "#/components/schemas/TranscriberProfileUpdateRequest"
             }
+          },
+          "multipart/form-data": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "config": {
+                  "type": "string",
+                  "description": "JSON string containing the partial profile configuration to update. Only specified fields will be modified."
+                },
+                "certificate": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "New certificate file (.crt) for Amazon profiles (optional). Click 'Choose File' to replace the existing certificate."
+                },
+                "privateKey": {
+                  "type": "string",
+                  "format": "binary",
+                  "description": "New private key file (.pem) in PKCS#8 format for Amazon profiles (optional). Click 'Choose File' to replace the existing key. Must start with '-----BEGIN PRIVATE KEY-----' or '-----BEGIN ENCRYPTED PRIVATE KEY-----'."
+                }
+              },
+              "required": ["config"]
+            }
           }
         }
       },
@@ -131,6 +179,9 @@
               }
             }
           }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
         },
         "404": {
           "$ref": "#/components/responses/NotFound"

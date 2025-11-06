@@ -112,12 +112,6 @@ function setup_user() {
         echo "Granting full permissions to $USER_NAME on $USER_HOME"
         safe_chown "$USER_HOME" "$USER_NAME" "$GROUP_NAME"
         safe_chmod "$USER_HOME" "744"
-
-        # Grant full permissions on AUDIO_STORAGE_PATH
-        AUDIO_STORAGE_PATH="${AUDIO_STORAGE_PATH:-/audio-storage}"
-        mkdir -p $AUDIO_STORAGE_PATH
-        chown "$USER_NAME:$GROUP_NAME" "$AUDIO_STORAGE_PATH"
-        chmod -R u+rwx "$AUDIO_STORAGE_PATH"
     fi
 
     # Ensure npm cache directory exists and has correct permissions
@@ -129,6 +123,16 @@ function setup_user() {
     echo "Setting ownership of npm cache directory"
     chown -R "$USER_NAME:$GROUP_NAME" "$NPM_CACHE_DIR"
     chmod -R u+rwx "$NPM_CACHE_DIR"
+
+    # Ensure audio storage directory exists and has correct permissions
+    AUDIO_STORAGE_PATH="${AUDIO_STORAGE_PATH:-/audio-storage}"
+    if [ ! -d "$AUDIO_STORAGE_PATH" ]; then
+        echo "Creating audio storage directory: $AUDIO_STORAGE_PATH"
+        mkdir -p "$AUDIO_STORAGE_PATH"
+    fi
+    echo "Setting ownership of audio storage directory"
+    safe_chown "$AUDIO_STORAGE_PATH" "$USER_NAME" "$GROUP_NAME"
+    safe_chmod "$AUDIO_STORAGE_PATH" "755"
 }
 
 setup_user

@@ -1,4 +1,4 @@
-ARG default_image=node:20-bookworm
+ARG default_image=node:22-bookworm
 #non code.europe.eu
 FROM $default_image
 #end non code.europe.eu

@@ -1,4 +1,4 @@
-ARG default_image=node:20-bookworm
+ARG default_image=node:22-bookworm
 FROM $default_image
 
 RUN apt-get update && apt-get install -y --no-install-recommends gosu \

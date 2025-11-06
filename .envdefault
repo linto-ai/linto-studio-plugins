@@ -34,14 +34,14 @@ STREAMING_SRT_UDP_PORT=8889 # UDP port for SRT listener
 STREAMING_RTMP_TCP_PORT=1935 # TCP port for RTMP listener
 STREAMING_WS_TCP_PORT=8080 # TCP port for Websocket listener
 # As app constructs streaming endpoint URLs, it needs to know the proxy host and port to build the correct URL
-STREAMING_PROXY_SRT_HOST=localhost # Transcriber host for SRT inbound streaming (false to disable)
+STREAMING_PROXY_SRT_HOST=false # Transcriber host for SRT inbound streaming (false to disable)
 STREAMING_PROXY_RTMP_HOST=localhost # Transcriber host for RTMP inbound streaming (false to disable)
 STREAMING_PROXY_WS_HOST=localhost # Transcriber host for WS inbound streaming (false to disable)
 STREAMING_PROXY_SRT_UDP_PORT=8889 # UDP port for SRT listener
 STREAMING_PROXY_RTMP_TCP_PORT=1935 # TCP port for RTMP listener
 STREAMING_PROXY_WS_TCP_PORT=8080 # TCP port for Websocket listener
 STREAMING_HEALTHCHECK_TCP=9999 # TCP port for healthcheck listener
-STREAMING_WS_SECURE=true
+STREAMING_WS_SECURE=false
 STREAMING_WS_ENDPOINT=transcriber-ws
 STREAMING_RTMP_SECURE=false
 

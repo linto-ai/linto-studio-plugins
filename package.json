@@ -52,7 +52,7 @@
   ],
   "license": "EUPL",
   "devDependencies": {
-    "concurrently": "^8.2.2",
-    "nodemon": "^2.0.22"
+    "concurrently": "^9.1.2",
+    "nodemon": "^3.1.9"
   }
 }

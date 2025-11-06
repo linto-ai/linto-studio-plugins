@@ -22,10 +22,10 @@
     "migrate": "npx sequelize-cli db:migrate"
   },
   "devDependencies": {
-    "sequelize-cli": "^6.6.1"
+    "sequelize-cli": "^6.6.2"
   },
   "dependencies": {
-    "pg": "^8.11.3",
-    "sequelize": "^6.32.1"
+    "pg": "^8.13.1",
+    "sequelize": "^6.37.5"
   }
 }

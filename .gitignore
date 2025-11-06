@@ -16,8 +16,6 @@ node_modules/
 .vscode/
 .idea/
 
-# Ignore package-lock.json (for npm)
-package-lock.json
 profiles.json
 
 # Ignore .DS_Store files (for macOS)

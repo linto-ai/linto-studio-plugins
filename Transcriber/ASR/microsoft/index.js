@@ -262,16 +262,18 @@ class MicrosoftTranscriber extends EventEmitter {
         if (hasTranslations) {
             const speechConfig = SpeechTranslationConfig.fromSubscription(decryptedKey, config.region);
             speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
-            // Uses custom endpoint if provided, if not, uses default endpoint for region
-            speechConfig.endpointId = config.languages[0]?.endpoint;
-            usedEndpoint = config.languages[0]?.endpoint;
 
             const targetLanguages = this.getTargetLanguages();
             for (const targetLanguage of targetLanguages) {
                 speechConfig.addTargetLanguage(targetLanguage);
             }
 
-            this.logger.info(`ASR is using endpoint ${usedEndpoint}`);
+            const usedEndpoint = config.languages[0]?.endpoint;
+            if (usedEndpoint) {
+                this.logger.info(`ASR is using custom endpoint ${usedEndpoint}`);
+            } else {
+                this.logger.info(`ASR is using default endpoint for region ${config.region}`);
+            }
             return speechConfig;
         }
 
@@ -307,6 +309,12 @@ class MicrosoftTranscriber extends EventEmitter {
         }
 
         if (hasTranslations) {
+            // Use SourceLanguageConfig to properly pass custom endpoint for single-language translation
+            const endpoint = config.languages[0]?.endpoint;
+            if (endpoint) {
+                const sourceLanguageConfig = SourceLanguageConfig.fromLanguage(config.languages[0].candidate, endpoint);
+                return TranslationRecognizer.FromConfig(speechConfig, sourceLanguageConfig, audioConfig);
+            }
             return new TranslationRecognizer(speechConfig, audioConfig);
         }
 

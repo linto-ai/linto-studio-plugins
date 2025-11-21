@@ -1,19 +1,14 @@
-def buildDockerfile(folder_name, image_name, version) {
-    echo "Building Dockerfile at ${folder_name}/Dockerfile for ${image_name}... with version ${version}"
+def buildDockerfile(folder_name, image_name, tag) {
+    echo "Building Dockerfile at ${folder_name}/Dockerfile for ${image_name}... with tag ${tag}"
 
     // Build Docker image using the specified Dockerfile
     script {
         def completeImageName = "${env.DOCKER_HUB_REPO}/${image_name}" // Concatenate repo with image name
         def image = docker.build(completeImageName, "-f ${folder_name}/Dockerfile .")
 
-        echo "Prepare to release newer version ${completeImageName}:${version}"
+        echo "Prepare to push ${completeImageName}:${tag}"
         docker.withRegistry('https://registry.hub.docker.com', env.DOCKER_HUB_CRED) {
-            if (version == 'latest-unstable') {
-                image.push('latest-unstable')
-            } else {
-                image.push('latest')
-                image.push(version)
-            }
+            image.push(tag)
         }
     }
 }
@@ -40,12 +35,7 @@ pipeline {
             steps {
                 echo 'Publishing latest'
                 script {
-                    def version = sh(
-                        returnStdout: true,
-                        script: "awk -v RS='' '/#/ {print; exit}' RELEASE.md | head -1 | sed 's/#//' | sed 's/ //'"
-                    ).trim()
-
-                    buildAllPlugins(version)
+                    buildAllPlugins('latest')
                 }
             }
         }

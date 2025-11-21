@@ -1,16 +1,28 @@
-def buildDockerfile(folder_name, image_name, tag) {
-    echo "Building Dockerfile at ${folder_name}/Dockerfile for ${image_name}..."
+def buildDockerfile(folder_name, image_name, version) {
+    echo "Building Dockerfile at ${folder_name}/Dockerfile for ${image_name}... with version ${version}"
 
     // Build Docker image using the specified Dockerfile
     script {
         def completeImageName = "${env.DOCKER_HUB_REPO}/${image_name}" // Concatenate repo with image name
         def image = docker.build(completeImageName, "-f ${folder_name}/Dockerfile .")
 
-        echo "Prepare to release newer version ${completeImageName}:${tag}"
+        echo "Prepare to release newer version ${completeImageName}:${version}"
         docker.withRegistry('https://registry.hub.docker.com', env.DOCKER_HUB_CRED) {
-	    image.push(tag)
+            if (version == 'latest-unstable') {
+                image.push('latest-unstable')
+            } else {
+                image.push('latest')
+                image.push(version)
+            }
         }
     }
+}
+
+def buildAllPlugins(version) {
+    buildDockerfile('Transcriber', 'studio-plugins-transcriber', version)
+    buildDockerfile('Scheduler', 'studio-plugins-scheduler', version)
+    buildDockerfile('Session-API', 'studio-plugins-sessionapi', version)
+    buildDockerfile('migration', 'studio-plugins-migration', version)
 }
 
 pipeline {
@@ -21,17 +33,31 @@ pipeline {
     }
 
     stages {
-        stage('Docker build for plugins branch') {
+        stage('Docker build for main branch') {
             when {
-                branch 'plugins-next'
+                branch 'main'
+            }
+            steps {
+                echo 'Publishing latest'
+                script {
+                    def version = sh(
+                        returnStdout: true,
+                        script: "awk -v RS='' '/#/ {print; exit}' RELEASE.md | head -1 | sed 's/#//' | sed 's/ //'"
+                    ).trim()
+
+                    buildAllPlugins(version)
+                }
+            }
+        }
+
+        stage('Docker build for next (unstable) branch') {
+            when {
+                branch 'next'
             }
             steps {
                 echo 'Publishing latest-unstable'
                 script {
-                    buildDockerfile('Transcriber', 'studio-plugins-transcriber', 'latest-unstable')
-                    buildDockerfile('Scheduler', 'studio-plugins-scheduler', 'latest-unstable')
-                    buildDockerfile('Session-API', 'studio-plugins-sessionapi', 'latest-unstable')
-		    buildDockerfile('migration', 'studio-plugins-migration', 'latest-unstable')
+                    buildAllPlugins('latest-unstable')
                 }
             }
         }

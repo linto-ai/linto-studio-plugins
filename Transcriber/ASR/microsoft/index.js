@@ -309,11 +309,12 @@ class MicrosoftTranscriber extends EventEmitter {
         }
 
         if (hasTranslations) {
-            // Use SourceLanguageConfig to properly pass custom endpoint for single-language translation
+            // Use AutoDetectSourceLanguageConfig to properly pass custom endpoint for single-language translation
             const endpoint = config.languages[0]?.endpoint;
             if (endpoint) {
                 const sourceLanguageConfig = SourceLanguageConfig.fromLanguage(config.languages[0].candidate, endpoint);
-                return TranslationRecognizer.FromConfig(speechConfig, sourceLanguageConfig, audioConfig);
+                const autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig.fromSourceLanguageConfigs([sourceLanguageConfig]);
+                return TranslationRecognizer.FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
             }
             return new TranslationRecognizer(speechConfig, audioConfig);
         }

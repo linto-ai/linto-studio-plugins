@@ -50,7 +50,7 @@ class MultiplexedSRTServer extends EventEmitter {
         const now = Date.now();
         for (const value of Object.values(this.runningChannels)) {
             if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
-                logger.warn('Channel timeout, closing !', {sessionId: fd.session.id, channelId: fd.channel.id});
+                logger.warn('Channel timeout, closing !', {sessionId: value.fd.session.id, channelId: value.fd.channel.id});
                 this.cleanupConnection(value.connection, value.fd, value.worker);
             }
         }

@@ -171,11 +171,11 @@ class StreamingServer extends Component {
     try {
       const botKey = `${sessionId}_${channelId}`;
       const bot = this.bots.get(botKey);
-      this.emit('session-stop', bot.session, channelId);
       if (!bot) {
         logger.warn(`No bot found for session ${sessionId}, channel ${channelId}`);
         return;
       }
+      this.emit('session-stop', bot.session, channelId);
       await bot.dispose();
       this.bots.delete(botKey);
 

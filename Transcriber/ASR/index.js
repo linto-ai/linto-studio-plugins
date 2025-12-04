@@ -51,7 +51,7 @@ class ASR extends eventEmitter {
 
       // Use the FakeTranscriber if live transcripts are disabled
       if (!this.channel.enableLiveTranscripts) {
-        this.provider = new FakeTranscriber(session, channel);
+        this.provider = new FakeTranscriber(this.session, channel);
         this.logger.info("ASR started with FakeTranscriber");
       }
       else {
@@ -115,6 +115,10 @@ class ASR extends eventEmitter {
   }
 
   streamStopped() {
+      if (!this.provider) {
+        this.logger.warn('streamStopped called but provider is null');
+        return;
+      }
       const final = {
         "astart": this.provider.startedAt,
         "aend": new Date().toISOString(),

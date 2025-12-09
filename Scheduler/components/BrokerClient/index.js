@@ -115,24 +115,30 @@ class BrokerClient extends Component {
     return isUpdated;
   }
 
-  // Choose the least used transcriber to start a bot
-  // we do this cause bot handling needs to be scheduled on the instance with the least load
+  // Choose the least used BotService to start a bot based on its provider capability
   async startBot(botId) {
     try {
-      // Select the BotService with the least active bots
-      const selectedBotService = this.selectBotService();
-      
-      if (!selectedBotService) {
-        logger.error('No BotService available to start bot.');
+      // Retrieve bot to get its provider
+      const bot = await Model.Bot.findByPk(botId);
+      if (!bot) {
+        logger.error(`Bot ${botId} not found in database`);
         return;
       }
 
-      // Retrieve bot data
+      // Select the BotService with the least active bots that supports this provider
+      const selectedBotService = this.selectBotService(bot.provider);
+
+      if (!selectedBotService) {
+        logger.error(`No BotService available with capability '${bot.provider}' to start bot.`);
+        return;
+      }
+
+      // Retrieve full bot data for the BotService
       const botData = await this.getStartBotData(botId);
-      
+
       // Forward the start command to the selected BotService
       this.client.publish(`botservice-${selectedBotService.uniqueId}/in/startbot`, botData, 2, false, true);
-      logger.debug(`Bot scheduled via BotService ${selectedBotService.uniqueId} for session ${botData.session.id}, channel ${botData.channel.id}`);
+      logger.debug(`Bot scheduled via BotService ${selectedBotService.uniqueId} (capability: ${bot.provider}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
       logger.error('Failed to start bot:', error);
     }
@@ -329,7 +335,7 @@ class BrokerClient extends Component {
 
   // Handle BotService status updates
   async updateBotServiceStatus(botServiceStatus) {
-    const { uniqueId, activeBots, timestamp } = botServiceStatus;
+    const { uniqueId, activeBots, timestamp, capabilities = [] } = botServiceStatus;
 
     const previousService = this.botservices.get(uniqueId);
     const isNewService = !previousService;
@@ -339,6 +345,7 @@ class BrokerClient extends Component {
     this.botservices.set(uniqueId, {
       uniqueId,
       activeBots,
+      capabilities,
       timestamp,
       lastSeen: Date.now()
     });
@@ -354,22 +361,32 @@ class BrokerClient extends Component {
 
     // Log only meaningful changes
     if (isNewService) {
-      logger.info(`BotService ${uniqueId} connected with ${activeBots} active bots`);
+      logger.info(`BotService ${uniqueId} connected with ${activeBots} active bots, capabilities: [${capabilities.join(', ')}]`);
     } else if (botCountChanged) {
       logger.info(`BotService ${uniqueId} now has ${activeBots} active bots`);
     }
   }
 
-  // Select the BotService with the least active bots
-  selectBotService() {
+  // Select the BotService with the least active bots that supports the given provider
+  selectBotService(provider) {
     if (this.botservices.size === 0) {
       return null;
     }
 
+    // Filter services that have the required capability
+    const validServices = Array.from(this.botservices.values())
+      .filter(service => service.capabilities && service.capabilities.includes(provider));
+
+    if (validServices.length === 0) {
+      logger.warn(`No BotService available with capability '${provider}'`);
+      return null;
+    }
+
+    // Select the one with the least active bots
     let selectedService = null;
     let minActiveBots = Infinity;
 
-    for (const service of this.botservices.values()) {
+    for (const service of validServices) {
       if (service.activeBots < minActiveBots) {
         minActiveBots = service.activeBots;
         selectedService = service;

@@ -104,6 +104,49 @@ namespace TeamsMediaBot
         /// </summary>
         [Required]
         public string MediaDnsName { get; set; }
+
+        // MQTT Configuration
+
+        /// <summary>
+        /// Gets or sets the MQTT broker host.
+        /// </summary>
+        public string BrokerHost { get; set; } = "localhost";
+
+        /// <summary>
+        /// Gets or sets the MQTT broker port.
+        /// </summary>
+        public int BrokerPort { get; set; } = 1883;
+
+        /// <summary>
+        /// Gets or sets the MQTT broker username.
+        /// </summary>
+        public string? BrokerUsername { get; set; }
+
+        /// <summary>
+        /// Gets or sets the MQTT broker password.
+        /// </summary>
+        public string? BrokerPassword { get; set; }
+
+        /// <summary>
+        /// Gets or sets the MQTT keep alive interval in seconds.
+        /// </summary>
+        public int BrokerKeepAlive { get; set; } = 60;
+
+        /// <summary>
+        /// Gets or sets whether to use TLS/SSL for MQTT connection.
+        /// </summary>
+        public bool BrokerUseTls { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets whether to allow untrusted/self-signed certificates.
+        /// Only use in development environments.
+        /// </summary>
+        public bool BrokerAllowUntrustedCertificates { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets the bot display name used when joining Teams meetings.
+        /// </summary>
+        public string BotDisplayName { get; set; } = "Transcription Bot";
     }
 }
 

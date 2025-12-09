@@ -15,7 +15,8 @@ Bot Microsoft Teams pour capturer l'audio des réunions et le streamer vers un s
 4. [Configuration de l'Application](#configuration-de-lapplication)
 5. [Lancer le Bot](#lancer-le-bot)
 6. [Utilisation de l'API](#utilisation-de-lapi)
-7. [Dépannage](#dépannage)
+7. [Intégration MQTT avec le Scheduler](#intégration-mqtt-avec-le-scheduler)
+8. [Dépannage](#dépannage)
 
 ---
 
@@ -434,6 +435,202 @@ curl "https://bot.example.com:9441/health"
 
 ---
 
+## Intégration MQTT avec le Scheduler
+
+Le TeamsMediaBot peut s'intégrer avec le Scheduler central via MQTT pour recevoir automatiquement les commandes de démarrage/arrêt de bots et streamer l'audio vers le Transcriber.
+
+### Architecture
+
+```
+┌─────────────────┐     MQTT      ┌─────────────────┐     WebSocket    ┌─────────────────┐
+│    Scheduler    │──────────────►│  TeamsMediaBot  │─────────────────►│   Transcriber   │
+│                 │◄──────────────│   (Windows)     │                  │                 │
+└─────────────────┘   status      └─────────────────┘                  └─────────────────┘
+                      startbot           │
+                      stopbot            │ Audio PCM
+                                         │ 16kHz mono
+                                         ▼
+                                  ┌─────────────────┐
+                                  │  Teams Meeting  │
+                                  └─────────────────┘
+```
+
+### Configuration MQTT
+
+Ajouter ces variables dans le fichier `.env` :
+
+```env
+# === MQTT Configuration ===
+# Adresse du broker MQTT
+AppSettings__BrokerHost=mqtt.example.com
+
+# Port du broker (1883 = standard, 8883 = TLS)
+AppSettings__BrokerPort=8883
+
+# Identifiants de connexion
+AppSettings__BrokerUsername=teamsmediabot
+AppSettings__BrokerPassword=secret
+
+# Intervalle de keep-alive en secondes
+AppSettings__BrokerKeepAlive=60
+
+# Activer TLS/SSL (recommandé pour les connexions distantes)
+AppSettings__BrokerUseTls=true
+
+# Autoriser les certificats non approuvés (dev uniquement)
+AppSettings__BrokerAllowUntrustedCertificates=false
+
+# Nom affiché du bot dans les réunions Teams
+AppSettings__BotDisplayName=Transcription Bot
+```
+
+### Connexion locale (même réseau)
+
+```env
+AppSettings__BrokerHost=192.168.1.100
+AppSettings__BrokerPort=1883
+AppSettings__BrokerUseTls=false
+```
+
+### Connexion distante sécurisée (TLS)
+
+```env
+AppSettings__BrokerHost=mqtt.example.com
+AppSettings__BrokerPort=8883
+AppSettings__BrokerUseTls=true
+AppSettings__BrokerUsername=teamsmediabot
+AppSettings__BrokerPassword=secret
+```
+
+### Configuration du broker Mosquitto (côté serveur)
+
+Pour exposer le broker MQTT sur Internet avec TLS :
+
+**1. Générer ou obtenir un certificat SSL**
+
+```bash
+# Avec Let's Encrypt (certbot)
+certbot certonly --standalone -d mqtt.example.com
+```
+
+**2. Configurer Mosquitto**
+
+```conf
+# /etc/mosquitto/conf.d/tls.conf
+
+# Port TLS
+listener 8883
+cafile /etc/letsencrypt/live/mqtt.example.com/chain.pem
+certfile /etc/letsencrypt/live/mqtt.example.com/cert.pem
+keyfile /etc/letsencrypt/live/mqtt.example.com/privkey.pem
+
+# Authentification
+allow_anonymous false
+password_file /etc/mosquitto/passwd
+```
+
+**3. Créer un utilisateur**
+
+```bash
+mosquitto_passwd -c /etc/mosquitto/passwd teamsmediabot
+```
+
+**4. Exposer le port dans Docker**
+
+```yaml
+# compose.yml
+broker:
+  image: eclipse-mosquitto:2
+  ports:
+    - "8883:8883"
+  volumes:
+    - ./mosquitto/config:/mosquitto/config
+    - /etc/letsencrypt:/etc/letsencrypt:ro
+```
+
+### Topics MQTT
+
+Le TeamsMediaBot utilise les topics suivants :
+
+| Topic | Direction | Description |
+|-------|-----------|-------------|
+| `botservice/out/{uniqueId}/status` | Publish | Status du bot (toutes les 10s) |
+| `botservice/in/#` | Subscribe | Commandes générales |
+| `botservice-{uniqueId}/in/startbot` | Subscribe | Démarrer un bot |
+| `botservice/in/stopbot` | Subscribe | Arrêter un bot |
+| `transcriber/out/{sessionId}/{channelId}/partial` | Subscribe | Transcriptions partielles |
+| `transcriber/out/{sessionId}/{channelId}/final` | Subscribe | Transcriptions finales |
+
+### Format du message de status
+
+Publié toutes les 10 secondes sur `botservice/out/{uniqueId}/status` :
+
+```json
+{
+  "uniqueId": "teamsmediabot-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "online": true,
+  "activeBots": 2,
+  "capabilities": ["teams"],
+  "on": "2025-01-15T10:30:00.000Z"
+}
+```
+
+### Format de la commande startbot
+
+Envoyé par le Scheduler sur `botservice-{uniqueId}/in/startbot` :
+
+```json
+{
+  "session": {
+    "id": "session-uuid",
+    "name": "Réunion hebdomadaire"
+  },
+  "channel": {
+    "id": "channel-uuid",
+    "enableLiveTranscripts": true
+  },
+  "address": "https://teams.microsoft.com/l/meetup-join/...",
+  "botType": "teams",
+  "enableDisplaySub": true,
+  "websocketUrl": "ws://transcriber:8890/transcriber-ws/session-uuid,0"
+}
+```
+
+### Format de la commande stopbot
+
+Envoyé par le Scheduler sur `botservice/in/stopbot` :
+
+```json
+{
+  "sessionId": "session-uuid",
+  "channelId": "channel-uuid"
+}
+```
+
+### Flux de streaming audio
+
+1. Le Scheduler envoie `startbot` via MQTT
+2. Le TeamsMediaBot :
+   - Se connecte au WebSocket du Transcriber
+   - Envoie `{"type": "init", "encoding": "pcm", "sampleRate": 16000}`
+   - Attend l'ACK `{"type": "ack"}`
+   - Rejoint la réunion Teams
+   - Streame l'audio PCM (S16LE, 16kHz, mono) vers le WebSocket
+3. Le Transcriber publie les transcriptions via MQTT
+4. Le Scheduler envoie `stopbot` pour terminer
+
+### Vérifier la connexion MQTT
+
+```powershell
+# Dans les logs du bot, vous devriez voir :
+# [TeamsMediaBot] Connecting to MQTT broker at mqtt.example.com:8883
+# [TeamsMediaBot] TLS/SSL enabled for MQTT connection
+# [TeamsMediaBot] Connected to MQTT broker
+# [TeamsMediaBot] MQTT Service fully initialized
+```
+
+---
+
 ## Dépannage
 
 ### Erreur : "MediaPlatform needs a system with at least 2 cores"
@@ -499,6 +696,54 @@ AppSettings__MediaInternalPort=8445
 1. Vérifier les permissions dans Azure Portal
 2. Ouvrir la plage UDP 49152-65535 dans le pare-feu et NSG
 
+### Erreur de connexion MQTT
+
+**Cause** : Le bot ne peut pas se connecter au broker MQTT.
+
+**Solutions** :
+
+```powershell
+# 1. Vérifier la connectivité réseau
+Test-NetConnection -ComputerName mqtt.example.com -Port 8883
+
+# 2. Vérifier les identifiants
+# Les logs afficheront : "[TeamsMediaBot] Failed to connect to MQTT broker"
+```
+
+```env
+# 3. Pour le debug, autoriser temporairement les certificats self-signed
+AppSettings__BrokerAllowUntrustedCertificates=true
+```
+
+### Le bot ne reçoit pas les commandes startbot
+
+**Causes possibles** :
+1. Le Scheduler n'utilise pas le bon `uniqueId`
+2. Problème de topic MQTT
+
+**Solutions** :
+
+```powershell
+# 1. Vérifier le uniqueId dans les logs du bot au démarrage
+# "[TeamsMediaBot] MQTT Service created with uniqueId: teamsmediabot-xxx"
+
+# 2. Le Scheduler doit envoyer sur : botservice-teamsmediabot-xxx/in/startbot
+```
+
+### WebSocket vers le Transcriber échoue
+
+**Cause** : Le TeamsMediaBot ne peut pas joindre le Transcriber.
+
+**Solutions** :
+1. Vérifier que le Transcriber est accessible depuis le serveur Windows
+2. Vérifier que le port 8890 est ouvert
+3. Pour les connexions distantes, exposer le Transcriber ou utiliser un tunnel
+
+```bash
+# Test depuis le serveur Windows (PowerShell)
+Test-NetConnection -ComputerName transcriber.example.com -Port 8890
+```
+
 ### Logs et débogage
 
 ```powershell
@@ -508,6 +753,26 @@ Get-EventLog -LogName Application -Source "Echo Bot Service" -Newest 50
 # Ou lancer en mode console pour voir les logs en direct
 cd TeamsMediaBot/src/TeamsMediaBot
 dotnet run
+```
+
+### Logs MQTT spécifiques
+
+Les logs MQTT sont préfixés par `[TeamsMediaBot]` :
+
+```
+[TeamsMediaBot] Connecting to MQTT broker at mqtt.example.com:8883
+[TeamsMediaBot] TLS/SSL enabled for MQTT connection
+[TeamsMediaBot] Connected to MQTT broker
+[TeamsMediaBot] Subscribing to command topics
+[TeamsMediaBot] MQTT Service fully initialized
+[TeamsMediaBot] Published status: activeBots=0, online=True
+[TeamsMediaBot] Received startbot command for session xxx, channel yyy
+[TeamsMediaBot] Connecting to Transcriber WebSocket: ws://...
+[TeamsMediaBot] WebSocket connected, sending init message
+[TeamsMediaBot] Received ACK from Transcriber
+[TeamsMediaBot] Joined Teams meeting, threadId: 19:meeting_xxx@thread.v2
+[TeamsMediaBot] Audio handler wired for bot xxx_yyy
+[TeamsMediaBot] Bot started successfully for key xxx_yyy
 ```
 
 ---

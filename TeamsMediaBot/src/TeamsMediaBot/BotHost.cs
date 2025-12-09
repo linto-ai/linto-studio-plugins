@@ -13,6 +13,9 @@
 // ***********************************************************************
 using DotNetEnv.Configuration;
 using TeamsMediaBot.Bot;
+using TeamsMediaBot.Services.Mqtt;
+using TeamsMediaBot.Services.Orchestration;
+using TeamsMediaBot.Services.Transcription;
 using TeamsMediaBot.Util;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -81,6 +84,11 @@ namespace TeamsMediaBot
 
             builder.Services.AddSingleton<IBotService, BotService>();
 
+            // MQTT and Orchestrator services
+            builder.Services.AddSingleton<IMqttService, MqttService>();
+            builder.Services.AddSingleton<ITranscriptionHandler, TranscriptionHandler>();
+            builder.Services.AddSingleton<IBotOrchestratorService, BotOrchestratorService>();
+
             // Bot Settings Setup
             var botInternalHostingProtocol = "https";
             if (appSettings.UseLocalDevSettings)
@@ -135,6 +143,10 @@ namespace TeamsMediaBot
             {
                 var bot = scope.ServiceProvider.GetRequiredService<IBotService>();
                 bot.Initialize();
+
+                // Initialize the bot orchestrator (MQTT connection and command handling)
+                var orchestrator = scope.ServiceProvider.GetRequiredService<IBotOrchestratorService>();
+                await orchestrator.InitializeAsync();
             }
 
             // Configure the HTTP request pipeline.
@@ -158,10 +170,14 @@ namespace TeamsMediaBot
         /// <returns></returns>
         public async Task StopAsync()
         {
-            if (_app != null) 
+            if (_app != null)
             {
                 using (var scope = _app.Services.CreateScope())
                 {
+                    // Shutdown the orchestrator first (stops all managed bots)
+                    var orchestrator = scope.ServiceProvider.GetRequiredService<IBotOrchestratorService>();
+                    await orchestrator.ShutdownAsync();
+
                     var bot = scope.ServiceProvider.GetRequiredService<IBotService>();
                     // terminate all calls and dispose of the call client
                     await bot.Shutdown();

@@ -21,5 +21,6 @@
     <PackageReference Include="Microsoft.Graph.Communications.Calls.Media" Version="1.2.0.10563" />
     <PackageReference Include="Microsoft.Skype.Bots.Media" Version="1.27.0.2-alpha" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.7.0" />
+    <PackageReference Include="MQTTnet" Version="4.3.3.952" />
   </ItemGroup>
 </Project>

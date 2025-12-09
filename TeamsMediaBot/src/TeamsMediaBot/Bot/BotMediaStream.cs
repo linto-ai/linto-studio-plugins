@@ -12,6 +12,7 @@
 // </copyright>
 // <summary>The bot media stream.</summary>
 // ***********************************************************************-
+using TeamsMediaBot.Events;
 using TeamsMediaBot.Media;
 using TeamsMediaBot.Util;
 using Microsoft.Graph.Communications.Calls;
@@ -51,6 +52,12 @@ namespace TeamsMediaBot.Bot
         private List<AudioMediaBuffer> audioMediaBuffers = new List<AudioMediaBuffer>();
         private int shutdown;
         private readonly SpeechService _languageService;
+
+        /// <summary>
+        /// Event raised when audio data is received from Teams.
+        /// Used to stream audio to external consumers (e.g., Transcriber WebSocket).
+        /// </summary>
+        public event EventHandler<AudioDataEventArgs>? AudioDataReceived;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BotMediaStream" /> class.
@@ -205,6 +212,17 @@ namespace TeamsMediaBot.Bot
             {
                 if (!startVideoPlayerCompleted.Task.IsCompleted) { return; }
 
+                // Extract audio data for external consumers (before any processing)
+                var length = e.Buffer.Length;
+                if (length > 0)
+                {
+                    var buffer = new byte[length];
+                    Marshal.Copy(e.Buffer.Data, buffer, 0, (int)length);
+
+                    // Emit audio data event for external streaming (e.g., to Transcriber)
+                    AudioDataReceived?.Invoke(this, new AudioDataEventArgs(buffer));
+                }
+
                 if (_languageService != null)
                 {
                     // send audio buffer to language service for processing
@@ -216,7 +234,6 @@ namespace TeamsMediaBot.Bot
                 {
                     // send audio buffer back on the audio socket
                     // the particpant talking will hear themselves
-                    var length = e.Buffer.Length;
                     if (length > 0)
                     {
                         var buffer = new byte[length];

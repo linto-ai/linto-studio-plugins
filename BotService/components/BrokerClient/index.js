@@ -12,6 +12,7 @@ class BrokerClient extends Component {
     this.subs = ['botservice/in/#', `botservice-${this.uniqueId}/in/#`];
     this.bots = new Map();
     this.botSubscriptions = new Map(); // Track subscriptions for each bot
+    this.capabilities = ['jitsi', 'bigbluebutton']; // Supported bot providers
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
     this.lastPublishedBotCount = -1; // Track last published count to avoid spam
     this.init();
@@ -19,10 +20,10 @@ class BrokerClient extends Component {
 
   init() {
     this.client.on('ready', () => {
-      // Publish initial status with bot count as additional payload
-      this.client.publishStatus({ activeBots: this.bots.size });
+      // Publish initial status with bot count and capabilities as additional payload
+      this.client.publishStatus({ activeBots: this.bots.size, capabilities: this.capabilities });
       this.lastPublishedBotCount = this.bots.size;
-      logger.info(`BotService ${this.uniqueId} ready with ${this.bots.size} active bots`);
+      logger.info(`BotService ${this.uniqueId} ready with ${this.bots.size} active bots, capabilities: ${this.capabilities.join(', ')}`);
     });
 
     this.client.on('message', (topic, message) => {
@@ -56,14 +57,14 @@ class BrokerClient extends Component {
 
   publishBotServiceStatus() {
     const currentBotCount = this.bots.size;
-    
+
     // Only publish if bot count changed
     if (currentBotCount === this.lastPublishedBotCount) {
       return;
     }
-    
-    // Use the standard publishStatus method which includes LWT
-    this.client.publishStatus({ activeBots: currentBotCount });
+
+    // Use the standard publishStatus method which includes LWT and capabilities
+    this.client.publishStatus({ activeBots: currentBotCount, capabilities: this.capabilities });
     logger.info(`BotService ${this.uniqueId} now has ${currentBotCount} active bots`);
     this.lastPublishedBotCount = currentBotCount;
   }

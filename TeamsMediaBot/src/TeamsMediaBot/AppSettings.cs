@@ -2,6 +2,27 @@
 
 namespace TeamsMediaBot
 {
+    /// <summary>
+    /// MQTT broker transport protocol.
+    /// </summary>
+    public enum BrokerProtocol
+    {
+        /// <summary>
+        /// Standard TCP connection (ports 1883 or 8883 with TLS).
+        /// </summary>
+        Tcp,
+
+        /// <summary>
+        /// WebSocket connection (ws://) - useful for firewall traversal.
+        /// </summary>
+        WebSocket,
+
+        /// <summary>
+        /// Secure WebSocket connection (wss://) - WebSocket with TLS.
+        /// </summary>
+        SecureWebSocket
+    }
+
     public class AppSettings
     {
         /// <summary>
@@ -142,6 +163,18 @@ namespace TeamsMediaBot
         /// Only use in development environments.
         /// </summary>
         public bool BrokerAllowUntrustedCertificates { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets the MQTT broker transport protocol.
+        /// Use WebSocket or SecureWebSocket for firewall traversal.
+        /// </summary>
+        public BrokerProtocol BrokerProtocol { get; set; } = BrokerProtocol.Tcp;
+
+        /// <summary>
+        /// Gets or sets the WebSocket path for MQTT over WebSocket connections.
+        /// Common values: "/mqtt", "/ws". Only used when BrokerProtocol is WebSocket or SecureWebSocket.
+        /// </summary>
+        public string BrokerWebSocketPath { get; set; } = "/mqtt";
 
         /// <summary>
         /// Gets or sets the bot display name used when joining Teams meetings.

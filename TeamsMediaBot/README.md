@@ -480,6 +480,12 @@ AppSettings__BrokerUseTls=true
 # Autoriser les certificats non approuvés (dev uniquement)
 AppSettings__BrokerAllowUntrustedCertificates=false
 
+# Protocole de transport : Tcp (défaut), WebSocket (ws://), SecureWebSocket (wss://)
+AppSettings__BrokerProtocol=Tcp
+
+# Chemin WebSocket (utilisé uniquement avec WebSocket ou SecureWebSocket)
+AppSettings__BrokerWebSocketPath=/mqtt
+
 # Nom affiché du bot dans les réunions Teams
 AppSettings__BotDisplayName=Transcription Bot
 ```
@@ -502,6 +508,34 @@ AppSettings__BrokerUsername=teamsmediabot
 AppSettings__BrokerPassword=secret
 ```
 
+### Connexion via WebSocket (traversée de pare-feu)
+
+Utilisez WebSocket lorsque les ports MQTT standard (1883/8883) sont bloqués par un pare-feu. Les ports 80/443 sont généralement autorisés.
+
+```env
+# WebSocket non sécurisé (port 9001 typique)
+AppSettings__BrokerHost=mqtt.example.com
+AppSettings__BrokerPort=9001
+AppSettings__BrokerProtocol=WebSocket
+AppSettings__BrokerWebSocketPath=/mqtt
+```
+
+```env
+# WebSocket sécurisé (wss://, port 443 typique)
+AppSettings__BrokerHost=mqtt.example.com
+AppSettings__BrokerPort=443
+AppSettings__BrokerProtocol=SecureWebSocket
+AppSettings__BrokerWebSocketPath=/mqtt
+AppSettings__BrokerUsername=teamsmediabot
+AppSettings__BrokerPassword=secret
+```
+
+**Avantages de WebSocket** :
+- Traverse les pare-feux d'entreprise (ports 80/443 souvent ouverts)
+- Compatible avec les proxies HTTP
+- Fonctionne avec les load balancers HTTP (ALB, nginx, HAProxy)
+- Meilleur support dans les environnements cloud
+
 ### Configuration du broker Mosquitto (côté serveur)
 
 Pour exposer le broker MQTT sur Internet avec TLS :
@@ -518,8 +552,24 @@ certbot certonly --standalone -d mqtt.example.com
 ```conf
 # /etc/mosquitto/conf.d/tls.conf
 
+# Port TCP standard
+listener 1883
+protocol mqtt
+
 # Port TLS
 listener 8883
+protocol mqtt
+cafile /etc/letsencrypt/live/mqtt.example.com/chain.pem
+certfile /etc/letsencrypt/live/mqtt.example.com/cert.pem
+keyfile /etc/letsencrypt/live/mqtt.example.com/privkey.pem
+
+# Port WebSocket (pour traversée de pare-feu)
+listener 9001
+protocol websockets
+
+# Port WebSocket sécurisé (wss://)
+listener 9443
+protocol websockets
 cafile /etc/letsencrypt/live/mqtt.example.com/chain.pem
 certfile /etc/letsencrypt/live/mqtt.example.com/cert.pem
 keyfile /etc/letsencrypt/live/mqtt.example.com/privkey.pem
@@ -535,14 +585,17 @@ password_file /etc/mosquitto/passwd
 mosquitto_passwd -c /etc/mosquitto/passwd teamsmediabot
 ```
 
-**4. Exposer le port dans Docker**
+**4. Exposer les ports dans Docker**
 
 ```yaml
 # compose.yml
 broker:
   image: eclipse-mosquitto:2
   ports:
-    - "8883:8883"
+    - "1883:1883"   # TCP standard
+    - "8883:8883"   # TCP TLS
+    - "9001:9001"   # WebSocket
+    - "9443:9443"   # WebSocket TLS
   volumes:
     - ./mosquitto/config:/mosquitto/config
     - /etc/letsencrypt:/etc/letsencrypt:ro

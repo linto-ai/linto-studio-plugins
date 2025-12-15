@@ -157,8 +157,21 @@ namespace TeamsMediaBot.Services.Orchestration
             // Create managed bot
             var managedBot = new ManagedBot(payload, webSocket, _logger);
 
+            // Build WebSocket URL, optionally replacing host
+            var websocketUrl = payload.WebsocketUrl;
+            if (!string.IsNullOrEmpty(_settings.TranscriberHost))
+            {
+                var uri = new Uri(websocketUrl);
+                var builder = new UriBuilder(uri)
+                {
+                    Host = _settings.TranscriberHost
+                };
+                websocketUrl = builder.ToString();
+                _logger.LogInformation("[TeamsMediaBot] Overriding WebSocket host to {Host}", _settings.TranscriberHost);
+            }
+
             // Connect to Transcriber WebSocket
-            var connected = await webSocket.ConnectAsync(payload.WebsocketUrl);
+            var connected = await webSocket.ConnectAsync(websocketUrl);
             if (!connected)
             {
                 _logger.LogError("[TeamsMediaBot] Failed to connect to Transcriber WebSocket for bot {Key}", key);

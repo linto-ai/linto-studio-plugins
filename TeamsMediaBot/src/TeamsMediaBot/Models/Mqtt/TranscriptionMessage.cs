@@ -1,7 +1,54 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace TeamsMediaBot.Models.Mqtt
 {
+    /// <summary>
+    /// JSON converter that handles both integer and decimal numbers, converting them to long.
+    /// </summary>
+    public class FlexibleLongConverter : JsonConverter<long?>
+    {
+        public override long? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            return reader.TokenType switch
+            {
+                JsonTokenType.Number when reader.TryGetInt64(out var longVal) => longVal,
+                JsonTokenType.Number when reader.TryGetDouble(out var doubleVal) => (long)doubleVal,
+                JsonTokenType.Null => null,
+                _ => throw new JsonException($"Unexpected token type: {reader.TokenType}")
+            };
+        }
+
+        public override void Write(Utf8JsonWriter writer, long? value, JsonSerializerOptions options)
+        {
+            if (value.HasValue)
+                writer.WriteNumberValue(value.Value);
+            else
+                writer.WriteNullValue();
+        }
+    }
+
+    /// <summary>
+    /// JSON converter for non-nullable long that handles both integer and decimal numbers.
+    /// </summary>
+    public class FlexibleLongNonNullableConverter : JsonConverter<long>
+    {
+        public override long Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            return reader.TokenType switch
+            {
+                JsonTokenType.Number when reader.TryGetInt64(out var longVal) => longVal,
+                JsonTokenType.Number when reader.TryGetDouble(out var doubleVal) => (long)doubleVal,
+                _ => throw new JsonException($"Unexpected token type: {reader.TokenType}")
+            };
+        }
+
+        public override void Write(Utf8JsonWriter writer, long value, JsonSerializerOptions options)
+        {
+            writer.WriteNumberValue(value);
+        }
+    }
+
     /// <summary>
     /// Transcription message received from the Transcriber via MQTT.
     /// </summary>
@@ -29,12 +76,14 @@ namespace TeamsMediaBot.Models.Mqtt
         /// Start timestamp (Unix milliseconds).
         /// </summary>
         [JsonPropertyName("start")]
+        [JsonConverter(typeof(FlexibleLongConverter))]
         public long? Start { get; set; }
 
         /// <summary>
         /// End timestamp (Unix milliseconds).
         /// </summary>
         [JsonPropertyName("end")]
+        [JsonConverter(typeof(FlexibleLongConverter))]
         public long? End { get; set; }
 
         /// <summary>
@@ -71,12 +120,14 @@ namespace TeamsMediaBot.Models.Mqtt
         /// Start timestamp (Unix milliseconds).
         /// </summary>
         [JsonPropertyName("start")]
+        [JsonConverter(typeof(FlexibleLongNonNullableConverter))]
         public long Start { get; set; }
 
         /// <summary>
         /// End timestamp (Unix milliseconds).
         /// </summary>
         [JsonPropertyName("end")]
+        [JsonConverter(typeof(FlexibleLongNonNullableConverter))]
         public long End { get; set; }
     }
 }

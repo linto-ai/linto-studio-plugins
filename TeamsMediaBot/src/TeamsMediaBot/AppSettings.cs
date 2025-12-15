@@ -147,6 +147,12 @@ namespace TeamsMediaBot
         /// Gets or sets the bot display name used when joining Teams meetings.
         /// </summary>
         public string BotDisplayName { get; set; } = "Transcription Bot";
+
+        /// <summary>
+        /// Gets or sets the Transcriber host to override the host in WebSocket URLs.
+        /// If set, replaces the host in websocketUrl from MQTT payloads.
+        /// </summary>
+        public string? TranscriberHost { get; set; }
     }
 }
 

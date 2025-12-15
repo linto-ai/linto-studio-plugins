@@ -72,13 +72,34 @@ namespace TeamsMediaBot.Services.Mqtt
 
             var optionsBuilder = new MqttClientOptionsBuilder()
                 .WithClientId(_uniqueId)
-                .WithTcpServer(_settings.BrokerHost, _settings.BrokerPort)
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(_settings.BrokerKeepAlive))
                 .WithWillTopic($"{_pubRoot}/status")
                 .WithWillPayload(lwtPayload)
                 .WithWillQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
                 .WithWillRetain(true)
                 .WithCleanSession(true);
+
+            // Configure transport protocol (TCP, WebSocket, or SecureWebSocket)
+            switch (_settings.BrokerProtocol)
+            {
+                case BrokerProtocol.WebSocket:
+                    var wsUri = new Uri($"ws://{_settings.BrokerHost}:{_settings.BrokerPort}{_settings.BrokerWebSocketPath}");
+                    optionsBuilder.WithConnectionUri(wsUri);
+                    _logger.LogInformation("[TeamsMediaBot] Using WebSocket transport: {Uri}", wsUri);
+                    break;
+
+                case BrokerProtocol.SecureWebSocket:
+                    var wssUri = new Uri($"wss://{_settings.BrokerHost}:{_settings.BrokerPort}{_settings.BrokerWebSocketPath}");
+                    optionsBuilder.WithConnectionUri(wssUri);
+                    _logger.LogInformation("[TeamsMediaBot] Using Secure WebSocket transport: {Uri}", wssUri);
+                    break;
+
+                case BrokerProtocol.Tcp:
+                default:
+                    optionsBuilder.WithTcpServer(_settings.BrokerHost, _settings.BrokerPort);
+                    _logger.LogInformation("[TeamsMediaBot] Using TCP transport");
+                    break;
+            }
 
             // Add credentials if provided
             if (!string.IsNullOrEmpty(_settings.BrokerUsername))

@@ -48,8 +48,16 @@ namespace TeamsMediaBot.Controllers
         [Route(HttpRouteConstants.OnIncomingRequestRoute)]
         public async Task<HttpResponseMessage> OnIncomingRequestAsync()
         {
+            _logger.LogInformation("[PlatformCallController] Incoming call request received from {RemoteIp}",
+                HttpContext.Connection.RemoteIpAddress);
+
             var httpRequestMessage = HttpHelpers.ToHttpRequestMessage(this.Request);
-            return await _botService.Client.ProcessNotificationAsync(httpRequestMessage).ConfigureAwait(false);
+            var response = await _botService.Client.ProcessNotificationAsync(httpRequestMessage).ConfigureAwait(false);
+
+            _logger.LogInformation("[PlatformCallController] Incoming call request processed with status {StatusCode}",
+                response.StatusCode);
+
+            return response;
         }
 
         /// <summary>
@@ -60,10 +68,18 @@ namespace TeamsMediaBot.Controllers
         [Route(HttpRouteConstants.OnNotificationRequestRoute)]
         public async Task<HttpResponseMessage> OnNotificationRequestAsync()
         {
+            _logger.LogInformation("[PlatformCallController] Notification request received from {RemoteIp}",
+                HttpContext.Connection.RemoteIpAddress);
+
             var httpRequestMessage = HttpHelpers.ToHttpRequestMessage(this.Request);
 
             // Pass the incoming notification to the sdk. The sdk takes care of what to do with it.
-            return await _botService.Client.ProcessNotificationAsync(httpRequestMessage).ConfigureAwait(false);
+            var response = await _botService.Client.ProcessNotificationAsync(httpRequestMessage).ConfigureAwait(false);
+
+            _logger.LogInformation("[PlatformCallController] Notification request processed with status {StatusCode}",
+                response.StatusCode);
+
+            return response;
         }
     }
 }

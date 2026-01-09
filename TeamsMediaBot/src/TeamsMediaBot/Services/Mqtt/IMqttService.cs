@@ -57,5 +57,45 @@ namespace TeamsMediaBot.Services.Mqtt
         /// <param name="channelId">The channel ID.</param>
         /// <param name="threadId">The Teams thread ID.</param>
         Task PublishMeetingLeftAsync(string sessionId, string channelId, string threadId);
+
+        /// <summary>
+        /// Subscribes to transcription topics for a session/channel.
+        /// </summary>
+        /// <param name="sessionId">The session ID.</param>
+        /// <param name="channelId">The channel ID.</param>
+        Task SubscribeToTranscriptionsAsync(string sessionId, string channelId);
+
+        /// <summary>
+        /// Unsubscribes from transcription topics for a session/channel.
+        /// </summary>
+        /// <param name="sessionId">The session ID.</param>
+        /// <param name="channelId">The channel ID.</param>
+        Task UnsubscribeFromTranscriptionsAsync(string sessionId, string channelId);
+
+        /// <summary>
+        /// Publishes a session mapping to MQTT for other services to discover
+        /// the threadId to sessionId/channelId relationship.
+        /// </summary>
+        /// <param name="sessionId">The session ID.</param>
+        /// <param name="channelId">The channel ID.</param>
+        /// <param name="threadId">The Teams meeting thread ID.</param>
+        /// <param name="meetingUrl">The Teams meeting URL.</param>
+        /// <param name="enableDisplaySub">Whether display subtitles are enabled.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        Task PublishSessionMappingAsync(
+            string sessionId,
+            string channelId,
+            string threadId,
+            string? meetingUrl,
+            bool enableDisplaySub,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Publishes an unmapping message to clear the session mapping.
+        /// Called when a bot leaves a meeting.
+        /// </summary>
+        /// <param name="sessionId">The session ID to unmap.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        Task PublishSessionUnmappingAsync(string sessionId, CancellationToken cancellationToken = default);
     }
 }

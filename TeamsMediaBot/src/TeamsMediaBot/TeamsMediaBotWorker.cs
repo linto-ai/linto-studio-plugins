@@ -45,7 +45,7 @@ namespace TeamsMediaBot
             }
             finally 
             {
-                _logger.LogInformation("Stopping Echo Bot");
+                _logger.LogInformation("Stopping Teams Media Bot");
                 _hostApplicationLifetime.StopApplication();
             }
         }

@@ -289,6 +289,80 @@ namespace TeamsMediaBot.Services.Mqtt
             }
         }
 
+        /// <inheritdoc/>
+        public async Task PublishSessionMappingAsync(
+            string sessionId,
+            string channelId,
+            string threadId,
+            string? meetingUrl,
+            bool enableDisplaySub,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_mqttClient.IsConnected)
+            {
+                _logger.LogWarning("[TeamsMediaBot] Cannot publish session mapping: not connected to MQTT broker");
+                return;
+            }
+
+            var payload = new SessionMappingPayload
+            {
+                SessionId = sessionId,
+                ChannelId = channelId,
+                ThreadId = threadId,
+                MeetingUrl = meetingUrl,
+                BotInstanceId = _uniqueId,
+                Timestamp = DateTime.UtcNow,
+                EnableDisplaySub = enableDisplaySub
+            };
+
+            var topic = $"session/mapping/{sessionId}";
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic(topic)
+                .WithPayload(JsonSerializer.Serialize(payload))
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(true) // Retain so new subscribers get the mapping
+                .Build();
+
+            try
+            {
+                await _mqttClient.PublishAsync(message, cancellationToken);
+                _logger.LogInformation("[TeamsMediaBot] Published session mapping: ThreadId={ThreadId} -> Session={SessionId}, Channel={ChannelId}",
+                    threadId, sessionId, channelId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[TeamsMediaBot] Failed to publish session mapping for session {SessionId}", sessionId);
+            }
+        }
+
+        /// <inheritdoc/>
+        public async Task PublishSessionUnmappingAsync(string sessionId, CancellationToken cancellationToken = default)
+        {
+            if (!_mqttClient.IsConnected)
+            {
+                _logger.LogWarning("[TeamsMediaBot] Cannot publish session unmapping: not connected to MQTT broker");
+                return;
+            }
+
+            // Publish empty payload with retain flag to clear the retained message
+            var topic = $"session/mapping/{sessionId}";
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic(topic)
+                .WithPayload(Array.Empty<byte>())
+                .WithRetainFlag(true)
+                .Build();
+
+            try
+            {
+                await _mqttClient.PublishAsync(message, cancellationToken);
+                _logger.LogInformation("[TeamsMediaBot] Published session unmapping for session {SessionId}", sessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[TeamsMediaBot] Failed to publish session unmapping for session {SessionId}", sessionId);
+            }
+        }
+
         private async Task SubscribeToCommandsAsync()
         {
             // Subscribe to general command topics and specific instance topics

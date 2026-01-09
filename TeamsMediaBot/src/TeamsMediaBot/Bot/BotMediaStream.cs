@@ -1,4 +1,4 @@
-﻿// ***********************************************************************
+// ***********************************************************************
 // Assembly         : TeamsMediaBot.Services
 // Author           : JasonTheDeveloper
 // Created          : 09-07-2020
@@ -13,25 +13,20 @@
 // <summary>The bot media stream.</summary>
 // ***********************************************************************-
 using TeamsMediaBot.Events;
-using TeamsMediaBot.Media;
-using TeamsMediaBot.Util;
 using Microsoft.Graph.Communications.Calls;
 using Microsoft.Graph.Communications.Calls.Media;
 using Microsoft.Graph.Communications.Common;
 using Microsoft.Graph.Communications.Common.Telemetry;
 using Microsoft.Skype.Bots.Media;
-using Microsoft.Skype.Internal.Media.Services.Common;
 using System.Runtime.InteropServices;
 
 namespace TeamsMediaBot.Bot
 {
     /// <summary>
-    /// Class responsible for streaming audio and video.
+    /// Class responsible for streaming audio.
     /// </summary>
     public class BotMediaStream : ObjectRootDisposable
     {
-        private AppSettings _settings;
-
         /// <summary>
         /// The participants
         /// </summary>
@@ -41,17 +36,9 @@ namespace TeamsMediaBot.Bot
         /// The audio socket
         /// </summary>
         private readonly IAudioSocket _audioSocket;
-        /// <summary>
-        /// The media stream
-        /// </summary>
+
         private readonly ILogger _logger;
-        private AudioVideoFramePlayer audioVideoFramePlayer;
-        private readonly TaskCompletionSource<bool> audioSendStatusActive;
-        private readonly TaskCompletionSource<bool> startVideoPlayerCompleted;
-        private AudioVideoFramePlayerSettings audioVideoFramePlayerSettings;
-        private List<AudioMediaBuffer> audioMediaBuffers = new List<AudioMediaBuffer>();
         private int shutdown;
-        private readonly SpeechService _languageService;
 
         /// <summary>
         /// Event raised when audio data is received from Teams.
@@ -77,17 +64,11 @@ namespace TeamsMediaBot.Bot
         )
             : base(graphLogger)
         {
-            ArgumentVerifier.ThrowOnNullArgument(mediaSession, nameof(mediaSession));
-            ArgumentVerifier.ThrowOnNullArgument(logger, nameof(logger));
-            ArgumentVerifier.ThrowOnNullArgument(settings, nameof(settings));
+            if (mediaSession == null) throw new ArgumentNullException(nameof(mediaSession));
+            if (logger == null) throw new ArgumentNullException(nameof(logger));
 
-            _settings = settings;
             _logger = logger;
-
             this.participants = new List<IParticipant>();
-
-            this.audioSendStatusActive = new TaskCompletionSource<bool>();
-            this.startVideoPlayerCompleted = new TaskCompletionSource<bool>();
 
             // Subscribe to the audio media.
             this._audioSocket = mediaSession.AudioSocket;
@@ -96,17 +77,7 @@ namespace TeamsMediaBot.Bot
                 throw new InvalidOperationException("A mediaSession needs to have at least an audioSocket");
             }
 
-            var ignoreTask = this.StartAudioVideoFramePlayerAsync().ForgetAndLogExceptionAsync(this.GraphLogger, "Failed to start the player");
-
-            this._audioSocket.AudioSendStatusChanged += OnAudioSendStatusChanged;            
-
             this._audioSocket.AudioMediaReceived += this.OnAudioMediaReceived;
-
-            if (_settings.UseSpeechService)
-            {
-                _languageService = new SpeechService(_settings, _logger);
-                _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
-            }
         }
 
         /// <summary>
@@ -122,81 +93,20 @@ namespace TeamsMediaBot.Bot
         /// Shut down.
         /// </summary>
         /// <returns><see cref="Task" />.</returns>
-        public async Task ShutdownAsync()
+        public Task ShutdownAsync()
         {
             if (Interlocked.CompareExchange(ref this.shutdown, 1, 1) == 1)
             {
-                return;
+                return Task.CompletedTask;
             }
-
-            await this.startVideoPlayerCompleted.Task.ConfigureAwait(false);
 
             // unsubscribe
             if (this._audioSocket != null)
             {
-                this._audioSocket.AudioSendStatusChanged -= this.OnAudioSendStatusChanged;
+                this._audioSocket.AudioMediaReceived -= this.OnAudioMediaReceived;
             }
 
-            // shutting down the players
-            if (this.audioVideoFramePlayer != null)
-            {
-                await this.audioVideoFramePlayer.ShutdownAsync().ConfigureAwait(false);
-            }
-
-            // make sure all the audio and video buffers are disposed, it can happen that,
-            // the buffers were not enqueued but the call was disposed if the caller hangs up quickly
-            foreach (var audioMediaBuffer in this.audioMediaBuffers)
-            {
-                audioMediaBuffer.Dispose();
-            }
-
-            _logger.LogInformation($"disposed {this.audioMediaBuffers.Count} audioMediaBUffers.");
-
-            this.audioMediaBuffers.Clear();
-        }
-
-        /// <summary>
-        /// Initialize AV frame player.
-        /// </summary>
-        /// <returns>Task denoting creation of the player with initial frames enqueued.</returns>
-        private async Task StartAudioVideoFramePlayerAsync()
-        {
-            try
-            {
-                _logger.LogInformation("Send status active for audio and video Creating the audio video player");
-                this.audioVideoFramePlayerSettings =
-                    new AudioVideoFramePlayerSettings(new AudioSettings(20), new VideoSettings(), 1000);
-                this.audioVideoFramePlayer = new AudioVideoFramePlayer(
-                    (AudioSocket)_audioSocket,
-                    null,
-                    this.audioVideoFramePlayerSettings);
-
-                _logger.LogInformation("created the audio video player");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to create the audioVideoFramePlayer with exception");
-            }
-            finally
-            {
-                this.startVideoPlayerCompleted.TrySetResult(true);
-            }
-        }
-
-        /// <summary>
-        /// Callback for informational updates from the media plaform about audio status changes.
-        /// Once the status becomes active, audio can be loopbacked.
-        /// </summary>
-        /// <param name="sender">The audio socket.</param>
-        /// <param name="e">Event arguments.</param>
-        private void OnAudioSendStatusChanged(object? sender, AudioSendStatusChangedEventArgs e)
-        {
-            _logger.LogTrace($"[AudioSendStatusChangedEventArgs(MediaSendStatus={e.MediaSendStatus})]");
-
-            if (e.MediaSendStatus == MediaSendStatus.Active)
-            {
-                this.audioSendStatusActive.TrySetResult(true);
-            }
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -204,15 +114,13 @@ namespace TeamsMediaBot.Bot
         /// </summary>
         /// <param name="sender">The sender.</param>
         /// <param name="e">The audio media received arguments.</param>
-        private async void OnAudioMediaReceived(object? sender, AudioMediaReceivedEventArgs e)
+        private void OnAudioMediaReceived(object? sender, AudioMediaReceivedEventArgs e)
         {
             _logger.LogTrace($"Received Audio: [AudioMediaReceivedEventArgs(Data=<{e.Buffer.Data.ToString()}>, Length={e.Buffer.Length}, Timestamp={e.Buffer.Timestamp})]");
 
             try
             {
-                if (!startVideoPlayerCompleted.Task.IsCompleted) { return; }
-
-                // Extract audio data for external consumers (before any processing)
+                // Extract audio data for external consumers
                 var length = e.Buffer.Length;
                 if (length > 0)
                 {
@@ -221,28 +129,6 @@ namespace TeamsMediaBot.Bot
 
                     // Emit audio data event for external streaming (e.g., to Transcriber)
                     AudioDataReceived?.Invoke(this, new AudioDataEventArgs(buffer));
-                }
-
-                if (_languageService != null)
-                {
-                    // send audio buffer to language service for processing
-                    // the particpant talking will hear the bot repeat what they said
-                    await _languageService.AppendAudioBuffer(e.Buffer);
-                    e.Buffer.Dispose();
-                }
-                else
-                {
-                    // send audio buffer back on the audio socket
-                    // the particpant talking will hear themselves
-                    if (length > 0)
-                    {
-                        var buffer = new byte[length];
-                        Marshal.Copy(e.Buffer.Data, buffer, 0, (int)length);
-
-                        var currentTick = DateTime.Now.Ticks;
-                        this.audioMediaBuffers = Util.Utilities.CreateAudioMediaBuffers(buffer, currentTick, _logger);
-                        await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>());
-                    }
                 }
             }
             catch (Exception ex)
@@ -255,12 +141,5 @@ namespace TeamsMediaBot.Bot
                 e.Buffer.Dispose();
             }
         }
-
-        private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)
-        {
-            this.audioMediaBuffers = e.AudioMediaBuffers;
-            var result = Task.Run(async () => await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>())).GetAwaiter();
-        }
     }
 }
-

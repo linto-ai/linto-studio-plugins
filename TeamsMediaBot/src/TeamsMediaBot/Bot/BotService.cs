@@ -164,19 +164,33 @@ namespace TeamsMediaBot.Bot
         /// <returns>The <see cref="Task" />.</returns>
         public async Task EndCallByThreadIdAsync(string threadId)
         {
+            _logger.LogInformation("[BotService] === ENDING CALL ===");
+            _logger.LogInformation("[BotService] ThreadId: {ThreadId}", threadId);
+
             string callId = string.Empty;
             try
             {
                 var callHandler = this.GetHandlerOrThrow(threadId);
                 callId = callHandler.Call.Id;
+                _logger.LogInformation("[BotService] Found CallHandler, Call ID: {CallId}", callId);
+                _logger.LogInformation("[BotService] Sending DeleteAsync request...");
+
                 await callHandler.Call.DeleteAsync().ConfigureAwait(false);
+                _logger.LogInformation("[BotService] Call deleted successfully");
             }
-            catch (Exception)
+            catch (ArgumentException ex)
             {
+                _logger.LogWarning("[BotService] CallHandler not found for threadId {ThreadId}: {Message}",
+                    threadId, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[BotService] Error ending call: {Message}", ex.Message);
                 // Manually remove the call from SDK state.
                 // This will trigger the ICallCollection.OnUpdated event with the removed resource.
                 if (!string.IsNullOrEmpty(callId))
                 {
+                    _logger.LogInformation("[BotService] Force removing call {CallId} from SDK state", callId);
                     this.Client.Calls().TryForceRemove(callId, out ICall _);
                 }
             }
@@ -189,13 +203,34 @@ namespace TeamsMediaBot.Bot
         /// <returns>The <see cref="ICall" /> that was requested to join.</returns>
         public async Task<ICall> JoinCallAsync(JoinCallBody joinCallBody)
         {
+            _logger.LogInformation("[BotService] === JOINING CALL ===");
+            _logger.LogInformation("[BotService] Join URL: {Url}", joinCallBody.JoinUrl);
+            _logger.LogInformation("[BotService] Display Name: {Name}", joinCallBody.DisplayName ?? "default");
+
             // A tracking id for logging purposes. Helps identify this call in logs.
             var scenarioId = Guid.NewGuid();
+            _logger.LogInformation("[BotService] Scenario ID: {ScenarioId}", scenarioId);
 
-            var (chatInfo, meetingInfo) = JoinInfo.ParseJoinURL(joinCallBody.JoinUrl);
+            ChatInfo chatInfo;
+            MeetingInfo meetingInfo;
+
+            try
+            {
+                (chatInfo, meetingInfo) = JoinInfo.ParseJoinURL(joinCallBody.JoinUrl);
+                _logger.LogInformation("[BotService] Parsed meeting URL successfully");
+                _logger.LogInformation("[BotService] ThreadId: {ThreadId}", chatInfo.ThreadId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[BotService] Failed to parse meeting URL: {Message}", ex.Message);
+                throw;
+            }
 
             var tenantId = (meetingInfo as OrganizerMeetingInfo).Organizer.GetPrimaryIdentity().GetTenantId();
+            _logger.LogInformation("[BotService] Tenant ID: {TenantId}", tenantId);
+
             var mediaSession = this.CreateLocalMediaSession();
+            _logger.LogInformation("[BotService] Media session created");
 
             var joinParams = new JoinMeetingParameters(chatInfo, meetingInfo, mediaSession)
             {
@@ -213,16 +248,38 @@ namespace TeamsMediaBot.Bot
                     Id = Guid.NewGuid().ToString(),
                     DisplayName = joinCallBody.DisplayName,
                 };
+                _logger.LogInformation("[BotService] Using guest identity with display name: {Name}",
+                    joinCallBody.DisplayName);
             }
 
             if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId, out CallHandler? call))
             {
-                var statefulCall = await this.Client.Calls().AddAsync(joinParams, scenarioId).ConfigureAwait(false);
-                statefulCall.GraphLogger.Info($"Call creation complete: {statefulCall.Id}");
-                _logger.LogInformation($"Call creation complete: {statefulCall.Id}");
-                return statefulCall;
+                _logger.LogInformation("[BotService] No existing call for this threadId, creating new call...");
+
+                try
+                {
+                    var statefulCall = await this.Client.Calls().AddAsync(joinParams, scenarioId).ConfigureAwait(false);
+
+                    _logger.LogInformation("[BotService] === CALL CREATED ===");
+                    _logger.LogInformation("[BotService] Call ID: {CallId}", statefulCall.Id);
+                    _logger.LogInformation("[BotService] Call State: {State}", statefulCall.Resource?.State);
+
+                    statefulCall.GraphLogger.Info($"Call creation complete: {statefulCall.Id}");
+                    return statefulCall;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError("[BotService] === CALL CREATION FAILED ===");
+                    _logger.LogError(ex, "[BotService] Exception: {Message}", ex.Message);
+                    if (ex.InnerException != null)
+                    {
+                        _logger.LogError("[BotService] Inner: {Inner}", ex.InnerException.Message);
+                    }
+                    throw;
+                }
             }
 
+            _logger.LogWarning("[BotService] Call already exists for threadId {ThreadId}", joinParams.ChatInfo.ThreadId);
             throw new Exception("Call has already been added");
         }
 
@@ -316,23 +373,58 @@ namespace TeamsMediaBot.Bot
         /// <param name="args">The <see cref="CollectionEventArgs{ICall}" /> instance containing the event data.</param>
         private void CallsOnUpdated(ICallCollection sender, CollectionEventArgs<ICall> args)
         {
+            _logger.LogInformation("[BotService] CallsOnUpdated - Added: {Added}, Removed: {Removed}",
+                args.AddedResources.Count, args.RemovedResources.Count);
+
             foreach (var call in args.AddedResources)
             {
-                var callHandler = new CallHandler(call, _settings, _logger);
                 var threadId = call.Resource.ChatInfo.ThreadId;
+                var callState = call.Resource.State;
+
+                _logger.LogInformation("[BotService] === CALL ADDED ===");
+                _logger.LogInformation("[BotService] Call ID: {CallId}", call.Id);
+                _logger.LogInformation("[BotService] ThreadId: {ThreadId}", threadId);
+                _logger.LogInformation("[BotService] State: {State}", callState);
+
+                var callHandler = new CallHandler(call, _settings, _logger);
                 this.CallHandlers[threadId] = callHandler;
+
+                _logger.LogInformation("[BotService] CallHandler created and added for threadId {ThreadId}", threadId);
+                _logger.LogInformation("[BotService] Total CallHandlers: {Count}", this.CallHandlers.Count);
             }
 
             foreach (var call in args.RemovedResources)
             {
                 var threadId = call.Resource.ChatInfo.ThreadId;
+                var callState = call.Resource.State;
+                var resultInfo = call.Resource.ResultInfo;
+
+                _logger.LogWarning("[BotService] === CALL REMOVED ===");
+                _logger.LogWarning("[BotService] Call ID: {CallId}", call.Id);
+                _logger.LogWarning("[BotService] ThreadId: {ThreadId}", threadId);
+                _logger.LogWarning("[BotService] Final State: {State}", callState);
+                if (resultInfo != null)
+                {
+                    _logger.LogWarning("[BotService] Result Code: {Code}, Message: {Message}",
+                        resultInfo.Code, resultInfo.Message);
+                }
+
                 if (this.CallHandlers.TryRemove(threadId, out CallHandler? handler))
                 {
+                    _logger.LogInformation("[BotService] CallHandler removed for threadId {ThreadId}", threadId);
                     Task.Run(async () => {
+                        _logger.LogInformation("[BotService] Cleaning up CallHandler resources...");
                         await handler.BotMediaStream.ShutdownAsync();
                         handler.Dispose();
+                        _logger.LogInformation("[BotService] CallHandler cleanup complete");
                     });
                 }
+                else
+                {
+                    _logger.LogWarning("[BotService] No CallHandler found for removed call threadId {ThreadId}", threadId);
+                }
+
+                _logger.LogInformation("[BotService] Remaining CallHandlers: {Count}", this.CallHandlers.Count);
             }
         }
 

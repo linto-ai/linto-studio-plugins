@@ -30,7 +30,7 @@ namespace TeamsMediaBot.Util
             {
                 Scheme = req.Scheme,
                 Host = req.Host.Host,
-                Port = req.Host.Port.Value,
+                Port = req.Host.Port ?? (req.Scheme == "https" ? 443 : 80),
                 Path = req.PathBase.Add(req.Path),
                 Query = req.QueryString.ToString()
             }.Uri);

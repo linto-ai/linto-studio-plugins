@@ -26,6 +26,8 @@ namespace TeamsMediaBot.Bot
         /// <value>The bot media stream.</value>
         public BotMediaStream BotMediaStream { get; private set; }
 
+        private readonly ILogger _logger;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
         /// </summary>
@@ -39,9 +41,13 @@ namespace TeamsMediaBot.Bot
         )
             : base(TimeSpan.FromMinutes(10), statefulCall?.GraphLogger)
         {
+            _logger = logger;
             this.Call = statefulCall;
             this.Call.OnUpdated += this.CallOnUpdated;
             this.Call.Participants.OnUpdated += this.ParticipantsOnUpdated;
+
+            _logger.LogInformation("[CallHandler] Created for call {CallId}, threadId: {ThreadId}",
+                statefulCall.Id, statefulCall.Resource?.ChatInfo?.ThreadId ?? "unknown");
 
             this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings);
         }
@@ -55,11 +61,13 @@ namespace TeamsMediaBot.Bot
         /// <inheritdoc />
         protected override void Dispose(bool disposing)
         {
+            _logger.LogInformation("[CallHandler] Disposing CallHandler for call {CallId}", this.Call?.Id);
             base.Dispose(disposing);
             this.Call.OnUpdated -= this.CallOnUpdated;
             this.Call.Participants.OnUpdated -= this.ParticipantsOnUpdated;
 
             this.BotMediaStream?.ShutdownAsync().ForgetAndLogExceptionAsync(this.GraphLogger);
+            _logger.LogInformation("[CallHandler] CallHandler disposed");
         }
 
         /// <summary>
@@ -69,19 +77,53 @@ namespace TeamsMediaBot.Bot
         /// <param name="e">The event args containing call changes.</param>
         private async void CallOnUpdated(ICall sender, ResourceEventArgs<Call> e)
         {
-            GraphLogger.Info($"Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
+            var oldState = e.OldResource.State;
+            var newState = e.NewResource.State;
+            var resultCode = e.NewResource.ResultInfo?.Code;
+            var resultMessage = e.NewResource.ResultInfo?.Message;
+            var resultSubcode = e.NewResource.ResultInfo?.Subcode;
 
-            if (e.OldResource.State != e.NewResource.State && e.NewResource.State == CallState.Established)
+            _logger.LogInformation("[CallHandler] === CALL STATE CHANGE ===");
+            _logger.LogInformation("[CallHandler] Call ID: {CallId}", sender.Id);
+            _logger.LogInformation("[CallHandler] State: {OldState} -> {NewState}", oldState, newState);
+            if (resultCode.HasValue)
             {
-                // Call is established...
+                _logger.LogInformation("[CallHandler] Result Code: {Code}, Subcode: {Subcode}",
+                    resultCode, resultSubcode);
+            }
+            if (!string.IsNullOrEmpty(resultMessage))
+            {
+                _logger.LogInformation("[CallHandler] Result Message: {Message}", resultMessage);
             }
 
-            if ((e.OldResource.State == CallState.Established) && (e.NewResource.State == CallState.Terminated))
+            GraphLogger.Info($"Call status updated to {newState} - {resultMessage}");
+
+            if (oldState != newState && newState == CallState.Established)
             {
+                _logger.LogInformation("[CallHandler] Call is now ESTABLISHED - bot is in the meeting");
+            }
+
+            if (oldState == CallState.Established && newState == CallState.Terminated)
+            {
+                _logger.LogWarning("[CallHandler] === CALL TERMINATED ===");
+                _logger.LogWarning("[CallHandler] Bot was removed from the meeting");
+                _logger.LogWarning("[CallHandler] Reason: {Message}", resultMessage ?? "unknown");
+
                 if (BotMediaStream != null)
                 {
+                    _logger.LogInformation("[CallHandler] Shutting down BotMediaStream...");
                     await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
                 }
+            }
+
+            // Log other state transitions for debugging
+            if (newState == CallState.Terminating)
+            {
+                _logger.LogWarning("[CallHandler] Call is TERMINATING - bot is being disconnected");
+            }
+            else if (newState == CallState.Establishing)
+            {
+                _logger.LogInformation("[CallHandler] Call is ESTABLISHING - connecting to meeting...");
             }
         }
 

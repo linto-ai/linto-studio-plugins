@@ -50,6 +50,7 @@ namespace TeamsMediaBot.Services.WebSocket
         {
             if (_disposed)
             {
+                _logger.LogError("[WebSocket] ConnectAsync called on disposed instance");
                 throw new ObjectDisposedException(nameof(TranscriberWebSocket));
             }
 
@@ -58,12 +59,39 @@ namespace TeamsMediaBot.Services.WebSocket
 
             try
             {
-                _logger.LogInformation("[TeamsMediaBot] Connecting to Transcriber WebSocket: {Url}", websocketUrl);
+                var uri = new Uri(websocketUrl);
+                _logger.LogInformation("[WebSocket] === CONNECTION ATTEMPT ===");
+                _logger.LogInformation("[WebSocket] URL: {Url}", websocketUrl);
+                _logger.LogInformation("[WebSocket] Host: {Host}, Port: {Port}, Scheme: {Scheme}", uri.Host, uri.Port, uri.Scheme);
 
                 _webSocket = new ClientWebSocket();
-                await _webSocket.ConnectAsync(new Uri(websocketUrl), cancellationToken);
 
-                _logger.LogInformation("[TeamsMediaBot] WebSocket connected, sending init message");
+                _logger.LogInformation("[WebSocket] Initiating connection...");
+                var connectStart = DateTime.UtcNow;
+
+                try
+                {
+                    await _webSocket.ConnectAsync(uri, cancellationToken);
+                }
+                catch (WebSocketException wsEx)
+                {
+                    _logger.LogError("[WebSocket] CONNECTION FAILED - WebSocketException");
+                    _logger.LogError("[WebSocket] Error Code: {ErrorCode}", wsEx.WebSocketErrorCode);
+                    _logger.LogError("[WebSocket] Message: {Message}", wsEx.Message);
+                    _logger.LogError("[WebSocket] Inner Exception: {Inner}", wsEx.InnerException?.Message ?? "none");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError("[WebSocket] CONNECTION FAILED - {ExceptionType}", ex.GetType().Name);
+                    _logger.LogError("[WebSocket] Message: {Message}", ex.Message);
+                    throw;
+                }
+
+                var connectDuration = DateTime.UtcNow - connectStart;
+                _logger.LogInformation("[WebSocket] Connected in {Duration}ms, State: {State}",
+                    connectDuration.TotalMilliseconds, _webSocket.State);
+                _logger.LogInformation("[WebSocket] Sending init message...");
 
                 // Send init message
                 var initMessage = JsonSerializer.Serialize(new
@@ -77,10 +105,13 @@ namespace TeamsMediaBot.Services.WebSocket
                 await _webSocket.SendAsync(new ArraySegment<byte>(initBytes), WebSocketMessageType.Text, true, cancellationToken);
 
                 // Wait for ACK with timeout
+                _logger.LogInformation("[WebSocket] Waiting for ACK from Transcriber (timeout: 10s)...");
                 var ackReceived = await WaitForAckAsync(cancellationToken);
                 if (!ackReceived)
                 {
-                    _logger.LogError("[TeamsMediaBot] Did not receive ACK from Transcriber");
+                    _logger.LogError("[WebSocket] === ACK NOT RECEIVED ===");
+                    _logger.LogError("[WebSocket] Transcriber did not acknowledge the connection within timeout");
+                    _logger.LogError("[WebSocket] Current WebSocket State: {State}", _webSocket?.State);
                     await CloseAsync();
                     return false;
                 }
@@ -95,12 +126,14 @@ namespace TeamsMediaBot.Services.WebSocket
                 _receiveCts = new CancellationTokenSource();
                 _receiveTask = ReceiveLoopAsync(_receiveCts.Token);
 
-                _logger.LogInformation("[TeamsMediaBot] WebSocket ready, audio streaming enabled");
+                _logger.LogInformation("[WebSocket] === CONNECTION SUCCESS ===");
+                _logger.LogInformation("[WebSocket] WebSocket ready, audio streaming enabled");
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[TeamsMediaBot] Failed to connect to Transcriber WebSocket");
+                _logger.LogError("[WebSocket] === CONNECTION FAILED ===");
+                _logger.LogError(ex, "[WebSocket] Exception during connection: {Message}", ex.Message);
                 _isConnecting = false;
                 OnError?.Invoke(this, ex);
                 return false;
@@ -109,7 +142,11 @@ namespace TeamsMediaBot.Services.WebSocket
 
         private async Task<bool> WaitForAckAsync(CancellationToken cancellationToken)
         {
-            if (_webSocket == null) return false;
+            if (_webSocket == null)
+            {
+                _logger.LogError("[WebSocket] WaitForAckAsync: WebSocket is null");
+                return false;
+            }
 
             var buffer = new byte[1024];
             var timeout = TimeSpan.FromSeconds(10);
@@ -120,10 +157,21 @@ namespace TeamsMediaBot.Services.WebSocket
             {
                 var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), linkedCts.Token);
 
+                _logger.LogInformation("[WebSocket] Received message type: {MessageType}, Count: {Count}",
+                    result.MessageType, result.Count);
+
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    _logger.LogError("[WebSocket] Server closed connection while waiting for ACK");
+                    _logger.LogError("[WebSocket] Close Status: {Status}, Description: {Desc}",
+                        result.CloseStatus, result.CloseStatusDescription);
+                    return false;
+                }
+
                 if (result.MessageType == WebSocketMessageType.Text)
                 {
                     var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    _logger.LogDebug("[TeamsMediaBot] Received message: {Message}", message);
+                    _logger.LogInformation("[WebSocket] Received text message: {Message}", message);
 
                     try
                     {
@@ -131,19 +179,33 @@ namespace TeamsMediaBot.Services.WebSocket
                         if (doc.RootElement.TryGetProperty("type", out var typeElement) &&
                             typeElement.GetString() == "ack")
                         {
-                            _logger.LogInformation("[TeamsMediaBot] Received ACK from Transcriber");
+                            _logger.LogInformation("[WebSocket] ACK received successfully");
                             return true;
                         }
+                        else
+                        {
+                            _logger.LogWarning("[WebSocket] Received non-ACK message type: {Type}",
+                                typeElement.GetString() ?? "unknown");
+                        }
                     }
-                    catch (JsonException)
+                    catch (JsonException jsonEx)
                     {
-                        // Not JSON, ignore
+                        _logger.LogError("[WebSocket] Failed to parse response as JSON: {Error}", jsonEx.Message);
                     }
                 }
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
             {
-                _logger.LogWarning("[TeamsMediaBot] Timeout waiting for ACK");
+                _logger.LogError("[WebSocket] TIMEOUT - No response from Transcriber within 10 seconds");
+            }
+            catch (WebSocketException wsEx)
+            {
+                _logger.LogError("[WebSocket] WebSocket error while waiting for ACK: {Code} - {Message}",
+                    wsEx.WebSocketErrorCode, wsEx.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[WebSocket] Unexpected error while waiting for ACK");
             }
 
             return false;
@@ -227,6 +289,7 @@ namespace TeamsMediaBot.Services.WebSocket
         private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
         {
             var buffer = new byte[4096];
+            _logger.LogInformation("[WebSocket] Receive loop started");
 
             try
             {
@@ -236,7 +299,9 @@ namespace TeamsMediaBot.Services.WebSocket
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
-                        _logger.LogInformation("[TeamsMediaBot] WebSocket closed by server");
+                        _logger.LogWarning("[WebSocket] === SERVER CLOSED CONNECTION ===");
+                        _logger.LogWarning("[WebSocket] Close Status: {Status}", result.CloseStatus);
+                        _logger.LogWarning("[WebSocket] Close Description: {Desc}", result.CloseStatusDescription ?? "none");
                         _isReady = false;
                         OnClosed?.Invoke(this, EventArgs.Empty);
                         break;
@@ -246,23 +311,28 @@ namespace TeamsMediaBot.Services.WebSocket
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
                         var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        _logger.LogDebug("[TeamsMediaBot] Received text message: {Message}", message);
+                        _logger.LogInformation("[WebSocket] Received text message: {Message}", message);
                     }
                 }
+
+                _logger.LogInformation("[WebSocket] Receive loop ended. Cancelled: {Cancelled}, State: {State}",
+                    cancellationToken.IsCancellationRequested, _webSocket?.State);
             }
             catch (OperationCanceledException)
             {
-                // Normal cancellation
+                _logger.LogInformation("[WebSocket] Receive loop cancelled (normal shutdown)");
             }
             catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
             {
-                _logger.LogWarning("[TeamsMediaBot] WebSocket connection closed prematurely");
+                _logger.LogError("[WebSocket] === CONNECTION CLOSED PREMATURELY ===");
+                _logger.LogError("[WebSocket] The Transcriber closed the connection unexpectedly");
                 _isReady = false;
                 OnClosed?.Invoke(this, EventArgs.Empty);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[TeamsMediaBot] Error in WebSocket receive loop");
+                _logger.LogError("[WebSocket] === RECEIVE LOOP ERROR ===");
+                _logger.LogError(ex, "[WebSocket] Error: {Message}", ex.Message);
                 _isReady = false;
                 OnError?.Invoke(this, ex);
             }
@@ -271,6 +341,8 @@ namespace TeamsMediaBot.Services.WebSocket
         /// <inheritdoc/>
         public async Task CloseAsync()
         {
+            _logger.LogInformation("[WebSocket] CloseAsync called. Current state: {State}", _webSocket?.State);
+
             _isReady = false;
             _isConnecting = false;
 
@@ -281,11 +353,13 @@ namespace TeamsMediaBot.Services.WebSocket
             {
                 try
                 {
+                    _logger.LogInformation("[WebSocket] Sending close handshake...");
                     await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    _logger.LogInformation("[WebSocket] Close handshake completed");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "[TeamsMediaBot] Error closing WebSocket");
+                    _logger.LogWarning(ex, "[WebSocket] Error during close handshake: {Message}", ex.Message);
                 }
             }
 
@@ -304,6 +378,7 @@ namespace TeamsMediaBot.Services.WebSocket
 
             _webSocket?.Dispose();
             _webSocket = null;
+            _logger.LogInformation("[WebSocket] WebSocket disposed");
         }
 
         public void Dispose()

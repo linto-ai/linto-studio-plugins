@@ -446,6 +446,7 @@ class BrokerClient extends Component {
   async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {
     logger.debug(`Updating session activity: ${sessionId} --> channel id: ${channelId} streamStatus ${newStreamStatus}`);
     const transaction = await Model.sequelize.transaction();
+    const escapedSessionId = Model.sequelize.escape(sessionId);
 
     try {
       let newTranscriberId = null;

@@ -619,12 +619,14 @@ module.exports = (webserver) => {
             const endSecs   = end_time   ? toSeconds(end_time)   : null;
 
             // Build removal conditions: abs_start >= startSecs AND abs_end <= endSecs
+            // Use parameterized values to prevent SQL injection
             const removalConditions = [];
             if (startSecs !== null) removalConditions.push(`abs_start >= ${Model.sequelize.escape(startSecs)}`);
             if (endSecs   !== null) removalConditions.push(`abs_end   <= ${Model.sequelize.escape(endSecs)}`);
             const whereRemove = removalConditions.length
               ? removalConditions.join(' AND ')
               : 'FALSE';
+            const escapedSessionId = Model.sequelize.escape(sessionId);
 
             try {
                 // First, check if the session exists and is active
@@ -639,7 +641,7 @@ module.exports = (webserver) => {
                       WITH base AS (
                         SELECT ("closedCaptions"->0->>'astart')::timestamptz AS base
                         FROM channels
-                        WHERE "sessionId" = ${Model.sequelize.escape(sessionId)}
+                        WHERE "sessionId" = ${escapedSessionId}
                       ), elems AS (
                         SELECT elem,
                           -- compute absolute start in seconds from base + relative start

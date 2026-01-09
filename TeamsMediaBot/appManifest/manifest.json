@@ -1,0 +1,47 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "32314864-1676-44a1-897f-647dbe0ded8c",
+  "packageName": "com.example.livecaptions",
+  "developer": {
+    "name": "Your Company",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "Live Captions",
+    "full": "Live Captions for Teams Meetings"
+  },
+  "description": {
+    "short": "Real-time transcription captions",
+    "full": "Display real-time transcription captions in a meeting side panel. Powered by automated speech recognition."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#0078D4",
+  "configurableTabs": [
+    {
+      "configurationUrl": "https://echobot-test-linagora.francecentral.cloudapp.azure.com/configure.html",
+      "canUpdateConfiguration": true,
+      "scopes": [
+        "groupchat"
+      ],
+      "context": [
+        "meetingChatTab",
+        "meetingDetailsTab",
+        "meetingSidePanel"
+      ]
+    }
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": [
+    "echobot-test-linagora.francecentral.cloudapp.azure.com"
+  ]
+}

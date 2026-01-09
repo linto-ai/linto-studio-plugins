@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.EventLog;
 IHost host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options =>
     {
-        options.ServiceName = "Echo Bot Service";
+        options.ServiceName = "Teams Media Bot Service";
     })
     .ConfigureServices(services =>
     {

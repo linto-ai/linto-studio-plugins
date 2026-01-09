@@ -83,6 +83,18 @@ namespace TeamsMediaBot.Services.Orchestration
             return bot;
         }
 
+        /// <inheritdoc/>
+        public ManagedBot? GetBotByThreadId(string threadId)
+        {
+            return _activeBots.Values.FirstOrDefault(b => b.ThreadId == threadId);
+        }
+
+        /// <inheritdoc/>
+        public IEnumerable<ManagedBot> GetAllBots()
+        {
+            return _activeBots.Values.ToList();
+        }
+
         private async void HandleStartBot(object? sender, StartBotPayload payload)
         {
             try
@@ -113,29 +125,38 @@ namespace TeamsMediaBot.Services.Orchestration
         {
             var key = $"{payload.Session.Id}_{payload.Channel.Id}";
 
-            _logger.LogInformation("[TeamsMediaBot] Starting bot for session {SessionId}, channel {ChannelId}",
-                payload.Session.Id, payload.Channel.Id);
+            _logger.LogInformation("[Orchestrator] ========================================");
+            _logger.LogInformation("[Orchestrator] === STARTING BOT ===");
+            _logger.LogInformation("[Orchestrator] Session: {SessionId}", payload.Session.Id);
+            _logger.LogInformation("[Orchestrator] Channel: {ChannelId}", payload.Channel.Id);
+            _logger.LogInformation("[Orchestrator] Meeting URL: {Url}", payload.Address);
+            _logger.LogInformation("[Orchestrator] WebSocket URL: {WsUrl}", payload.WebsocketUrl);
+            _logger.LogInformation("[Orchestrator] DisplaySub Enabled: {Enabled}", payload.EnableDisplaySub);
+            _logger.LogInformation("[Orchestrator] ========================================");
 
             // Check if bot already exists
             if (_activeBots.ContainsKey(key))
             {
-                _logger.LogWarning("[TeamsMediaBot] Bot already exists for key {Key}", key);
+                _logger.LogWarning("[Orchestrator] Bot already exists for key {Key}, ignoring startbot command", key);
                 return;
             }
 
             // Create WebSocket connection to Transcriber
+            _logger.LogInformation("[Orchestrator] Step 1: Creating WebSocket client...");
             var webSocket = new TranscriberWebSocket(_loggerFactory.CreateLogger<TranscriberWebSocket>());
 
             // Wire up WebSocket events
             webSocket.OnClosed += async (s, e) =>
             {
-                _logger.LogWarning("[TeamsMediaBot] WebSocket closed for bot {Key}, stopping bot", key);
+                _logger.LogWarning("[Orchestrator] === WEBSOCKET CLOSED EVENT ===");
+                _logger.LogWarning("[Orchestrator] Bot {Key} WebSocket closed, triggering bot stop", key);
                 await StopBotAsync(payload.Session.Id, payload.Channel.Id);
             };
 
             webSocket.OnError += async (s, ex) =>
             {
-                _logger.LogError(ex, "[TeamsMediaBot] WebSocket error for bot {Key}", key);
+                _logger.LogError("[Orchestrator] === WEBSOCKET ERROR EVENT ===");
+                _logger.LogError(ex, "[Orchestrator] Bot {Key} WebSocket error: {Message}", key, ex.Message);
                 await StopBotAsync(payload.Session.Id, payload.Channel.Id);
             };
 
@@ -146,25 +167,32 @@ namespace TeamsMediaBot.Services.Orchestration
             var websocketUrl = payload.WebsocketUrl;
             if (!string.IsNullOrEmpty(_settings.TranscriberHost))
             {
+                var originalUrl = websocketUrl;
                 var uri = new Uri(websocketUrl);
                 var builder = new UriBuilder(uri)
                 {
                     Host = _settings.TranscriberHost
                 };
                 websocketUrl = builder.ToString();
-                _logger.LogInformation("[TeamsMediaBot] Overriding WebSocket host to {Host}", _settings.TranscriberHost);
+                _logger.LogInformation("[Orchestrator] WebSocket host override: {Original} -> {New}",
+                    originalUrl, websocketUrl);
             }
 
             // Connect to Transcriber WebSocket
+            _logger.LogInformation("[Orchestrator] Step 2: Connecting to Transcriber WebSocket...");
             var connected = await webSocket.ConnectAsync(websocketUrl);
             if (!connected)
             {
-                _logger.LogError("[TeamsMediaBot] Failed to connect to Transcriber WebSocket for bot {Key}", key);
+                _logger.LogError("[Orchestrator] === WEBSOCKET CONNECTION FAILED ===");
+                _logger.LogError("[Orchestrator] Could not connect to Transcriber at {Url}", websocketUrl);
+                _logger.LogError("[Orchestrator] Bot startup aborted for {Key}", key);
                 managedBot.Dispose();
                 return;
             }
+            _logger.LogInformation("[Orchestrator] Step 2 completed: WebSocket connected successfully");
 
             // Join Teams meeting
+            _logger.LogInformation("[Orchestrator] Step 3: Joining Teams meeting...");
             try
             {
                 var joinCallBody = new JoinCallBody
@@ -172,27 +200,59 @@ namespace TeamsMediaBot.Services.Orchestration
                     JoinUrl = payload.Address,
                     DisplayName = _settings.BotDisplayName
                 };
+                _logger.LogInformation("[Orchestrator] Calling BotService.JoinCallAsync with display name: {Name}",
+                    _settings.BotDisplayName);
 
                 var call = await _botService.JoinCallAsync(joinCallBody);
                 var threadId = call.Resource.ChatInfo.ThreadId;
                 managedBot.ThreadId = threadId;
 
-                _logger.LogInformation("[TeamsMediaBot] Joined Teams meeting, threadId: {ThreadId}", threadId);
+                _logger.LogInformation("[Orchestrator] Step 3 completed: Joined Teams meeting");
+                _logger.LogInformation("[Orchestrator] ThreadId: {ThreadId}", threadId);
+                _logger.LogInformation("[Orchestrator] Call ID: {CallId}", call.Id);
+
+                // Publish session mapping to MQTT for other services (LiveCaptionsServer)
+                _logger.LogInformation("[Orchestrator] Step 4: Publishing session mapping to MQTT...");
+                try
+                {
+                    await _mqttService.PublishSessionMappingAsync(
+                        payload.Session.Id,
+                        payload.Channel.Id,
+                        threadId,
+                        payload.Address,
+                        payload.EnableDisplaySub);
+                    _logger.LogInformation("[Orchestrator] Step 4 completed: Session mapping published");
+                }
+                catch (Exception mappingEx)
+                {
+                    _logger.LogWarning(mappingEx, "[Orchestrator] Failed to publish session mapping (non-fatal)");
+                }
 
                 // Wait for CallHandler to be created
+                _logger.LogInformation("[Orchestrator] Step 5: Waiting for CallHandler (max 10s)...");
                 await WaitForCallHandlerAsync(threadId);
 
                 // Get the CallHandler
                 if (_botService.CallHandlers.TryGetValue(threadId, out var callHandler))
                 {
                     managedBot.CallHandler = callHandler;
+                    _logger.LogInformation("[Orchestrator] Step 5 completed: CallHandler obtained");
 
                     // Wire audio handler
+                    _logger.LogInformation("[Orchestrator] Step 6: Wiring audio handler...");
                     managedBot.WireAudioHandler();
+                    _logger.LogInformation("[Orchestrator] Step 6 completed: Audio handler wired");
                 }
                 else
                 {
-                    _logger.LogError("[TeamsMediaBot] CallHandler not found for threadId {ThreadId}", threadId);
+                    _logger.LogError("[Orchestrator] === CALLHANDLER NOT FOUND ===");
+                    _logger.LogError("[Orchestrator] ThreadId {ThreadId} has no associated CallHandler", threadId);
+                    _logger.LogError("[Orchestrator] Available CallHandlers: {Count}", _botService.CallHandlers.Count);
+                    foreach (var kvp in _botService.CallHandlers)
+                    {
+                        _logger.LogError("[Orchestrator]   - {Key}", kvp.Key);
+                    }
+                    _logger.LogError("[Orchestrator] Bot startup aborted, cleaning up...");
                     await webSocket.CloseAsync();
                     managedBot.Dispose();
                     return;
@@ -200,16 +260,23 @@ namespace TeamsMediaBot.Services.Orchestration
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[TeamsMediaBot] Failed to join Teams meeting");
+                _logger.LogError("[Orchestrator] === TEAMS JOIN FAILED ===");
+                _logger.LogError(ex, "[Orchestrator] Exception: {Message}", ex.Message);
+                if (ex.InnerException != null)
+                {
+                    _logger.LogError("[Orchestrator] Inner Exception: {Inner}", ex.InnerException.Message);
+                }
+                _logger.LogError("[Orchestrator] Bot startup aborted, cleaning up...");
                 await webSocket.CloseAsync();
                 managedBot.Dispose();
                 return;
             }
 
             // Add to active bots
+            _logger.LogInformation("[Orchestrator] Step 7: Adding bot to active bots dictionary...");
             if (!_activeBots.TryAdd(key, managedBot))
             {
-                _logger.LogWarning("[TeamsMediaBot] Failed to add bot to active bots dictionary");
+                _logger.LogWarning("[Orchestrator] Failed to add bot to dictionary (race condition?)");
                 managedBot.Dispose();
                 return;
             }
@@ -217,39 +284,65 @@ namespace TeamsMediaBot.Services.Orchestration
             // Publish meeting-joined event to TeamsAppService
             await _mqttService.PublishMeetingJoinedAsync(payload.Session.Id, payload.Channel.Id, managedBot.ThreadId!, payload.Channel.Translations);
 
+            // Subscribe to transcription topics
+            _logger.LogInformation("[Orchestrator] Step 8: Subscribing to transcription topics...");
+            await _mqttService.SubscribeToTranscriptionsAsync(payload.Session.Id, payload.Channel.Id);
+
             // Update status
             await _mqttService.PublishStatusAsync(_activeBots.Count);
 
-            _logger.LogInformation("[TeamsMediaBot] Bot started successfully for key {Key}", key);
+            _logger.LogInformation("[Orchestrator] ========================================");
+            _logger.LogInformation("[Orchestrator] === BOT STARTED SUCCESSFULLY ===");
+            _logger.LogInformation("[Orchestrator] Key: {Key}", key);
+            _logger.LogInformation("[Orchestrator] Active bots: {Count}", _activeBots.Count);
+            _logger.LogInformation("[Orchestrator] ========================================");
         }
 
         private async Task WaitForCallHandlerAsync(string threadId, int maxWaitMs = 10000)
         {
             var startTime = DateTime.UtcNow;
+            var checkCount = 0;
+
             while ((DateTime.UtcNow - startTime).TotalMilliseconds < maxWaitMs)
             {
+                checkCount++;
                 if (_botService.CallHandlers.ContainsKey(threadId))
                 {
+                    var elapsed = (DateTime.UtcNow - startTime).TotalMilliseconds;
+                    _logger.LogInformation("[Orchestrator] CallHandler found after {Elapsed}ms ({Checks} checks)",
+                        elapsed, checkCount);
                     return;
                 }
                 await Task.Delay(100);
             }
 
-            _logger.LogWarning("[TeamsMediaBot] Timeout waiting for CallHandler for threadId {ThreadId}", threadId);
+            var totalElapsed = (DateTime.UtcNow - startTime).TotalMilliseconds;
+            _logger.LogWarning("[Orchestrator] === CALLHANDLER TIMEOUT ===");
+            _logger.LogWarning("[Orchestrator] Waited {Elapsed}ms ({Checks} checks) for threadId {ThreadId}",
+                totalElapsed, checkCount, threadId);
         }
 
         private async Task StopBotAsync(string sessionId, string channelId)
         {
             var key = $"{sessionId}_{channelId}";
 
-            _logger.LogInformation("[TeamsMediaBot] Stopping bot for session {SessionId}, channel {ChannelId}",
-                sessionId, channelId);
+            _logger.LogInformation("[Orchestrator] ========================================");
+            _logger.LogInformation("[Orchestrator] === STOPPING BOT ===");
+            _logger.LogInformation("[Orchestrator] Session: {SessionId}", sessionId);
+            _logger.LogInformation("[Orchestrator] Channel: {ChannelId}", channelId);
+            _logger.LogInformation("[Orchestrator] Key: {Key}", key);
+            _logger.LogInformation("[Orchestrator] ========================================");
 
             if (!_activeBots.TryRemove(key, out var managedBot))
             {
-                _logger.LogWarning("[TeamsMediaBot] Bot not found for key {Key}", key);
+                _logger.LogWarning("[Orchestrator] Bot not found in active bots for key {Key}", key);
+                _logger.LogWarning("[Orchestrator] Active bot keys: [{Keys}]",
+                    string.Join(", ", _activeBots.Keys));
                 return;
             }
+
+            _logger.LogInformation("[Orchestrator] Bot removed from active bots. ThreadId: {ThreadId}",
+                managedBot.ThreadId ?? "null");
 
             // Publish meeting-left event to TeamsAppService before cleanup
             if (!string.IsNullOrEmpty(managedBot.ThreadId))
@@ -264,36 +357,74 @@ namespace TeamsMediaBot.Services.Orchestration
                 }
             }
 
-            // Close WebSocket
+            // Publish session unmapping to MQTT to clear the retained mapping
+            _logger.LogInformation("[Orchestrator] Step 1: Publishing session unmapping...");
             try
             {
-                await managedBot.WebSocket.CloseAsync();
+                await _mqttService.PublishSessionUnmappingAsync(sessionId);
+                _logger.LogInformation("[Orchestrator] Session unmapping published");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[TeamsMediaBot] Error closing WebSocket");
+                _logger.LogWarning(ex, "[Orchestrator] Failed to publish session unmapping: {Message}", ex.Message);
+            }
+
+            // Unsubscribe from transcription topics
+            _logger.LogInformation("[Orchestrator] Step 2: Unsubscribing from transcription topics...");
+            try
+            {
+                await _mqttService.UnsubscribeFromTranscriptionsAsync(sessionId, channelId);
+                _logger.LogInformation("[Orchestrator] Unsubscribed from transcription topics");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Orchestrator] Failed to unsubscribe: {Message}", ex.Message);
+            }
+
+            // Close WebSocket
+            _logger.LogInformation("[Orchestrator] Step 3: Closing WebSocket...");
+            try
+            {
+                await managedBot.WebSocket.CloseAsync();
+                _logger.LogInformation("[Orchestrator] WebSocket closed");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Orchestrator] Failed to close WebSocket: {Message}", ex.Message);
             }
 
             // Leave Teams meeting
             if (!string.IsNullOrEmpty(managedBot.ThreadId))
             {
+                _logger.LogInformation("[Orchestrator] Step 4: Ending Teams call for threadId {ThreadId}...",
+                    managedBot.ThreadId);
                 try
                 {
                     await _botService.EndCallByThreadIdAsync(managedBot.ThreadId);
+                    _logger.LogInformation("[Orchestrator] Teams call ended");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "[TeamsMediaBot] Error ending Teams call");
+                    _logger.LogWarning(ex, "[Orchestrator] Failed to end Teams call: {Message}", ex.Message);
                 }
+            }
+            else
+            {
+                _logger.LogInformation("[Orchestrator] Step 4: No ThreadId, skipping Teams call cleanup");
             }
 
             // Dispose managed bot
+            _logger.LogInformation("[Orchestrator] Step 5: Disposing managed bot...");
             managedBot.Dispose();
 
             // Update status
             await _mqttService.PublishStatusAsync(_activeBots.Count);
 
-            _logger.LogInformation("[TeamsMediaBot] Bot stopped successfully for key {Key}", key);
+            _logger.LogInformation("[Orchestrator] ========================================");
+            _logger.LogInformation("[Orchestrator] === BOT STOPPED ===");
+            _logger.LogInformation("[Orchestrator] Key: {Key}", key);
+            _logger.LogInformation("[Orchestrator] Remaining active bots: {Count}", _activeBots.Count);
+            _logger.LogInformation("[Orchestrator] ========================================");
         }
 
         public void Dispose()

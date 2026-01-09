@@ -4,19 +4,75 @@ Bot Microsoft Teams pour capturer l'audio des réunions et le streamer vers un s
 
 ## Table des matières
 
-1. [Prérequis](#prérequis)
-2. [Configuration Azure](#configuration-azure)
+1. [Architecture](#architecture)
+2. [Prérequis](#prérequis)
+3. [Configuration Azure](#configuration-azure)
    - [App Registration (Entra ID)](#1-app-registration-entra-id)
    - [Azure Bot](#2-azure-bot)
-3. [Configuration du Serveur Windows](#configuration-du-serveur-windows)
+4. [Configuration du Serveur Windows](#configuration-du-serveur-windows)
    - [VM Azure](#vm-azure)
    - [Certificat SSL](#certificat-ssl)
    - [Pare-feu et NSG](#pare-feu-et-nsg)
-4. [Configuration de l'Application](#configuration-de-lapplication)
-5. [Lancer le Bot](#lancer-le-bot)
-6. [Utilisation de l'API](#utilisation-de-lapi)
-7. [Intégration MQTT avec le Scheduler](#intégration-mqtt-avec-le-scheduler)
-8. [Dépannage](#dépannage)
+5. [Configuration de l'Application](#configuration-de-lapplication)
+6. [Lancer les Services](#lancer-les-services)
+7. [Utilisation de l'API](#utilisation-de-lapi)
+8. [Intégration MQTT avec le Scheduler](#intégration-mqtt-avec-le-scheduler)
+9. [Live Captions (Side Panel)](#live-captions-side-panel)
+10. [Dépannage](#dépannage)
+
+---
+
+## Architecture
+
+Le projet est composé de **deux services indépendants** qui fonctionnent ensemble :
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Azure VM Windows                               │
+│                                                                             │
+│   ┌─────────────────────────────┐       ┌─────────────────────────────┐    │
+│   │       TeamsMediaBot         │       │     LiveCaptionsServer      │    │
+│   │      (ports 9441/9442)      │       │        (port 443)           │    │
+│   │                             │       │                             │    │
+│   │  • Rejoint les meetings     │       │  • Sert l'app React         │    │
+│   │  • Capture l'audio Teams    │       │  • Hub SignalR /hubs/captions│   │
+│   │  • Stream vers Transcriber  │       │  • Reçoit transcriptions    │    │
+│   │  • Reçoit commandes MQTT    │       │    via MQTT                 │    │
+│   └──────────────┬──────────────┘       └──────────────┬──────────────┘    │
+│                  │                                     │                    │
+│                  └──────────────┬──────────────────────┘                    │
+│                                 ▼                                           │
+│                    ┌─────────────────────────┐                              │
+│                    │      MQTT Broker        │                              │
+│                    │  (Transcriptions, Cmds) │                              │
+│                    └─────────────────────────┘                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────┐
+                    │       Transcriber       │
+                    │   (Audio → Texte ASR)   │
+                    └─────────────────────────┘
+```
+
+### Pourquoi deux services ?
+
+| Service | Port | Rôle |
+|---------|------|------|
+| **TeamsMediaBot** | 9441, 9442 | Bot Microsoft Teams (SDK Media Platform). Rejoint les réunions, capture l'audio, communique avec le Transcriber. Ne peut PAS écouter sur le port 443 car le SDK Teams a des contraintes spécifiques. |
+| **LiveCaptionsServer** | 443 | Serveur HTTPS standard pour l'application Teams (side panel). Sert les fichiers statiques React et le hub SignalR pour les captions en temps réel. |
+
+**Raison technique** : Le SDK Microsoft Teams Media Platform ne fonctionne pas correctement quand le bot écoute sur le port 443. Séparer les responsabilités permet au bot de fonctionner sur ses ports dédiés (9441/9442) tandis que l'app Teams Live Captions est servie sur le port 443 standard.
+
+### Flux de données
+
+1. **Scheduler** envoie commande `startbot` via MQTT
+2. **TeamsMediaBot** rejoint la réunion Teams et capture l'audio
+3. **TeamsMediaBot** stream l'audio vers le **Transcriber** (WebSocket)
+4. **Transcriber** publie les transcriptions sur MQTT (`transcriber/out/{session}/{channel}/...`)
+5. **LiveCaptionsServer** reçoit les transcriptions via MQTT
+6. **LiveCaptionsServer** broadcast aux clients via SignalR
+7. **App Teams (side panel)** affiche les captions en temps réel
 
 ---
 
@@ -338,49 +394,92 @@ AppSettings__MediaInternalPort=8445
 
 ---
 
-## Lancer le Bot
+## Lancer les Services
 
-### Mode développement
+Le projet nécessite de lancer **deux services** pour avoir toutes les fonctionnalités :
+
+### Démarrage rapide (scripts PowerShell)
 
 ```powershell
-cd TeamsMediaBot/src/TeamsMediaBot
-dotnet run
+# Terminal 1 : Démarrer le bot Teams
+.\start-bot2.ps1
+
+# Terminal 2 : Démarrer le serveur Live Captions
+.\start-captions-server.ps1
 ```
 
-### Mode production (Service Windows)
+### Démarrage manuel
+
+#### 1. TeamsMediaBot (ports 9441/9442)
 
 ```powershell
-# Compiler en Release
-dotnet publish -c Release -o C:\TeamsMediaBot
+cd src/TeamsMediaBot
+dotnet run --configuration Release
+```
 
-# Installer comme service Windows
-sc.exe create TeamsMediaBot binPath="C:\TeamsMediaBot\TeamsMediaBot.exe" start=auto
+#### 2. LiveCaptionsServer (port 443)
+
+```powershell
+cd src/LiveCaptionsServer
+dotnet run --configuration Release
+```
+
+### Mode production (Services Windows)
+
+```powershell
+# Compiler les deux projets
+dotnet publish src/TeamsMediaBot -c Release -o C:\Services\TeamsMediaBot
+dotnet publish src/LiveCaptionsServer -c Release -o C:\Services\LiveCaptionsServer
+
+# Installer TeamsMediaBot comme service
+sc.exe create TeamsMediaBot binPath="C:\Services\TeamsMediaBot\TeamsMediaBot.exe" start=auto
 sc.exe description TeamsMediaBot "Microsoft Teams Media Bot for audio streaming"
 
-# Démarrer le service
+# Installer LiveCaptionsServer comme service
+sc.exe create LiveCaptionsServer binPath="C:\Services\LiveCaptionsServer\LiveCaptionsServer.exe" start=auto
+sc.exe description LiveCaptionsServer "Live Captions SignalR server for Teams"
+
+# Démarrer les services
 sc.exe start TeamsMediaBot
+sc.exe start LiveCaptionsServer
 ```
 
-### Vérifier que le bot fonctionne
+### Vérifier que les services fonctionnent
 
 ```powershell
 # Vérifier les ports en écoute
-netstat -an | findstr "LISTENING" | findstr "9441 9442 8445"
+netstat -an | findstr "LISTENING" | findstr "443 9441 9442 8445"
 
 # Devrait afficher :
-# TCP    0.0.0.0:8445    0.0.0.0:0    LISTENING
-# TCP    0.0.0.0:9441    0.0.0.0:0    LISTENING
-# TCP    0.0.0.0:9442    0.0.0.0:0    LISTENING
+# TCP    0.0.0.0:443     0.0.0.0:0    LISTENING  (LiveCaptionsServer)
+# TCP    0.0.0.0:8445    0.0.0.0:0    LISTENING  (TeamsMediaBot - Media)
+# TCP    0.0.0.0:9441    0.0.0.0:0    LISTENING  (TeamsMediaBot - Notifications)
+# TCP    0.0.0.0:9442    0.0.0.0:0    LISTENING  (TeamsMediaBot - Calling)
 ```
 
 ```bash
-# Tester l'endpoint HTTPS (depuis l'extérieur)
-curl -v https://bot.example.com:9441/health
-# Devrait retourner : 200 OK
+# Tester TeamsMediaBot
+curl -k https://bot.example.com:9441/health
 
-curl -v https://bot.example.com:9441/api/calling
-# Devrait retourner : 405 Method Not Allowed (normal, c'est un POST)
+# Tester LiveCaptionsServer
+curl -k https://bot.example.com:443/health
+# Devrait retourner : {"status":"healthy",...}
+
+# Tester les fichiers statiques
+curl -k https://bot.example.com:443/configure.html
+# Devrait retourner le HTML de la page de configuration
 ```
+
+### URLs disponibles
+
+| URL | Service | Description |
+|-----|---------|-------------|
+| `https://domain:9441/health` | TeamsMediaBot | Health check du bot |
+| `https://domain:9441/calls` | TeamsMediaBot | API pour rejoindre/quitter les meetings |
+| `https://domain:443/health` | LiveCaptionsServer | Health check du serveur captions |
+| `https://domain:443/configure.html` | LiveCaptionsServer | Page de configuration Teams tab |
+| `https://domain:443/index.html` | LiveCaptionsServer | App React Live Captions |
+| `wss://domain:443/hubs/captions` | LiveCaptionsServer | Hub SignalR temps réel |
 
 ---
 
@@ -681,6 +780,136 @@ Envoyé par le Scheduler sur `botservice/in/stopbot` :
 # [TeamsMediaBot] Connected to MQTT broker
 # [TeamsMediaBot] MQTT Service fully initialized
 ```
+
+---
+
+## Live Captions (Side Panel)
+
+Le projet supporte l'affichage des transcriptions en temps réel dans un panneau latéral Teams via le **LiveCaptionsServer**.
+
+### Fonctionnalités
+
+- Affichage temps réel des transcriptions (partielles et finales)
+- Support des thèmes Teams (clair, sombre, contraste)
+- Identification des speakers
+- Affichage des traductions
+- Auto-scroll
+
+### Architecture Live Captions
+
+```
+Teams Side Panel (React)
+         │
+         │ SignalR (wss://domain:443/hubs/captions)
+         ▼
+┌─────────────────────┐
+│  LiveCaptionsServer │ ◄── Port 443 (HTTPS)
+│  • Static files     │
+│  • SignalR Hub      │
+│  • MQTT subscriber  │
+└─────────────────────┘
+         │
+         │ MQTT (transcriber/out/#)
+         ▼
+┌─────────────────────┐
+│    MQTT Broker      │
+└─────────────────────┘
+         ▲
+         │ MQTT (transcriptions)
+┌─────────────────────┐
+│    Transcriber      │
+└─────────────────────┘
+```
+
+### Installation
+
+#### 1. Builder le client React
+
+```powershell
+cd src/TeamsMediaBot/client-app
+npm install
+npm run build
+# Les fichiers sont générés dans ../wwwroot/
+```
+
+#### 2. Copier wwwroot vers LiveCaptionsServer
+
+```powershell
+Copy-Item -Path src/TeamsMediaBot/wwwroot -Destination src/LiveCaptionsServer/wwwroot -Recurse -Force
+```
+
+#### 3. Configurer LiveCaptionsServer
+
+Éditer `src/LiveCaptionsServer/appsettings.Production.json` :
+
+```json
+{
+  "CaptionsServer": {
+    "Port": 443,
+    "CertificateThumbprint": "VOTRE_THUMBPRINT_ICI",
+    "BrokerHost": "adresse.mqtt.broker",
+    "BrokerPort": 1883,
+    "BrokerUsername": "",
+    "BrokerPassword": "",
+    "BrokerUseTls": false,
+    "TranscriptionTopicPattern": "transcriber/out/#"
+  }
+}
+```
+
+#### 4. Ajouter le binding SSL pour le port 443
+
+```powershell
+# Ajouter le certificat SSL au port 443
+netsh http add sslcert ipport=0.0.0.0:443 certhash=VOTRE_THUMBPRINT_ICI appid='{B8E7C8F1-5A3D-4E2B-9F1A-6C8D9E0F1A2B}'
+
+# Ajouter la règle firewall
+New-NetFirewallRule -DisplayName "LiveCaptionsServer HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow
+```
+
+#### 5. Configurer le manifest Teams
+
+```powershell
+cd appManifest
+# Éditer manifest.json : remplacer les placeholders
+# - {{APP_ID}} : GUID unique de l'app
+# - {{BOT_DOMAIN}} : votre domaine (ex: bot.example.com)
+```
+
+#### 6. Packager et installer l'app Teams
+
+```powershell
+# Créer le package
+Compress-Archive -Path manifest.json, color.png, outline.png -DestinationPath LiveCaptions.zip -Force
+
+# Uploader dans Teams Admin Center ou en mode développeur
+```
+
+#### 7. Démarrer les services
+
+```powershell
+# Terminal 1 : Bot Teams
+.\start-bot2.ps1
+
+# Terminal 2 : Serveur Live Captions
+.\start-captions-server.ps1
+```
+
+### Utilisation dans Teams
+
+1. Ouvrir une réunion Teams
+2. Cliquer sur **Apps** > **Live Captions**
+3. Configurer avec le `sessionId` et `channelId` de la session
+4. Les captions apparaissent en temps réel
+
+### Documentation complète
+
+Voir [docs/LIVE_CAPTIONS.md](docs/LIVE_CAPTIONS.md) pour :
+- Guide d'installation détaillé
+- Configuration du manifest
+- API SignalR
+- Développement et debug
+- Dépannage
 
 ---
 

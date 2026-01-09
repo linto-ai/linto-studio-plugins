@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet run)",
+      "Bash(Test-NetConnection -ComputerName bevilacqua.dynamic-dns.net -Port 1883)",
+      "Bash(powershell -Command \"Test-NetConnection -ComputerName bevilacqua.dynamic-dns.net -Port 1883\")",
+      "Bash(powershell -Command:*)"
+    ]
+  }
+}

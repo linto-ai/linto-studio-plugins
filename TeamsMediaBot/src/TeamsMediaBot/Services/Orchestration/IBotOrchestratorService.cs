@@ -24,5 +24,15 @@ namespace TeamsMediaBot.Services.Orchestration
         /// Gets a managed bot by session and channel ID.
         /// </summary>
         ManagedBot? GetBot(string sessionId, string channelId);
+
+        /// <summary>
+        /// Gets a managed bot by Teams thread ID.
+        /// </summary>
+        ManagedBot? GetBotByThreadId(string threadId);
+
+        /// <summary>
+        /// Gets all active bots.
+        /// </summary>
+        IEnumerable<ManagedBot> GetAllBots();
     }
 }

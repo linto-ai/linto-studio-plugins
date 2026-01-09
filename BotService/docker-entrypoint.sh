@@ -104,7 +104,7 @@ function setup_user() {
 
 setup_user
 
-echo "RUNNING : $1"
+echo "RUNNING : $@"
 cd /usr/src/app/botservice
 
-eval "gosu $USER_NAME $1"
+exec gosu $USER_NAME "$@"

@@ -126,7 +126,7 @@ class WebhookServer extends Component {
       }
     });
     for (const ev of events) {
-      this.client.publish('transcriber/in/startbot', { eventId: ev.eventId, subject: ev.subject }, 1, false, true);
+      this.client.publish('scheduler/in/schedule/startbot', { eventId: ev.eventId, subject: ev.subject }, 1, false, true);
       ev.processed = true;
       await ev.save();
     }

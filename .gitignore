@@ -25,3 +25,4 @@ profiles.json
 letsencrypt
 bin/
 obj/
+.claude/

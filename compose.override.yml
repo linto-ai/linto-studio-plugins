@@ -1,4 +1,8 @@
 services:
+  broker:
+    ports:
+      - "1883:1883"
+
   transcriber:
     healthcheck:
       disable: true
@@ -32,6 +36,8 @@ services:
   msteams-scheduler:
     healthcheck:
       disable: true
+    environment:
+      - DEVELOPMENT=true
     volumes:
       - ./Microsoft-Teams-Scheduler:/usr/src/app/msteams-scheduler
       - /usr/src/app/msteams-scheduler/node_modules

@@ -32,13 +32,15 @@ class WebSocketClient {
       }
 
       try {
-        // Use Socket.IO client
+        // Use Socket.IO client with explicit timeout configuration
         this.socket = io(this.serverUrl, {
           path: '/socket.io',
           transports: ['websocket', 'polling'],
           reconnection: true,
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000
+          reconnectionAttempts: 10,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          timeout: 45000  // Match server connectTimeout
         })
 
         this.socket.on('connect', () => {

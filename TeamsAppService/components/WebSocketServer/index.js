@@ -42,7 +42,11 @@ class WebSocketServer extends Component {
         cors: {
           origin: '*',
           methods: ['GET', 'POST']
-        }
+        },
+        // Explicit timeout configuration to prevent premature disconnections
+        pingInterval: 25000,  // Send ping every 25 seconds
+        pingTimeout: 60000,   // Wait 60 seconds for pong before disconnecting
+        connectTimeout: 45000 // Allow 45 seconds for initial connection
       })
 
       this._setupEventHandlers()

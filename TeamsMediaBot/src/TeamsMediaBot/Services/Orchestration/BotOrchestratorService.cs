@@ -4,7 +4,6 @@ using TeamsMediaBot.Bot;
 using TeamsMediaBot.Models;
 using TeamsMediaBot.Models.Mqtt;
 using TeamsMediaBot.Services.Mqtt;
-using TeamsMediaBot.Services.Transcription;
 using TeamsMediaBot.Services.WebSocket;
 
 namespace TeamsMediaBot.Services.Orchestration
@@ -18,7 +17,6 @@ namespace TeamsMediaBot.Services.Orchestration
         private readonly ILoggerFactory _loggerFactory;
         private readonly IMqttService _mqttService;
         private readonly IBotService _botService;
-        private readonly ITranscriptionHandler _transcriptionHandler;
         private readonly AppSettings _settings;
         private readonly ConcurrentDictionary<string, ManagedBot> _activeBots;
         private bool _disposed;
@@ -31,14 +29,12 @@ namespace TeamsMediaBot.Services.Orchestration
             ILoggerFactory loggerFactory,
             IMqttService mqttService,
             IBotService botService,
-            ITranscriptionHandler transcriptionHandler,
             IOptions<AppSettings> settings)
         {
             _logger = logger;
             _loggerFactory = loggerFactory;
             _mqttService = mqttService;
             _botService = botService;
-            _transcriptionHandler = transcriptionHandler;
             _settings = settings.Value;
             _activeBots = new ConcurrentDictionary<string, ManagedBot>();
         }
@@ -51,7 +47,6 @@ namespace TeamsMediaBot.Services.Orchestration
             // Subscribe to MQTT events
             _mqttService.OnStartBot += HandleStartBot;
             _mqttService.OnStopBot += HandleStopBot;
-            _mqttService.OnTranscription += HandleTranscription;
 
             // Connect to MQTT
             await _mqttService.ConnectAsync(cancellationToken);
@@ -73,7 +68,6 @@ namespace TeamsMediaBot.Services.Orchestration
             // Unsubscribe from MQTT events
             _mqttService.OnStartBot -= HandleStartBot;
             _mqttService.OnStopBot -= HandleStopBot;
-            _mqttService.OnTranscription -= HandleTranscription;
 
             // Disconnect from MQTT
             await _mqttService.DisconnectAsync();
@@ -112,15 +106,6 @@ namespace TeamsMediaBot.Services.Orchestration
             {
                 _logger.LogError(ex, "[TeamsMediaBot] Error handling stopbot command for session {SessionId}",
                     payload.SessionId);
-            }
-        }
-
-        private void HandleTranscription(object? sender, (string sessionId, string channelId, TranscriptionMessage message, bool isFinal) args)
-        {
-            var key = $"{args.sessionId}_{args.channelId}";
-            if (_activeBots.TryGetValue(key, out var bot) && bot.EnableDisplaySub)
-            {
-                _transcriptionHandler.HandleTranscription(bot, args.message, args.isFinal);
             }
         }
 
@@ -229,8 +214,8 @@ namespace TeamsMediaBot.Services.Orchestration
                 return;
             }
 
-            // Subscribe to transcription topics
-            await _mqttService.SubscribeToTranscriptionsAsync(payload.Session.Id, payload.Channel.Id);
+            // Publish meeting-joined event to TeamsAppService
+            await _mqttService.PublishMeetingJoinedAsync(payload.Session.Id, payload.Channel.Id, managedBot.ThreadId!);
 
             // Update status
             await _mqttService.PublishStatusAsync(_activeBots.Count);
@@ -266,14 +251,17 @@ namespace TeamsMediaBot.Services.Orchestration
                 return;
             }
 
-            // Unsubscribe from transcription topics
-            try
+            // Publish meeting-left event to TeamsAppService before cleanup
+            if (!string.IsNullOrEmpty(managedBot.ThreadId))
             {
-                await _mqttService.UnsubscribeFromTranscriptionsAsync(sessionId, channelId);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[TeamsMediaBot] Error unsubscribing from transcription topics");
+                try
+                {
+                    await _mqttService.PublishMeetingLeftAsync(sessionId, channelId, managedBot.ThreadId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[TeamsMediaBot] Error publishing meeting-left event");
+                }
             }
 
             // Close WebSocket

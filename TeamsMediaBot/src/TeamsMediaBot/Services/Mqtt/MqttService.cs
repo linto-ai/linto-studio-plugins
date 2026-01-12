@@ -216,7 +216,7 @@ namespace TeamsMediaBot.Services.Mqtt
         }
 
         /// <inheritdoc/>
-        public async Task PublishMeetingJoinedAsync(string sessionId, string channelId, string threadId)
+        public async Task PublishMeetingJoinedAsync(string sessionId, string channelId, string threadId, List<string>? translations = null)
         {
             if (!_mqttClient.IsConnected)
             {
@@ -229,7 +229,8 @@ namespace TeamsMediaBot.Services.Mqtt
                 SessionId = sessionId,
                 ChannelId = channelId,
                 ThreadId = threadId,
-                JoinedAt = DateTime.UtcNow.ToString("o")
+                JoinedAt = DateTime.UtcNow.ToString("o"),
+                Translations = translations
             };
 
             var jsonPayload = JsonSerializer.Serialize(payload);

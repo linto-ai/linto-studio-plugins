@@ -267,7 +267,7 @@ html, body {
 }
 
 .transcription-text {
-  font-size: var(--font-size-md);
+  font-size: inherit;
   color: var(--text-primary);
   word-wrap: break-word;
 }

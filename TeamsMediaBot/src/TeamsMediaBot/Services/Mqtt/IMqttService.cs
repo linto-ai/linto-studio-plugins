@@ -47,7 +47,8 @@ namespace TeamsMediaBot.Services.Mqtt
         /// <param name="sessionId">The session ID.</param>
         /// <param name="channelId">The channel ID.</param>
         /// <param name="threadId">The Teams thread ID.</param>
-        Task PublishMeetingJoinedAsync(string sessionId, string channelId, string threadId);
+        /// <param name="translations">Optional list of translation language codes (BCP47).</param>
+        Task PublishMeetingJoinedAsync(string sessionId, string channelId, string threadId, List<string>? translations = null);
 
         /// <summary>
         /// Publishes a meeting-left event to notify TeamsAppService.

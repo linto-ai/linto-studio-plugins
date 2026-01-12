@@ -3,6 +3,31 @@
  * Main entry point for the Teams side panel transcription app.
  */
 (async function () {
+  // Constants
+  const FETCH_TIMEOUT_MS = 10000 // 10 seconds timeout for HTTP requests
+
+  /**
+   * Fetch with timeout support.
+   * @param {string} url - The URL to fetch
+   * @param {Object} options - Fetch options
+   * @param {number} timeout - Timeout in milliseconds
+   * @returns {Promise<Response>}
+   */
+  async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT_MS) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      })
+      return response
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
   // DOM Elements
   const statusDot = document.getElementById('status-dot')
   const statusText = document.getElementById('status-text')
@@ -84,7 +109,7 @@
     updateStatus('connecting', 'Looking up meeting...')
 
     try {
-      const response = await fetch(`/v1/meetings/${encodeURIComponent(threadId)}`)
+      const response = await fetchWithTimeout(`/v1/meetings/${encodeURIComponent(threadId)}`)
 
       if (response.status === 404) {
         transcriptionManager.showError('No active transcription for this meeting. Please ensure the transcription bot has joined.')
@@ -111,8 +136,13 @@
 
     } catch (err) {
       console.error('[TeamsApp] Meeting lookup error:', err)
-      transcriptionManager.showError('Failed to lookup meeting: ' + err.message)
-      updateStatus('disconnected', 'Error')
+      if (err.name === 'AbortError') {
+        transcriptionManager.showError('Meeting lookup timed out. Please try again.')
+        updateStatus('disconnected', 'Timeout')
+      } else {
+        transcriptionManager.showError('Failed to lookup meeting: ' + err.message)
+        updateStatus('disconnected', 'Error')
+      }
     }
   }
 
@@ -237,7 +267,15 @@
     const currentIndex = fontSizes.indexOf(currentFontSize)
     const newIndex = Math.max(0, Math.min(fontSizes.length - 1, currentIndex + delta))
     currentFontSize = fontSizes[newIndex]
-    transcriptionManager.setFontSize(currentFontSize)
+    console.log('[TeamsApp] Font size changed to:', currentFontSize)
+
+    if (transcriptionManager) {
+      transcriptionManager.setFontSize(currentFontSize)
+    }
+
+    // Also apply directly to container as fallback
+    const sizeMap = { sm: '12px', md: '14px', lg: '18px' }
+    transcriptionContainer.style.fontSize = sizeMap[currentFontSize] || '14px'
   }
 
   // Event listeners

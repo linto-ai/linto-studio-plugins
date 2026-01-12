@@ -31,6 +31,11 @@ class TeamsSdkWrapper {
       microsoftTeams.app.notifyAppLoaded()
       console.log('[TeamsSdk] App loaded notification sent')
 
+      // Notify Teams that the app has successfully loaded (REQUIRED within 30 seconds)
+      // Without this call, Teams will display "Sorry... We couldn't reach this app" error
+      microsoftTeams.app.notifySuccess()
+      console.log('[TeamsSdk] App success notification sent')
+
       // Register theme change handler
       microsoftTeams.app.registerOnThemeChangeHandler((theme) => {
         this.theme = theme

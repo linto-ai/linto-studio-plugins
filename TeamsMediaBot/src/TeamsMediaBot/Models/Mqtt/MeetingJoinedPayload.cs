@@ -31,5 +31,11 @@ namespace TeamsMediaBot.Models.Mqtt
         /// </summary>
         [JsonPropertyName("joinedAt")]
         public string JoinedAt { get; set; } = null!;
+
+        /// <summary>
+        /// List of translation language codes (BCP47) configured for this channel.
+        /// </summary>
+        [JsonPropertyName("translations")]
+        public List<string>? Translations { get; set; }
     }
 }

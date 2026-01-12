@@ -215,7 +215,7 @@ namespace TeamsMediaBot.Services.Orchestration
             }
 
             // Publish meeting-joined event to TeamsAppService
-            await _mqttService.PublishMeetingJoinedAsync(payload.Session.Id, payload.Channel.Id, managedBot.ThreadId!);
+            await _mqttService.PublishMeetingJoinedAsync(payload.Session.Id, payload.Channel.Id, managedBot.ThreadId!, payload.Channel.Translations);
 
             // Update status
             await _mqttService.PublishStatusAsync(_activeBots.Count);

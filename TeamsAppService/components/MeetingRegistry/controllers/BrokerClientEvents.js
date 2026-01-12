@@ -6,14 +6,14 @@ const { logger } = require('live-srt-lib')
 module.exports = function () {
   // Handle meeting-joined event from TeamsMediaBot
   this.app.components['BrokerClient']?.on('meeting-joined', (payload) => {
-    const { sessionId, channelId, threadId, joinedAt } = payload
+    const { sessionId, channelId, threadId, joinedAt, translations } = payload
 
     if (!threadId || !sessionId || !channelId) {
       logger.warn('[TeamsAppService] Invalid meeting-joined payload:', payload)
       return
     }
 
-    this.registerMeeting(threadId, sessionId, channelId, { joinedAt })
+    this.registerMeeting(threadId, sessionId, channelId, { joinedAt, translations })
   })
 
   // Handle meeting-left event from TeamsMediaBot

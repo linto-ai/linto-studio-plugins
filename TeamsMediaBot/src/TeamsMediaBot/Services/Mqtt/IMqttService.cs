@@ -26,11 +26,6 @@ namespace TeamsMediaBot.Services.Mqtt
         event EventHandler<Models.Mqtt.StopBotPayload> OnStopBot;
 
         /// <summary>
-        /// Event raised when a transcription message is received.
-        /// </summary>
-        event EventHandler<(string sessionId, string channelId, Models.Mqtt.TranscriptionMessage message, bool isFinal)> OnTranscription;
-
-        /// <summary>
         /// Connects to the MQTT broker.
         /// </summary>
         Task ConnectAsync(CancellationToken cancellationToken = default);
@@ -47,17 +42,19 @@ namespace TeamsMediaBot.Services.Mqtt
         Task PublishStatusAsync(int activeBots);
 
         /// <summary>
-        /// Subscribes to transcription topics for a specific session/channel.
+        /// Publishes a meeting-joined event to notify TeamsAppService.
         /// </summary>
         /// <param name="sessionId">The session ID.</param>
         /// <param name="channelId">The channel ID.</param>
-        Task SubscribeToTranscriptionsAsync(string sessionId, string channelId);
+        /// <param name="threadId">The Teams thread ID.</param>
+        Task PublishMeetingJoinedAsync(string sessionId, string channelId, string threadId);
 
         /// <summary>
-        /// Unsubscribes from transcription topics for a specific session/channel.
+        /// Publishes a meeting-left event to notify TeamsAppService.
         /// </summary>
         /// <param name="sessionId">The session ID.</param>
         /// <param name="channelId">The channel ID.</param>
-        Task UnsubscribeFromTranscriptionsAsync(string sessionId, string channelId);
+        /// <param name="threadId">The Teams thread ID.</param>
+        Task PublishMeetingLeftAsync(string sessionId, string channelId, string threadId);
     }
 }

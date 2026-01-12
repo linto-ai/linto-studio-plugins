@@ -1,4 +1,4 @@
-﻿// ***********************************************************************
+// ***********************************************************************
 // Assembly         : TeamsMediaBot
 // Author           : bcage29
 // Created          : 10-27-2023
@@ -15,7 +15,6 @@ using DotNetEnv.Configuration;
 using TeamsMediaBot.Bot;
 using TeamsMediaBot.Services.Mqtt;
 using TeamsMediaBot.Services.Orchestration;
-using TeamsMediaBot.Services.Transcription;
 using TeamsMediaBot.Util;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -86,7 +85,6 @@ namespace TeamsMediaBot
 
             // MQTT and Orchestrator services
             builder.Services.AddSingleton<IMqttService, MqttService>();
-            builder.Services.AddSingleton<ITranscriptionHandler, TranscriptionHandler>();
             builder.Services.AddSingleton<IBotOrchestratorService, BotOrchestratorService>();
 
             // Bot Settings Setup

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Transcription</title>
+
+  <!-- Microsoft Teams SDK -->
+  <script src="https://res.cdn.office.net/teams-js/2.21.0/js/MicrosoftTeams.min.js"></script>
+
+  <!-- Socket.IO Client -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+  <!-- App Styles -->
+  <link rel="stylesheet" href="/css/teams-app.css">
+</head>
+<body>
+  <div class="teams-app">
+    <!-- Header -->
+    <header class="app-header">
+      <h1 class="app-title">Live Transcription</h1>
+      <div class="controls">
+        <!-- Status indicator -->
+        <div class="status-indicator">
+          <span id="status-dot" class="status-dot connecting"></span>
+          <span id="status-text">Connecting...</span>
+        </div>
+
+        <!-- Language selector -->
+        <div class="select-wrapper">
+          <select id="language-select" class="select" title="Select language">
+            <option value="">Original</option>
+          </select>
+        </div>
+
+        <!-- Font size controls -->
+        <div class="font-size-controls">
+          <button id="font-size-decrease" class="btn btn-icon btn-secondary" title="Decrease font size">A-</button>
+          <button id="font-size-increase" class="btn btn-icon btn-secondary" title="Increase font size">A+</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Transcription container -->
+    <div id="transcription-container" class="transcription-container">
+      <div class="loading">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Scripts -->
+  <script src="/js/teams-sdk.js"></script>
+  <script src="/js/websocket-client.js"></script>
+  <script src="/js/transcription-manager.js"></script>
+  <script src="/js/teams-app-tab.js"></script>
+</body>
+</html>

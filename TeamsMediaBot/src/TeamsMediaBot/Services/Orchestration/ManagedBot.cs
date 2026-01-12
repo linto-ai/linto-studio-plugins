@@ -49,11 +49,6 @@ namespace TeamsMediaBot.Services.Orchestration
         public CallHandler? CallHandler { get; set; }
 
         /// <summary>
-        /// Gets whether subtitle display is enabled.
-        /// </summary>
-        public bool EnableDisplaySub { get; }
-
-        /// <summary>
         /// Gets the creation time of this managed bot.
         /// </summary>
         public DateTime CreatedAt { get; }
@@ -77,7 +72,6 @@ namespace TeamsMediaBot.Services.Orchestration
             ChannelId = payload.Channel.Id;
             Payload = payload;
             WebSocket = webSocket;
-            EnableDisplaySub = payload.EnableDisplaySub;
             CreatedAt = DateTime.UtcNow;
         }
 

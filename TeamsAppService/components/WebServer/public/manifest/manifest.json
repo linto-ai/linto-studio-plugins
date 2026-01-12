@@ -1,0 +1,52 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "{{APP_ID}}",
+  "packageName": "com.emeeting.livetranscription",
+  "developer": {
+    "name": "E-Meeting",
+    "websiteUrl": "{{BASE_URL}}",
+    "privacyUrl": "{{BASE_URL}}/privacy",
+    "termsOfUseUrl": "{{BASE_URL}}/terms"
+  },
+  "name": {
+    "short": "Live Transcription",
+    "full": "E-Meeting Live Transcription"
+  },
+  "description": {
+    "short": "Real-time meeting transcription",
+    "full": "Display real-time transcriptions from your meeting in the side panel. Supports multiple languages and automatic speaker identification."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#5B5FC7",
+  "configurableTabs": [
+    {
+      "configurationUrl": "{{BASE_URL}}/teams-app-configure.html",
+      "canUpdateConfiguration": true,
+      "scopes": ["team", "groupchat"],
+      "context": ["meetingSidePanel", "meetingChatTab"]
+    }
+  ],
+  "staticTabs": [
+    {
+      "entityId": "live-transcription",
+      "name": "Live Transcription",
+      "contentUrl": "{{BASE_URL}}/teams-app-tab.html",
+      "scopes": ["personal"],
+      "context": ["meetingSidePanel"]
+    }
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": [
+    "{{DOMAIN}}"
+  ],
+  "showLoadingIndicator": true,
+  "isFullScreen": false
+}

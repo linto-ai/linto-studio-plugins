@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configure Live Transcription</title>
+
+  <!-- Microsoft Teams SDK -->
+  <script src="https://res.cdn.office.net/teams-js/2.21.0/js/MicrosoftTeams.min.js"></script>
+
+  <!-- App Styles -->
+  <link rel="stylesheet" href="/css/teams-app.css">
+</head>
+<body>
+  <div class="teams-app">
+    <div class="config-container">
+      <h1 class="config-title">Live Transcription</h1>
+      <p class="config-description">
+        Display real-time transcriptions from your meeting in the side panel.
+        The transcription will start automatically when a transcription bot joins your meeting.
+      </p>
+      <p id="config-status" class="config-success">Ready to add to your meeting</p>
+    </div>
+  </div>
+
+  <!-- App Scripts -->
+  <script src="/js/teams-sdk.js"></script>
+  <script src="/js/teams-app-configure.js"></script>
+</body>
+</html>

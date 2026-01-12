@@ -9,7 +9,7 @@ using TeamsMediaBot.Models.Mqtt;
 namespace TeamsMediaBot.Services.Mqtt
 {
     /// <summary>
-    /// MQTT service for communication with the Scheduler and Transcriber.
+    /// MQTT service for communication with the Scheduler and TeamsAppService.
     /// </summary>
     public class MqttService : IMqttService, IDisposable
     {
@@ -33,9 +33,6 @@ namespace TeamsMediaBot.Services.Mqtt
 
         /// <inheritdoc/>
         public event EventHandler<StopBotPayload>? OnStopBot;
-
-        /// <inheritdoc/>
-        public event EventHandler<(string sessionId, string channelId, TranscriptionMessage message, bool isFinal)>? OnTranscription;
 
         public MqttService(ILogger<MqttService> logger, IOptions<AppSettings> settings)
         {
@@ -219,37 +216,76 @@ namespace TeamsMediaBot.Services.Mqtt
         }
 
         /// <inheritdoc/>
-        public async Task SubscribeToTranscriptionsAsync(string sessionId, string channelId)
+        public async Task PublishMeetingJoinedAsync(string sessionId, string channelId, string threadId)
         {
-            var partialTopic = $"transcriber/out/{sessionId}/{channelId}/partial";
-            var finalTopic = $"transcriber/out/{sessionId}/{channelId}/final";
+            if (!_mqttClient.IsConnected)
+            {
+                _logger.LogWarning("[TeamsMediaBot] Cannot publish meeting-joined: not connected to MQTT broker");
+                return;
+            }
 
-            _logger.LogInformation("[TeamsMediaBot] Subscribing to transcription topics for session {SessionId}, channel {ChannelId}",
-                sessionId, channelId);
+            var payload = new MeetingJoinedPayload
+            {
+                SessionId = sessionId,
+                ChannelId = channelId,
+                ThreadId = threadId,
+                JoinedAt = DateTime.UtcNow.ToString("o")
+            };
 
-            var subscribeOptions = new MqttClientSubscribeOptionsBuilder()
-                .WithTopicFilter(partialTopic, MqttQualityOfServiceLevel.AtMostOnce)
-                .WithTopicFilter(finalTopic, MqttQualityOfServiceLevel.AtMostOnce)
+            var jsonPayload = JsonSerializer.Serialize(payload);
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic("teamsappservice/in/meeting-joined")
+                .WithPayload(jsonPayload)
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(false)
                 .Build();
 
-            await _mqttClient.SubscribeAsync(subscribeOptions);
+            try
+            {
+                await _mqttClient.PublishAsync(message);
+                _logger.LogInformation("[TeamsMediaBot] Published meeting-joined for session {SessionId}, channel {ChannelId}, threadId {ThreadId}",
+                    sessionId, channelId, threadId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[TeamsMediaBot] Failed to publish meeting-joined");
+            }
         }
 
         /// <inheritdoc/>
-        public async Task UnsubscribeFromTranscriptionsAsync(string sessionId, string channelId)
+        public async Task PublishMeetingLeftAsync(string sessionId, string channelId, string threadId)
         {
-            var partialTopic = $"transcriber/out/{sessionId}/{channelId}/partial";
-            var finalTopic = $"transcriber/out/{sessionId}/{channelId}/final";
+            if (!_mqttClient.IsConnected)
+            {
+                _logger.LogWarning("[TeamsMediaBot] Cannot publish meeting-left: not connected to MQTT broker");
+                return;
+            }
 
-            _logger.LogInformation("[TeamsMediaBot] Unsubscribing from transcription topics for session {SessionId}, channel {ChannelId}",
-                sessionId, channelId);
+            var payload = new MeetingLeftPayload
+            {
+                SessionId = sessionId,
+                ChannelId = channelId,
+                ThreadId = threadId
+            };
 
-            var unsubscribeOptions = new MqttClientUnsubscribeOptionsBuilder()
-                .WithTopicFilter(partialTopic)
-                .WithTopicFilter(finalTopic)
+            var jsonPayload = JsonSerializer.Serialize(payload);
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic("teamsappservice/in/meeting-left")
+                .WithPayload(jsonPayload)
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(false)
                 .Build();
 
-            await _mqttClient.UnsubscribeAsync(unsubscribeOptions);
+            try
+            {
+                await _mqttClient.PublishAsync(message);
+                _logger.LogInformation("[TeamsMediaBot] Published meeting-left for session {SessionId}, channel {ChannelId}, threadId {ThreadId}",
+                    sessionId, channelId, threadId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[TeamsMediaBot] Failed to publish meeting-left");
+            }
         }
 
         private async Task SubscribeToCommandsAsync()
@@ -301,26 +337,6 @@ namespace TeamsMediaBot.Services.Mqtt
                         _logger.LogInformation("[TeamsMediaBot] Received stopbot command for session {SessionId}, channel {ChannelId}",
                             stopBotPayload.SessionId, stopBotPayload.ChannelId);
                         OnStopBot?.Invoke(this, stopBotPayload);
-                    }
-                }
-                // Handle transcription messages
-                else if (topic.StartsWith("transcriber/out/"))
-                {
-                    var parts = topic.Split('/');
-                    if (parts.Length >= 5)
-                    {
-                        var sessionId = parts[2];
-                        var channelId = parts[3];
-                        var type = parts[4];
-                        var isFinal = type == "final";
-
-                        var transcription = JsonSerializer.Deserialize<TranscriptionMessage>(payload);
-                        if (transcription != null)
-                        {
-                            _logger.LogDebug("[TeamsMediaBot] Received {Type} transcription for session {SessionId}: {Text}",
-                                type, sessionId, transcription.Text);
-                            OnTranscription?.Invoke(this, (sessionId, channelId, transcription, isFinal));
-                        }
                     }
                 }
             }

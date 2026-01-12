@@ -12,11 +12,22 @@ class WebhookServer extends Component {
     super(app);
     this.id = this.constructor.name;
 
-    const credential = new ClientSecretCredential(
-      process.env.MSTEAMS_SCHEDULER_AZURE_TENANT_ID,
-      process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_ID,
-      process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET
-    );
+    // Azure credentials are required for this service
+    const tenantId = process.env.MSTEAMS_SCHEDULER_AZURE_TENANT_ID;
+    const clientId = process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_ID;
+    const clientSecret = process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET;
+
+    if (!tenantId || !clientId || !clientSecret) {
+      const missing = [];
+      if (!tenantId) missing.push('MSTEAMS_SCHEDULER_AZURE_TENANT_ID');
+      if (!clientId) missing.push('MSTEAMS_SCHEDULER_AZURE_CLIENT_ID');
+      if (!clientSecret) missing.push('MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET');
+      logger.error(`MS Teams Scheduler requires Azure credentials. Missing: ${missing.join(', ')}`);
+      logger.error('Please configure these environment variables to use the MS Teams Scheduler service.');
+      process.exit(1);
+    }
+
+    const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
     const authProvider = new TokenCredentialAuthenticationProvider(credential, {
       scopes: ['https://graph.microsoft.com/.default']
     });

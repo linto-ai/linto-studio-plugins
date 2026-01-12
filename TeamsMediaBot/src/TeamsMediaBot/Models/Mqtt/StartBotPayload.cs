@@ -55,23 +55,11 @@ namespace TeamsMediaBot.Models.Mqtt
         public string BotType { get; set; } = null!;
 
         /// <summary>
-        /// Whether to display subtitles in the meeting.
-        /// </summary>
-        [JsonPropertyName("enableDisplaySub")]
-        public bool EnableDisplaySub { get; set; }
-
-        /// <summary>
         /// The WebSocket URL to connect to for audio streaming.
         /// Format: ws://transcriber:8890/transcriber-ws/{sessionId},{channelIndex}
         /// </summary>
         [JsonPropertyName("websocketUrl")]
         public string WebsocketUrl { get; set; } = null!;
-
-        /// <summary>
-        /// The source language for subtitles.
-        /// </summary>
-        [JsonPropertyName("subSource")]
-        public string? SubSource { get; set; }
     }
 
     /// <summary>

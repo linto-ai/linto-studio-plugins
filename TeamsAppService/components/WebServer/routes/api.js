@@ -1,5 +1,6 @@
 const express = require('express')
 const { logger } = require('live-srt-lib')
+const { normalizeThreadId } = require('../../../utils/threadId')
 
 /**
  * API routes for TeamsAppService.
@@ -10,10 +11,14 @@ module.exports = function (app) {
   /**
    * GET /v1/meetings/:threadId
    * Lookup meeting info by Teams thread ID.
+   * Accepts both Base64-encoded (from Teams SDK) and raw (Graph API) formats.
    */
   router.get('/meetings/:threadId', (req, res) => {
-    const { threadId } = req.params
+    const rawThreadId = req.params.threadId
+    const threadId = normalizeThreadId(rawThreadId)
     const meetingRegistry = app.components['MeetingRegistry']
+
+    logger.debug(`[TeamsAppService] Looking up meeting: raw=${rawThreadId}, normalized=${threadId}`)
 
     if (!meetingRegistry) {
       return res.status(503).json({

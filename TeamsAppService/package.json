@@ -1,0 +1,20 @@
+{
+  "name": "teamsappservice",
+  "version": "1.0.0",
+  "description": "Teams App Service for displaying real-time transcriptions in Teams side panel",
+  "main": "teamsappservice.js",
+  "scripts": {
+    "start": "node teamsappservice.js",
+    "start-live": "npx -y nodemon teamsappservice.js",
+    "dev": "nodemon teamsappservice.js"
+  },
+  "dependencies": {
+    "live-srt-lib": "file:../lib",
+    "archiver": "^6.0.1",
+    "express": "^4.21.2",
+    "socket.io": "^4.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

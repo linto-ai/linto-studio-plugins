@@ -433,22 +433,36 @@ namespace TeamsMediaBot.Services.Mqtt
 
             if (_disposed) return;
 
-            // Attempt to reconnect with random delay (2-5 seconds)
-            var delay = Random.Shared.Next(2000, 5000);
-            _logger.LogInformation("[TeamsMediaBot] Attempting to reconnect in {Delay}ms", delay);
+            // Reconnection loop with exponential backoff
+            var baseDelay = 2000;  // Start at 2 seconds
+            var maxDelay = 60000;  // Max 60 seconds between attempts
+            var attempt = 0;
 
-            await Task.Delay(delay);
-
-            try
+            while (!_disposed && !_mqttClient.IsConnected)
             {
-                if (!_disposed && !_mqttClient.IsConnected)
+                attempt++;
+
+                // Calculate delay with exponential backoff + jitter
+                var exponentialDelay = Math.Min(baseDelay * (int)Math.Pow(2, attempt - 1), maxDelay);
+                var jitter = Random.Shared.Next(0, 1000);
+                var delay = exponentialDelay + jitter;
+
+                _logger.LogInformation("[TeamsMediaBot] Reconnection attempt {Attempt} in {Delay}ms", attempt, delay);
+
+                await Task.Delay(delay);
+
+                if (_disposed) return;
+
+                try
                 {
                     await ConnectAsync();
+                    _logger.LogInformation("[TeamsMediaBot] Successfully reconnected after {Attempt} attempt(s)", attempt);
+                    return;
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[TeamsMediaBot] Reconnection attempt failed");
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[TeamsMediaBot] Reconnection attempt {Attempt} failed", attempt);
+                }
             }
         }
 

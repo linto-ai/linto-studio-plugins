@@ -173,8 +173,15 @@ namespace TeamsMediaBot.Bot
                 var callHandler = this.GetHandlerOrThrow(threadId);
                 callId = callHandler.Call.Id;
                 _logger.LogInformation("[BotService] Found CallHandler, Call ID: {CallId}", callId);
-                _logger.LogInformation("[BotService] Sending DeleteAsync request...");
 
+                // Supprimer immédiatement du dictionnaire pour éviter les race conditions
+                // lors d'un rejoin rapide sur le même meeting
+                if (this.CallHandlers.TryRemove(threadId, out _))
+                {
+                    _logger.LogInformation("[BotService] CallHandler removed immediately for threadId {ThreadId}", threadId);
+                }
+
+                _logger.LogInformation("[BotService] Sending DeleteAsync request...");
                 await callHandler.Call.DeleteAsync().ConfigureAwait(false);
                 _logger.LogInformation("[BotService] Call deleted successfully");
             }

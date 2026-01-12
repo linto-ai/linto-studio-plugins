@@ -46,8 +46,7 @@ namespace TeamsMediaBot.Controllers
             {
                 SessionId = bot.SessionId,
                 ChannelId = bot.ChannelId,
-                ThreadId = bot.ThreadId,
-                EnableDisplaySub = bot.EnableDisplaySub
+                ThreadId = bot.ThreadId
             });
         }
 
@@ -62,8 +61,7 @@ namespace TeamsMediaBot.Controllers
                 {
                     SessionId = bot.SessionId,
                     ChannelId = bot.ChannelId,
-                    ThreadId = bot.ThreadId,
-                    EnableDisplaySub = bot.EnableDisplaySub
+                    ThreadId = bot.ThreadId
                 });
 
             return Ok(sessions);
@@ -78,6 +76,5 @@ namespace TeamsMediaBot.Controllers
         public string SessionId { get; set; } = string.Empty;
         public string ChannelId { get; set; } = string.Empty;
         public string? ThreadId { get; set; }
-        public bool EnableDisplaySub { get; set; }
     }
 }

@@ -131,7 +131,6 @@ namespace TeamsMediaBot.Services.Orchestration
             _logger.LogInformation("[Orchestrator] Channel: {ChannelId}", payload.Channel.Id);
             _logger.LogInformation("[Orchestrator] Meeting URL: {Url}", payload.Address);
             _logger.LogInformation("[Orchestrator] WebSocket URL: {WsUrl}", payload.WebsocketUrl);
-            _logger.LogInformation("[Orchestrator] DisplaySub Enabled: {Enabled}", payload.EnableDisplaySub);
             _logger.LogInformation("[Orchestrator] ========================================");
 
             // Check if bot already exists
@@ -220,7 +219,7 @@ namespace TeamsMediaBot.Services.Orchestration
                         payload.Channel.Id,
                         threadId,
                         payload.Address,
-                        payload.EnableDisplaySub);
+                        enableDisplaySub: false);
                     _logger.LogInformation("[Orchestrator] Step 4 completed: Session mapping published");
                 }
                 catch (Exception mappingEx)
@@ -283,10 +282,6 @@ namespace TeamsMediaBot.Services.Orchestration
 
             // Publish meeting-joined event to TeamsAppService
             await _mqttService.PublishMeetingJoinedAsync(payload.Session.Id, payload.Channel.Id, managedBot.ThreadId!, payload.Channel.Translations);
-
-            // Subscribe to transcription topics
-            _logger.LogInformation("[Orchestrator] Step 8: Subscribing to transcription topics...");
-            await _mqttService.SubscribeToTranscriptionsAsync(payload.Session.Id, payload.Channel.Id);
 
             // Update status
             await _mqttService.PublishStatusAsync(_activeBots.Count);
@@ -369,20 +364,8 @@ namespace TeamsMediaBot.Services.Orchestration
                 _logger.LogWarning(ex, "[Orchestrator] Failed to publish session unmapping: {Message}", ex.Message);
             }
 
-            // Unsubscribe from transcription topics
-            _logger.LogInformation("[Orchestrator] Step 2: Unsubscribing from transcription topics...");
-            try
-            {
-                await _mqttService.UnsubscribeFromTranscriptionsAsync(sessionId, channelId);
-                _logger.LogInformation("[Orchestrator] Unsubscribed from transcription topics");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[Orchestrator] Failed to unsubscribe: {Message}", ex.Message);
-            }
-
             // Close WebSocket
-            _logger.LogInformation("[Orchestrator] Step 3: Closing WebSocket...");
+            _logger.LogInformation("[Orchestrator] Step 2: Closing WebSocket...");
             try
             {
                 await managedBot.WebSocket.CloseAsync();
@@ -396,7 +379,7 @@ namespace TeamsMediaBot.Services.Orchestration
             // Leave Teams meeting
             if (!string.IsNullOrEmpty(managedBot.ThreadId))
             {
-                _logger.LogInformation("[Orchestrator] Step 4: Ending Teams call for threadId {ThreadId}...",
+                _logger.LogInformation("[Orchestrator] Step 3: Ending Teams call for threadId {ThreadId}...",
                     managedBot.ThreadId);
                 try
                 {
@@ -410,11 +393,11 @@ namespace TeamsMediaBot.Services.Orchestration
             }
             else
             {
-                _logger.LogInformation("[Orchestrator] Step 4: No ThreadId, skipping Teams call cleanup");
+                _logger.LogInformation("[Orchestrator] Step 3: No ThreadId, skipping Teams call cleanup");
             }
 
             // Dispose managed bot
-            _logger.LogInformation("[Orchestrator] Step 5: Disposing managed bot...");
+            _logger.LogInformation("[Orchestrator] Step 4: Disposing managed bot...");
             managedBot.Dispose();
 
             // Update status

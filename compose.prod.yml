@@ -48,3 +48,12 @@ services:
 
   msteams-scheduler:
     restart: always
+
+  teamsappservice:
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.teamsappservice.rule=Host(`${TEAMSAPPSERVICE_DOMAIN}`)"
+      - "traefik.http.routers.teamsappservice.entrypoints=websecure"
+      - "traefik.http.routers.teamsappservice.tls.certresolver=letsencrypt"
+      - "traefik.http.services.teamsappservice.loadbalancer.server.port=${TEAMSAPPSERVICE_HTTP_PORT}"

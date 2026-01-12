@@ -122,6 +122,27 @@ services:
     networks:
       - internal
 
+  teamsappservice:
+    build:
+      context: .
+      dockerfile: TeamsAppService/Dockerfile
+    env_file:
+      - .envdefault.docker
+    environment:
+      - DEBUG=teamsappservice:*
+      - TEAMSAPPSERVICE_HTTPS_PORT=443
+      - TEAMSAPPSERVICE_CERTS_DIR=/usr/src/app/teamsappservice/certs
+      - SESSION_API_HOST=http://sessionapi:${SESSION_API_WEBSERVER_HTTP_PORT}
+    expose:
+      - "443"
+    depends_on:
+      broker:
+        condition: service_started
+      sessionapi:
+        condition: service_started
+    networks:
+      - internal
+
 
 networks:
   internal:

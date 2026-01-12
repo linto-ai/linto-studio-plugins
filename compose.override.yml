@@ -42,3 +42,19 @@ services:
       - ./Microsoft-Teams-Scheduler:/usr/src/app/msteams-scheduler
       - /usr/src/app/msteams-scheduler/node_modules
     command: ["npm run start-live"]
+
+  teamsappservice:
+    healthcheck:
+      disable: true
+    environment:
+      - DEVELOPMENT=true
+      - TEAMSAPPSERVICE_HTTPS_PORT=443
+      - TEAMSAPPSERVICE_CERTS_DIR=/certs
+    volumes:
+      - ./TeamsAppService:/usr/src/app/teamsappservice
+      - /usr/src/app/teamsappservice/node_modules
+      - ./certs/teamsappservice:/certs:ro
+    # Expose port 443 for local HTTPS testing (comment out when not needed)
+    ports:
+      - "443:443"
+    command: ["npm run start-live"]

@@ -15,7 +15,6 @@ using DotNetEnv.Configuration;
 using TeamsMediaBot.Bot;
 using TeamsMediaBot.Services.Mqtt;
 using TeamsMediaBot.Services.Orchestration;
-using TeamsMediaBot.Services.SignalR;
 using TeamsMediaBot.Util;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -108,9 +107,6 @@ namespace TeamsMediaBot
             builder.Services.AddSingleton<IMqttService, MqttService>();
             builder.Services.AddSingleton<IBotOrchestratorService, BotOrchestratorService>();
 
-            // SignalR caption broadcaster (listens to MQTT and broadcasts to SignalR)
-            builder.Services.AddHostedService<CaptionsBroadcaster>();
-
             // Bot Settings Setup
             var botInternalHostingProtocol = "https";
             if (appSettings.UseLocalDevSettings)
@@ -191,9 +187,6 @@ namespace TeamsMediaBot
             _app.UseStaticFiles();
 
             _app.MapControllers();
-
-            // Map SignalR hub for real-time captions
-            _app.MapHub<CaptionsHub>("/hubs/captions");
 
             await _app.RunAsync();
         }

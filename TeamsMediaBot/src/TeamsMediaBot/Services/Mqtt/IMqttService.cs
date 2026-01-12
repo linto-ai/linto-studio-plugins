@@ -59,20 +59,6 @@ namespace TeamsMediaBot.Services.Mqtt
         Task PublishMeetingLeftAsync(string sessionId, string channelId, string threadId);
 
         /// <summary>
-        /// Subscribes to transcription topics for a session/channel.
-        /// </summary>
-        /// <param name="sessionId">The session ID.</param>
-        /// <param name="channelId">The channel ID.</param>
-        Task SubscribeToTranscriptionsAsync(string sessionId, string channelId);
-
-        /// <summary>
-        /// Unsubscribes from transcription topics for a session/channel.
-        /// </summary>
-        /// <param name="sessionId">The session ID.</param>
-        /// <param name="channelId">The channel ID.</param>
-        Task UnsubscribeFromTranscriptionsAsync(string sessionId, string channelId);
-
-        /// <summary>
         /// Publishes a session mapping to MQTT for other services to discover
         /// the threadId to sessionId/channelId relationship.
         /// </summary>

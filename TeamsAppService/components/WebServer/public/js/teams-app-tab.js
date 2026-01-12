@@ -132,6 +132,9 @@
         updateLanguageOptions(meeting.translations)
       }
 
+      // Load transcription history before connecting to live feed
+      await loadTranscriptionHistory(threadId)
+
       await connectToTranscriptions()
 
     } catch (err) {
@@ -143,6 +146,38 @@
         transcriptionManager.showError('Failed to lookup meeting: ' + err.message)
         updateStatus('disconnected', 'Error')
       }
+    }
+  }
+
+  /**
+   * Load transcription history from the server.
+   * @param {string} threadId
+   */
+  async function loadTranscriptionHistory(threadId) {
+    try {
+      console.log('[TeamsApp] Loading transcription history...')
+      const response = await fetchWithTimeout(`/v1/meetings/${encodeURIComponent(threadId)}/history`)
+
+      if (!response.ok) {
+        console.warn('[TeamsApp] Failed to load history:', response.status)
+        transcriptionManager.clear()
+        return
+      }
+
+      const data = await response.json()
+      const transcriptions = data.transcriptions || []
+
+      console.log(`[TeamsApp] Loaded ${transcriptions.length} historical transcriptions`)
+
+      if (transcriptions.length > 0) {
+        transcriptionManager.loadHistory(transcriptions)
+      } else {
+        transcriptionManager.clear()
+      }
+    } catch (err) {
+      console.warn('[TeamsApp] Error loading history:', err.message)
+      transcriptionManager.clear()
+      // Non-blocking - continue without history
     }
   }
 
@@ -159,7 +194,7 @@
         console.log('[TeamsApp] WebSocket connected')
         updateStatus('connected', 'Connected')
         wsClient.joinRoom(sessionId, channelId)
-        transcriptionManager.clear()
+        // Don't clear - we want to keep the history loaded before connection
       })
 
       wsClient.on('disconnect', (reason) => {

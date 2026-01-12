@@ -89,9 +89,12 @@ class TranscriptionManager {
   _getText(data) {
     // If a translation language is selected and available
     if (this.selectedLanguage && data.translations) {
-      const translation = data.translations.find(t => t.language === this.selectedLanguage)
-      if (translation) {
-        return translation.text
+      // Translations come as an object with short language codes: { "fr": "texte", "es": "texto" }
+      // But selectedLanguage may be BCP47 format (e.g., "fr-FR"), so extract short code
+      const shortCode = this.selectedLanguage.split('-')[0]
+      const translatedText = data.translations[shortCode]
+      if (translatedText) {
+        return translatedText
       }
     }
 
@@ -137,6 +140,46 @@ class TranscriptionManager {
     this.currentPartial = null
     this.container.innerHTML = ''
     this._showEmptyState()
+  }
+
+  /**
+   * Load history from an array of transcription data.
+   * @param {Array} history - Array of transcription objects from closedCaptions
+   */
+  loadHistory(history) {
+    if (!history || history.length === 0) {
+      return
+    }
+
+    // Clear current state but don't show empty state
+    this.transcriptions = []
+    this.currentPartial = null
+    this.container.innerHTML = ''
+
+    // Add each historical transcription as final
+    history.forEach(data => {
+      const entry = {
+        id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        type: 'final',
+        speakerId: data.locutor || 'Speaker',
+        text: this._getText(data),
+        timestamp: data.astart ? new Date(data.astart) : new Date(),
+        data: data
+      }
+
+      this.transcriptions.push(entry)
+      this._renderEntry(entry)
+    })
+
+    // Limit entries
+    while (this.transcriptions.length > this.maxEntries) {
+      const removed = this.transcriptions.shift()
+      this._removeEntry(removed.id)
+    }
+
+    if (this.autoScroll) {
+      this._scrollToBottom()
+    }
   }
 
   /**

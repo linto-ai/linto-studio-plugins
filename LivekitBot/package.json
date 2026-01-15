@@ -1,0 +1,19 @@
+{
+  "name": "live-transcription-livekitbot",
+  "version": "1.0.0",
+  "description": "LiveKit bot for eMeeting transcription",
+  "main": "livekitbot.js",
+  "scripts": {
+    "start": "node livekitbot.js",
+    "start-live": "npx -y nodemon livekitbot.js"
+  },
+  "author": "Linagora",
+  "license": "EUPL",
+  "dependencies": {
+    "live-srt-lib": "file:../lib",
+    "@livekit/rtc-node": "^0.12.0",
+    "livekit-server-sdk": "^2.9.0",
+    "uuid": "^9.0.0",
+    "ws": "^8.18.0"
+  }
+}

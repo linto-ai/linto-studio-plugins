@@ -178,9 +178,10 @@ module.exports = (webserver) => {
                 if (validationResult) {
                     return res.status(validationResult.status).send(validationResult.error);
                 }
-                const config = await Model.TranscriberProfile.create(
-                        extendTranscriberProfile(cryptTranscriberProfileKey(req.body))
-                    );
+                const config = await Model.TranscriberProfile.create({
+                        ...extendTranscriberProfile(cryptTranscriberProfileKey(req.body)),
+                        meta: req.body.meta || null
+                    });
                 res.json(obfuscateTranscriberProfileKey(config));
             } catch (err) {
                 logger.error(`Error creating transcriber profile: ${err.message}`);

@@ -6,11 +6,12 @@ function handleSchedulerMessage(scheduler) {
     logger.info(`${this.uniqueId} scheduler online, registering...`);
     this.client.publishStatus();
     this.app.components['StreamingServer'].startServers();
+    this.serversStarted = true;
     this.state = this.constructor.states.READY;
   } else if (!scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
     logger.warn(`${this.uniqueId} scheduler offline, transcriptions may be lost...`);
   } else if (scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
-    logger.warn(`${this.uniqueId} scheduler back online.`);
+    logger.info(`${this.uniqueId} scheduler back online.`);
   }
 }
 

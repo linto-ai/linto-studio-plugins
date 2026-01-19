@@ -24,6 +24,11 @@ class BrokerClient extends Component {
       this.client.publishStatus({ activeBots: this.bots.size, capabilities: this.capabilities });
       this.lastPublishedBotCount = this.bots.size;
       logger.info(`BotService ${this.uniqueId} ready with ${this.bots.size} active bots, capabilities: ${this.capabilities.join(', ')}`);
+
+      // Heartbeat every 15 seconds to avoid being marked as stale by the Scheduler
+      this.heartbeatInterval = setInterval(() => {
+        this.client.publishStatus({ activeBots: this.bots.size, capabilities: this.capabilities });
+      }, 15000);
     });
 
     this.client.on('message', (topic, message) => {
@@ -236,6 +241,11 @@ class BrokerClient extends Component {
   }
 
   async destroy() {
+    // Clear heartbeat interval
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
     // Stop all bots (this will also unsubscribe from transcriptions)
     const stopPromises = [];
     for (const [key] of this.bots) {

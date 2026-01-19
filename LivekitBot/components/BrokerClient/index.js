@@ -37,6 +37,14 @@ class BrokerClient extends Component {
       });
       this.lastPublishedBotCount = this.bots.size;
       logger.info(`LivekitBot ${this.uniqueId} ready with ${this.bots.size} active bots, capabilities: ${this.capabilities.join(', ')}`);
+
+      // Heartbeat every 15 seconds to avoid being marked as stale by the Scheduler
+      this.heartbeatInterval = setInterval(() => {
+        this.client.publishStatus({
+          activeBots: this.bots.size,
+          capabilities: this.capabilities
+        });
+      }, 15000);
     });
 
     this.client.on('message', (topic, message) => {
@@ -74,9 +82,9 @@ class BrokerClient extends Component {
     });
   }
 
-  async startBot({ session, channel, address, botType, enableDisplaySub, websocketUrl }) {
+  async startBot({ session, channel, address, botType, enableDisplaySub, subSource, websocketUrl }) {
     const key = `${session.id}_${channel.id}`;
-    logger.info(`Starting bot with key: ${key}`);
+    logger.info(`Starting bot with key: ${key}, subSource: ${subSource || '(none, using original text)'}`);
 
     // Cleanup if existing
     await this.stopBot(session.id, channel.id);
@@ -85,16 +93,22 @@ class BrokerClient extends Component {
     const livekitUrl = process.env.LIVEKIT_URL;
     const livekitApiKey = process.env.LIVEKIT_API_KEY;
     const livekitApiSecret = process.env.LIVEKIT_API_SECRET;
+    const livekitMeetUrl = process.env.LIVEKIT_MEET_URL;
 
     if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
       logger.error('Missing LiveKit configuration (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)');
       return;
     }
 
-    // Extract room name from address
-    const roomName = this.extractRoomName(address);
+    // Check if Meet instance has native subtitles enabled
+    // If enabled, we don't need virtual camera for captions
+    const meetSubtitleEnabled = await this.checkMeetSubtitleEnabled(livekitMeetUrl);
+
+    // Resolve room name from address (calls API to get LiveKit room UUID)
+    const roomName = await this.resolveRoomName(address);
 
     // Create bot instance
+    // Virtual camera is disabled if Meet has native subtitles OR if enableDisplaySub is false
     const bot = new LivekitBotInstance({
       session,
       channel,
@@ -102,7 +116,9 @@ class BrokerClient extends Component {
       livekitUrl,
       livekitApiKey,
       livekitApiSecret,
-      enableDisplaySub
+      enableDisplaySub,
+      meetSubtitleEnabled,
+      subSource
     });
 
     // Create WebSocket connection to Transcriber
@@ -272,10 +288,20 @@ class BrokerClient extends Component {
       const transcription = JSON.parse(message.toString());
       const isFinal = type === 'final';
 
+      // Select subtitle text based on subSource (translation language)
+      // If subSource is set and translation exists, use translation
+      // Otherwise, use original transcription text
+      const subSource = record.bot.subSource;
+      let subtitle = transcription.text;
+      if (subSource && transcription.translations && subSource in transcription.translations) {
+        subtitle = transcription.translations[subSource];
+        logger.debug(`Using translation for '${subSource}': ${subtitle.substring(0, 50)}...`);
+      }
+
       // Display captions in the LiveKit room via publishTranscription()
       // Language is extracted from transcription message or uses channel config
-      const language = transcription.language || record.bot.channel?.languages?.[0] || 'fr-FR';
-      record.bot.displayCaption(transcription.text, isFinal, language);
+      const language = transcription.lang || record.bot.channel?.languages?.[0] || 'fr-FR';
+      record.bot.displayCaption(subtitle, isFinal, language);
     } catch (e) {
       logger.error(`Error handling transcription:`, e);
     }
@@ -296,22 +322,126 @@ class BrokerClient extends Component {
     this.lastPublishedBotCount = currentBotCount;
   }
 
-  extractRoomName(address) {
-    // Example LiveKit URLs:
-    // https://visio.twake.app/room-name
-    // https://meet.livekit.io/my-room
-    // livekit://server/room
+  /**
+   * Check if the Meet instance has native subtitles enabled.
+   * Calls /api/config/ endpoint to check subtitle.enabled flag.
+   *
+   * @param {string} meetUrl - Meet instance URL (e.g., https://dev-meet.linagora.com)
+   * @returns {Promise<boolean>} - true if subtitles are enabled on the Meet instance
+   */
+  async checkMeetSubtitleEnabled(meetUrl) {
+    if (!meetUrl) {
+      logger.debug('No LIVEKIT_MEET_URL configured, assuming subtitles disabled');
+      return false;
+    }
+
     try {
-      const url = new URL(address);
-      const pathParts = url.pathname.split('/').filter(p => p);
-      return pathParts[pathParts.length - 1] || 'default-room';
+      const configUrl = `${meetUrl.replace(/\/$/, '')}/api/config/`;
+      logger.debug(`Checking Meet subtitle config: ${configUrl}`);
+
+      const response = await fetch(configUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (response.ok) {
+        const config = await response.json();
+        const subtitleEnabled = config?.subtitle?.enabled === true;
+        logger.info(`Meet instance subtitle support: ${subtitleEnabled ? 'ENABLED' : 'DISABLED'}`);
+        return subtitleEnabled;
+      } else {
+        logger.warn(`Failed to fetch Meet config (HTTP ${response.status}), assuming subtitles disabled`);
+        return false;
+      }
     } catch (e) {
-      // If not a valid URL, use directly as room name
-      return address;
+      logger.warn(`Error checking Meet subtitle config: ${e.message}, assuming subtitles disabled`);
+      return false;
     }
   }
 
+  /**
+   * Resolve room name from meeting URL.
+   * Supports both La Suite Meet (DINUM) and LiveKit Meet (official).
+   *
+   * - La Suite Meet (DINUM): slug → UUID via /api/v1.0/rooms/{slug}/
+   * - LiveKit Meet (official): slug → slug via /api/connection-details?roomName={slug}
+   *
+   * @param {string} address - Meeting URL (e.g., https://meet.linagora.com/dac-vlev-oeq)
+   * @returns {Promise<string>} - LiveKit room name (UUID or slug)
+   */
+  async resolveRoomName(address) {
+    let url;
+    let slug;
+
+    try {
+      url = new URL(address);
+      const pathParts = url.pathname.split('/').filter(p => p);
+      slug = pathParts[pathParts.length - 1] || 'default-room';
+    } catch (e) {
+      logger.warn(`Invalid URL "${address}", using as room name directly`);
+      return address;
+    }
+
+    const meetHost = `${url.protocol}//${url.host}`;
+
+    // Strategy 1: Try La Suite Meet (DINUM) API
+    // Returns UUID as livekit.room
+    try {
+      const dinumApiUrl = `${meetHost}/api/v1.0/rooms/${slug}/`;
+      logger.debug(`Trying La Suite Meet API: ${dinumApiUrl}`);
+
+      const response = await fetch(dinumApiUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.livekit && data.livekit.room) {
+          logger.info(`[La Suite Meet] Resolved slug "${slug}" → LiveKit room "${data.livekit.room}"`);
+          return data.livekit.room;
+        }
+      }
+    } catch (e) {
+      logger.debug(`La Suite Meet API failed: ${e.message}`);
+    }
+
+    // Strategy 2: Try LiveKit Meet (official) API
+    // Returns slug as roomName (confirms the room exists)
+    try {
+      const officialApiUrl = `${meetHost}/api/connection-details?roomName=${encodeURIComponent(slug)}`;
+      logger.debug(`Trying LiveKit Meet official API: ${officialApiUrl}`);
+
+      const response = await fetch(officialApiUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.roomName) {
+          logger.info(`[LiveKit Meet] Using room name: "${data.roomName}"`);
+          return data.roomName;
+        }
+      }
+    } catch (e) {
+      logger.debug(`LiveKit Meet official API failed: ${e.message}`);
+    }
+
+    // Strategy 3: Fallback to slug
+    logger.info(`No API responded, using slug directly: "${slug}"`);
+    return slug;
+  }
+
   async destroy() {
+    // Clear heartbeat interval
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
     // Stop all bots (this will also unsubscribe from transcriptions)
     const stopPromises = [];
     for (const [key] of this.bots) {

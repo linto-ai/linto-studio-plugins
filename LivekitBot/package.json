@@ -13,6 +13,7 @@
     "live-srt-lib": "file:../lib",
     "@livekit/rtc-node": "^0.12.0",
     "livekit-server-sdk": "^2.9.0",
+    "canvas": "^2.11.2",
     "uuid": "^9.0.0",
     "ws": "^8.18.0"
   }

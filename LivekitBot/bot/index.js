@@ -3,6 +3,7 @@ const { AccessToken } = require('livekit-server-sdk');
 const EventEmitter = require('events');
 const { logger } = require('live-srt-lib');
 const { createCanvas } = require('canvas');
+const AudioMixer = require('./AudioMixer');
 
 const SAMPLE_RATE = 16000;
 const CHANNELS = 1;
@@ -40,7 +41,14 @@ class LivekitBotInstance extends EventEmitter {
 
     this.room = null;
     this.connected = false;
-    this.audioMixer = new Map();  // participantId -> audioBuffer
+
+    // Audio mixer for synchronized multi-participant audio with speaker tracking
+    this.audioMixer = new AudioMixer();
+    this.participants = new Map(); // participantId -> { identity, name }
+
+    // Setup audio mixer events
+    this.audioMixer.on('audio', (buffer) => this.emit('audio', buffer));
+    this.audioMixer.on('speaker', (metadata) => this.emit('speaker', metadata));
 
     // Transcription segment management (partials/finals)
     // Same ID for consecutive partials, new ID after each final
@@ -75,6 +83,17 @@ class LivekitBotInstance extends EventEmitter {
       }
       return;
     }
+
+    // Big warning about subtitles not enabled on LiveKit server
+    logger.warn('================================================================================');
+    logger.warn('WARNING: Native subtitles are NOT enabled on the LiveKit server!');
+    logger.warn('');
+    logger.warn('To enable native subtitles, set the following environment variable on your LiveKit server:');
+    logger.warn('    ROOM_SUBTITLE_ENABLED=true');
+    logger.warn('');
+    logger.warn('For now, using VIRTUAL CAMERA as fallback to display captions.');
+    logger.warn('The virtual camera method is less performant and uses more bandwidth.');
+    logger.warn('================================================================================');
 
     logger.info('Initializing caption video track (Meet has no native subtitles)...');
 
@@ -259,6 +278,10 @@ class LivekitBotInstance extends EventEmitter {
     this.connected = true;
     logger.info(`Connected to LiveKit room: ${this.roomName}`);
 
+    // Start the audio mixer
+    this.audioMixer.start();
+    logger.info('Audio mixer started');
+
     // Initialize caption video track
     await this.initCaptionVideo();
 
@@ -275,6 +298,17 @@ class LivekitBotInstance extends EventEmitter {
 
     for (const [sid, participant] of participants) {
       logger.debug(`Found existing participant: ${participant.identity} (sid: ${sid})`);
+
+      // Track participant for name resolution
+      this.participants.set(participant.identity, {
+        identity: participant.identity,
+        name: participant.name || participant.identity,
+        sid: participant.sid
+      });
+      this.emit('participant-joined', {
+        identity: participant.identity,
+        name: participant.name || participant.identity
+      });
 
       // Check for published audio tracks
       for (const [trackSid, publication] of participant.trackPublications) {
@@ -309,12 +343,26 @@ class LivekitBotInstance extends EventEmitter {
     // Participant connected
     this.room.on(RoomEvent.ParticipantConnected, (participant) => {
       logger.debug(`Participant connected: ${participant.identity}`);
+      this.participants.set(participant.identity, {
+        identity: participant.identity,
+        name: participant.name || participant.identity,
+        sid: participant.sid
+      });
+      this.emit('participant-joined', {
+        identity: participant.identity,
+        name: participant.name || participant.identity
+      });
     });
 
     // Participant disconnected
     this.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
       logger.debug(`Participant disconnected: ${participant.identity}`);
-      this.audioMixer.delete(participant.sid);
+      this.audioMixer.removeParticipant(participant.identity);
+      this.participants.delete(participant.identity);
+      this.emit('participant-left', {
+        identity: participant.identity,
+        name: participant.name || participant.identity
+      });
     });
 
     // Track subscribed (participant audio)
@@ -368,15 +416,16 @@ class LivekitBotInstance extends EventEmitter {
   }
 
   processAudioFrame(frame, participant) {
-    // Log first frame to debug format
-    if (!this._firstFrameLogged) {
+    // Log first frame to debug format (per participant)
+    const firstFrameKey = `_firstFrame_${participant.identity}`;
+    if (!this[firstFrameKey]) {
       logger.info(`First audio frame received from ${participant.identity}:`, {
         sampleRate: frame.sampleRate,
         channels: frame.numChannels,
         samplesPerChannel: frame.samplesPerChannel,
         dataLength: frame.data?.byteLength || frame.data?.length
       });
-      this._firstFrameLogged = true;
+      this[firstFrameKey] = true;
     }
 
     // LiveKit provides audio in PCM format
@@ -391,8 +440,8 @@ class LivekitBotInstance extends EventEmitter {
       pcmBuffer = Buffer.from(frame.data.buffer);
     }
 
-    // Emit audio buffer
-    this.emit('audio', pcmBuffer);
+    // Add audio to mixer with participant identity for speaker tracking
+    this.audioMixer.addAudio(participant.identity, pcmBuffer, Date.now());
   }
 
   resampleAudio(frame) {
@@ -453,16 +502,20 @@ class LivekitBotInstance extends EventEmitter {
    * @param {string} text - Transcription text
    * @param {boolean} isFinal - true if definitive transcription
    * @param {string} language - BCP47 language code (ex: 'fr-FR')
+   * @param {string|null} speakerName - Speaker display name from native diarization
    */
-  async displayCaption(text, isFinal, language = 'fr-FR') {
+  async displayCaption(text, isFinal, language = 'fr-FR', speakerName = null) {
     if (!this.enableDisplaySub || !this.room || !this.connected) {
       return;
     }
 
     try {
+      // Format text with speaker name prefix if available (native diarization)
+      const displayText = speakerName ? `${speakerName}: ${text}` : text;
+
       // Update video caption overlay only if virtual camera is enabled
       if (this.useVirtualCamera) {
-        this.updateCaptionLines(text, isFinal);
+        this.updateCaptionLines(displayText, isFinal);
       }
 
       // If no current ID, create a new one (start of sentence)
@@ -474,7 +527,7 @@ class LivekitBotInstance extends EventEmitter {
       // Same ID for all partials of the same sentence
       const segment = {
         id: this.currentSegmentId,
-        text: text,
+        text: displayText,
         final: isFinal,
         startTime: BigInt(Date.now()),
         endTime: BigInt(Date.now() + 1000),
@@ -489,7 +542,7 @@ class LivekitBotInstance extends EventEmitter {
         trackSid: ''  // No specific track
       });
 
-      logger.debug(`Transcription published [${isFinal ? 'FINAL' : 'PARTIAL'}] (id=${this.currentSegmentId}): ${text.substring(0, 50)}...`);
+      logger.debug(`Transcription published [${isFinal ? 'FINAL' : 'PARTIAL'}] (id=${this.currentSegmentId}): ${displayText.substring(0, 50)}...`);
 
       // If it was a final, reset ID for next segment
       // Next partial will start a new sentence with a new ID
@@ -502,6 +555,12 @@ class LivekitBotInstance extends EventEmitter {
   }
 
   async disconnect() {
+    // Stop audio mixer
+    if (this.audioMixer) {
+      this.audioMixer.stop();
+      logger.info('Audio mixer stopped');
+    }
+
     // Stop video frame rendering
     if (this.videoFrameInterval) {
       clearInterval(this.videoFrameInterval);
@@ -515,11 +574,23 @@ class LivekitBotInstance extends EventEmitter {
     }
 
     this.connected = false;
+    this.participants.clear();
     this.videoSource = null;
     this.videoTrack = null;
     this.captionCanvas = null;
     this.captionCtx = null;
     this.captionLines = [];
+  }
+
+  /**
+   * Get list of current participants for init message
+   * @returns {Array<{id: string, name: string}>}
+   */
+  getParticipantsList() {
+    return Array.from(this.participants.values()).map(p => ({
+      id: p.identity,
+      name: p.name
+    }));
   }
 }
 

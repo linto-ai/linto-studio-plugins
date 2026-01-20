@@ -52,7 +52,17 @@ class StreamingServer extends Component {
 
       server.on('session-start', (session, channel) => {
         try {
-          const asr = new ASR(session, channel);
+          // Get SpeakerTracker and diarization mode for native diarization (LivekitBot via WebSocket)
+          let speakerTracker = null;
+          let diarizationMode = 'asr'; // Default for backward compatibility
+
+          // Check if this server supports native diarization (WebSocket server)
+          if (typeof server.getSpeakerTracker === 'function') {
+            speakerTracker = server.getSpeakerTracker(session.id, channel.id);
+            diarizationMode = server.getDiarizationMode(session.id, channel.id);
+          }
+
+          const asr = new ASR(session, channel, { speakerTracker, diarizationMode });
           asr.on('partial', (transcription) => {
             this.emit('partial', transcription, session.id, channel.id, channel);
           });
@@ -61,7 +71,7 @@ class StreamingServer extends Component {
           });
           this.ASRs.set(`${session.id}_${channel.id}`, asr);
           this.emit('session-start', session, channel);
-          logger.info(`Session ${session.id}, channel ${channel.id} started`);
+          logger.info(`Session ${session.id}, channel ${channel.id} started (diarizationMode: ${diarizationMode})`);
         } catch (error) {
           logger.error(`Error starting session ${session.id}, channel ${channel.id}: ${error}`);
         }

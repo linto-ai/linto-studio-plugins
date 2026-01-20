@@ -27,7 +27,14 @@ class ASR extends eventEmitter {
     TRANSCRIBING: 'transcribing'
   };
 
-  constructor(session, channel) {
+  /**
+   * @param {Object} session - Session object
+   * @param {Object} channel - Channel object with transcriberProfile
+   * @param {Object} options - Optional configuration
+   * @param {Object} options.speakerTracker - SpeakerTracker instance for native diarization (LivekitBot)
+   * @param {string} options.diarizationMode - 'native', 'asr', or 'none' (default: 'asr')
+   */
+  constructor(session, channel, options = {}) {
     super();
     this.session = session;
     this.channel = channel;
@@ -36,6 +43,15 @@ class ASR extends eventEmitter {
     this.state = ASR.states.CLOSED;
     this.segmentId = 1;
     this._dualFinalCount = 0;
+
+    // Native diarization support (LivekitBot via WebSocket)
+    this.speakerTracker = options.speakerTracker || null;
+    this.diarizationMode = options.diarizationMode || 'asr';
+
+    if (this.diarizationMode === 'native' && this.speakerTracker) {
+      this.logger.info('Native diarization enabled via LiveKit speaker tracking');
+    }
+
     this.init();
   }
 
@@ -107,13 +123,17 @@ class ASR extends eventEmitter {
       this.state = ASR.states.TRANSCRIBING;
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this.segmentId;
-        this.emit('partial', transcription);
+        // Enrich with speaker info if native diarization is enabled
+        const enrichedTranscription = this.enrichWithSpeaker(transcription);
+        this.emit('partial', enrichedTranscription);
       }
     });
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this.segmentId;
-        this.emit('final', transcription);
+        // Enrich with speaker info if native diarization is enabled
+        const enrichedTranscription = this.enrichWithSpeaker(transcription);
+        this.emit('final', enrichedTranscription);
         if (this.channel.diarization && this.channel.translations?.length > 0) {
           this._dualFinalCount++;
           if (this._dualFinalCount >= 2) {
@@ -125,6 +145,53 @@ class ASR extends eventEmitter {
         }
       }
     });
+  }
+
+  /**
+   * Enriches a transcription with speaker information based on diarization mode.
+   *
+   * - Native mode: Uses SpeakerTracker to identify speaker from LiveKit participant data
+   *   - Provides real participant names and high accuracy
+   *   - locutor: participant identity
+   *   - locutorName: participant display name
+   *
+   * - ASR mode: Uses speaker ID from ASR provider (Microsoft/Amazon diarization)
+   *   - locutor: "Speaker 1", "Speaker 2", etc.
+   *   - locutorName: null (not available)
+   *
+   * - None mode: No speaker identification
+   *
+   * @param {Object} transcription - Original transcription from ASR provider
+   * @returns {Object} - Transcription with locutor and locutorName fields
+   */
+  enrichWithSpeaker(transcription) {
+    let locutor = null;
+    let locutorName = null;
+
+    if (this.diarizationMode === 'native' && this.speakerTracker) {
+      // Native mode: use SpeakerTracker with LiveKit participant identity
+      // Use transcription timestamp and duration to find the dominant speaker
+      const timestamp = transcription.timestamp || Date.now();
+      const duration = transcription.duration || 1000; // Default 1 second if not provided
+
+      locutor = this.speakerTracker.getSpeakerForTimestamp(timestamp, duration);
+
+      if (locutor) {
+        locutorName = this.speakerTracker.getParticipantName(locutor);
+        this.logger.debug(`Native diarization: "${transcription.text.substring(0, 30)}..." -> ${locutorName}`);
+      }
+    } else if (this.diarizationMode === 'asr' && this.channel.transcriberProfile?.config?.diarization) {
+      // ASR mode: use speaker ID from ASR provider (if available)
+      // Microsoft/Amazon provide speakerId in transcription result
+      locutor = transcription.speakerId || null;
+    }
+    // 'none' mode: locutor stays null
+
+    return {
+      ...transcription,
+      locutor,
+      locutorName
+    };
   }
 
   streamStopped() {

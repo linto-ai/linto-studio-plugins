@@ -5,7 +5,8 @@
   "main": "livekitbot.js",
   "scripts": {
     "start": "node livekitbot.js",
-    "start-live": "npx -y nodemon livekitbot.js"
+    "start-live": "npx -y nodemon livekitbot.js",
+    "test": "./node_modules/.bin/mocha tests.js"
   },
   "author": "Linagora",
   "license": "EUPL",
@@ -16,5 +17,8 @@
     "canvas": "^2.11.2",
     "uuid": "^9.0.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "mocha": "^11.7.5"
   }
 }

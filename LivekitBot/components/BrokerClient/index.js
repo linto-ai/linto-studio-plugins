@@ -131,12 +131,15 @@ class BrokerClient extends Component {
 
     // WebSocket handlers
     ws.on('open', () => {
-      logger.debug(`WebSocket opened for bot ${key}, sending init message`);
-      // Send init message with PCM encoding (native LiveKit audio format)
+      logger.debug(`WebSocket opened for bot ${key}, sending init message with native diarization`);
+      // Send init message with PCM encoding and native diarization mode
+      // Native diarization uses LiveKit's per-participant audio streams for speaker identification
       ws.send(JSON.stringify({
         type: 'init',
         encoding: 'pcm',
-        sampleRate: 16000
+        sampleRate: 16000,
+        diarizationMode: 'native',
+        participants: bot.getParticipantsList()
       }));
     });
 
@@ -173,7 +176,7 @@ class BrokerClient extends Component {
       this.stopBot(session.id, channel.id);
     });
 
-    // Bot audio handler
+    // Bot audio handler - sends mixed audio from AudioMixer
     bot.on('audio', (buffer) => {
       if (ws.readyState === WebSocket.OPEN) {
         if (websocketReady) {
@@ -181,6 +184,37 @@ class BrokerClient extends Component {
         } else {
           audioBuffer.push(buffer);
         }
+      }
+    });
+
+    // Speaker metadata handler - sends speaker activity for native diarization
+    bot.on('speaker', (metadata) => {
+      if (ws.readyState === WebSocket.OPEN && websocketReady) {
+        ws.send(JSON.stringify(metadata));
+      }
+    });
+
+    // Participant joined - notify Transcriber for speaker tracking
+    bot.on('participant-joined', (participant) => {
+      if (ws.readyState === WebSocket.OPEN && websocketReady) {
+        ws.send(JSON.stringify({
+          type: 'participant',
+          action: 'join',
+          participant: { id: participant.identity, name: participant.name }
+        }));
+        logger.debug(`Sent participant join notification: ${participant.name}`);
+      }
+    });
+
+    // Participant left - notify Transcriber for speaker tracking
+    bot.on('participant-left', (participant) => {
+      if (ws.readyState === WebSocket.OPEN && websocketReady) {
+        ws.send(JSON.stringify({
+          type: 'participant',
+          action: 'leave',
+          participant: { id: participant.identity }
+        }));
+        logger.debug(`Sent participant leave notification: ${participant.identity}`);
       }
     });
 
@@ -301,7 +335,10 @@ class BrokerClient extends Component {
       // Display captions in the LiveKit room via publishTranscription()
       // Language is extracted from transcription message or uses channel config
       const language = transcription.lang || record.bot.channel?.languages?.[0] || 'fr-FR';
-      record.bot.displayCaption(subtitle, isFinal, language);
+
+      // Pass speaker name from native diarization (LiveKit participant identity)
+      const speakerName = transcription.locutorName || null;
+      record.bot.displayCaption(subtitle, isFinal, language, speakerName);
     } catch (e) {
       logger.error(`Error handling transcription:`, e);
     }

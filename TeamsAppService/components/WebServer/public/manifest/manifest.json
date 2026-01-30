@@ -47,6 +47,20 @@
   "validDomains": [
     "{{DOMAIN}}"
   ],
+  "webApplicationInfo": {
+    "id": "{{APP_ID}}",
+    "resource": "api://{{DOMAIN}}/{{APP_ID}}"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "OnlineMeeting.ReadBasic.Chat",
+          "type": "Delegated"
+        }
+      ]
+    }
+  },
   "showLoadingIndicator": true,
   "isFullScreen": false
 }

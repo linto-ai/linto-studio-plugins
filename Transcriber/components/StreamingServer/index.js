@@ -99,14 +99,23 @@ class StreamingServer extends Component {
         }
       });
 
+      const audioCounters = new Map();
       server.on('data', (audio, sessionId, channelId) => {
         try {
           const buffer = Buffer.from(audio);
-          const asr = this.ASRs.get(`${sessionId}_${channelId}`);
+          const key = `${sessionId}_${channelId}`;
+          const count = (audioCounters.get(key) || 0) + 1;
+          audioCounters.set(key, count);
+          if (count === 1) {
+            logger.info(`First audio data forwarded to ASR for session ${sessionId}, channel ${channelId} (${buffer.length} bytes)`);
+          }
+          const asr = this.ASRs.get(key);
           if (asr) {
             asr.transcribe(buffer);
           } else {
-            logger.warn(`No ASR found for session ${sessionId}, channel ${channelId}`);
+            if (count <= 3) {
+              logger.warn(`No ASR found for session ${sessionId}, channel ${channelId}`);
+            }
           }
         } catch (error) {
           logger.error(`Error processing data for session ${sessionId}, channel ${channelId}: ${error}`);

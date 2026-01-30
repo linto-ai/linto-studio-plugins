@@ -94,7 +94,7 @@ class ASR extends eventEmitter {
     });
     this.provider.on('error', error => {
       this.logger.error(error);
-      const msg = ASR_ERROR[error]
+      const msg = ASR_ERROR[error] || `Automatic transcription has been stopped due to an unknown error (${error})`
       const final = {
         "astart": this.provider.startedAt,
         "text": msg,

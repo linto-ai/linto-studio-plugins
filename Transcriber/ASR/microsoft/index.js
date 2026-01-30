@@ -62,6 +62,7 @@ class RecognizerListener {
     };
 
     handleStartContinuousRecognitionAsync() {
+        this._started = true;
         if (this._startupTimeout) {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
@@ -71,6 +72,7 @@ class RecognizerListener {
     };
 
     handleStartContinuousRecognitionAsyncError(error) {
+        this._started = true;
         if (this._startupTimeout) {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
@@ -103,6 +105,14 @@ class RecognizerListener {
         for (const recognizerEvent of recognizerEvents) {
             recognizer[recognizerEvent] = eventHandlers[recognizerEvent].bind(this);
         }
+
+        this._started = false;
+        this._startupTimeout = setTimeout(() => {
+            if (!this._started) {
+                this.transcriber.logger.error(`${this.name}: Microsoft ASR startup timeout - no response from Azure Speech service after 15s. Check your API key and endpoint.`);
+                this.transcriber.emit('error', 'STARTUP_TIMEOUT');
+            }
+        }, 15000);
 
         recognizer[recognizerListenFun](
             this.handleStartContinuousRecognitionAsync.bind(this),

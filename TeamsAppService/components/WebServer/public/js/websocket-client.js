@@ -22,9 +22,10 @@ class WebSocketClient {
 
   /**
    * Connect to the WebSocket server.
+   * @param {string} [authToken] - Optional auth token for authenticated connections
    * @returns {Promise<void>}
    */
-  connect() {
+  connect(authToken) {
     return new Promise((resolve, reject) => {
       if (this.socket && this.connected) {
         resolve()
@@ -32,8 +33,8 @@ class WebSocketClient {
       }
 
       try {
-        // Use Socket.IO client with explicit timeout configuration
-        this.socket = io(this.serverUrl, {
+        // Build connection options
+        const options = {
           path: '/socket.io',
           transports: ['websocket', 'polling'],
           reconnection: true,
@@ -41,7 +42,15 @@ class WebSocketClient {
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,
           timeout: 45000  // Match server connectTimeout
-        })
+        }
+
+        // Pass auth token if available
+        if (authToken) {
+          options.auth = { token: authToken }
+        }
+
+        // Use Socket.IO client with explicit timeout configuration
+        this.socket = io(this.serverUrl, options)
 
         this.socket.on('connect', () => {
           console.log('[WebSocketClient] Connected to server')

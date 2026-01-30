@@ -312,9 +312,9 @@ module.exports = (webserver) => {
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
                     const translations = await enrichTranslations(validatedTranslations, transcriberProfile);
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio ?? true,
+                        keepAudio,
                         diarization: channel.diarization ?? false,
-                        compressAudio: channel.compressAudio ?? true,
+                        compressAudio,
                         enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations,
@@ -459,9 +459,9 @@ module.exports = (webserver) => {
                     const translations = await enrichTranslations(validatedTranslations, transcriberProfile);
 
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio ?? true,
+                        keepAudio,
                         diarization: channel.diarization ?? false,
-                        compressAudio: channel.compressAudio ?? true,
+                        compressAudio,
                         enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations,

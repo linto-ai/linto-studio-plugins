@@ -417,6 +417,274 @@ html, body {
   background: var(--text-secondary);
 }
 
+/* Start session container */
+.start-session-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: var(--spacing-lg);
+}
+
+.start-session-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  color: white;
+  font-size: 28px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.start-session-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.start-session-text {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-lg);
+}
+
+.start-session-error {
+  font-size: var(--font-size-sm);
+  color: var(--error);
+  margin-top: var(--spacing-sm);
+}
+
+/* Profile selector */
+.profile-selector {
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: var(--spacing-md);
+  text-align: left;
+}
+
+.profile-label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.profile-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.profile-card:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.profile-card.selected {
+  border-color: var(--accent);
+  background-color: var(--bg-primary);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.profile-card input[type="radio"] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.profile-card-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.profile-card-name {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.profile-card-desc {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.profile-select {
+  width: 100%;
+}
+
+/* Start / Stop buttons */
+.btn-start {
+  min-width: 180px;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.btn-stop {
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.btn-danger {
+  background-color: var(--error);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+.btn-danger:hover {
+  background-color: #b52d30;
+}
+
+.btn-danger:active {
+  transform: scale(0.98);
+}
+
+.btn-loading {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Pairing UI */
+.pairing-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: var(--spacing-lg);
+}
+
+.pairing-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--spacing-lg);
+}
+
+.pairing-title {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.pairing-text {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-lg);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.pairing-form {
+  width: 100%;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.pairing-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.pairing-input {
+  width: 100%;
+  padding: 10px var(--spacing-md);
+  font-size: var(--font-size-md);
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  letter-spacing: 1px;
+  transition: border-color 0.2s;
+}
+
+.pairing-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(91, 95, 199, 0.2);
+}
+
+.pairing-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pairing-input::placeholder {
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+
+.btn-pair {
+  margin-top: var(--spacing-sm);
+  min-width: 180px;
+  padding: 10px var(--spacing-lg);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.pairing-error {
+  font-size: var(--font-size-sm);
+  color: var(--error);
+  text-align: center;
+  margin-top: var(--spacing-xs);
+}
+
+/* Inline pairing (inside start-session container) */
+.inline-pairing {
+  width: 100%;
+  max-width: 300px;
+  margin-top: var(--spacing-md);
+}
+
+.inline-pairing-text {
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-md);
+  text-align: center;
+}
+
 /* Responsive */
 @media (max-width: 400px) {
   .app-header {

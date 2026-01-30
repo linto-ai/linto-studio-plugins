@@ -107,6 +107,56 @@ class TeamsSdkWrapper {
   }
 
   /**
+   * Get an SSO auth token from Teams.
+   * Teams SDK handles caching and refresh internally.
+   * @returns {Promise<string>} JWT token
+   */
+  async getAuthToken() {
+    if (!this.initialized) {
+      await this.initialize()
+    }
+
+    try {
+      const token = await microsoftTeams.authentication.getAuthToken()
+      console.log('[TeamsSdk] Auth token acquired')
+      return token
+    } catch (err) {
+      console.error('[TeamsSdk] Failed to get auth token:', err)
+      throw err
+    }
+  }
+
+  /**
+   * Get the meeting join URL using the Teams meeting API.
+   * Requires RSC permission OnlineMeeting.ReadBasic.Chat.
+   * @returns {Promise<string|null>} Meeting join URL or null
+   */
+  async getMeetingJoinUrl() {
+    if (!this.initialized) {
+      await this.initialize()
+    }
+
+    try {
+      const details = await new Promise((resolve, reject) => {
+        const result = microsoftTeams.meeting.getMeetingDetails((err, cbResult) => {
+          if (err) return reject(err)
+          resolve(cbResult)
+        })
+        // SDK v2.22+ returns a Promise, older versions use callback
+        if (result && typeof result.then === 'function') {
+          result.then(resolve, reject)
+        }
+      })
+      const joinUrl = details?.details?.joinUrl || null
+      console.log('[TeamsSdk] Meeting join URL:', joinUrl ? 'found' : 'not found')
+      return joinUrl
+    } catch (err) {
+      console.error('[TeamsSdk] Failed to get meeting details:', err)
+      return null
+    }
+  }
+
+  /**
    * Notify Teams that configuration is complete.
    * Used in configuration/settings pages.
    */

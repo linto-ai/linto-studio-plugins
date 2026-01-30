@@ -1,4 +1,5 @@
 const { Model, logger, Security } = require("live-srt-lib");
+const { Op } = Model;
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -142,7 +143,9 @@ module.exports = (webserver) => {
             let where = {}
 
             if (organizationId) {
-                where.organizationId = organizationId;
+                where.organizationId = {
+                    [Op.or]: [organizationId, null]
+                };
             }
             if (quickMeeting === "true") {
                 where.quickMeeting = quickMeeting;

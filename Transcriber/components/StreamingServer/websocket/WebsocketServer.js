@@ -203,6 +203,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
         const callback = initMessage.encoding == 'pcm' ? this.initPcm(ws, fd) : this.initWorker(ws, fd);
 
         ws.send(JSON.stringify({ type: 'ack', message: 'Init done' }));
+        logger.info(`Init ack sent for session ${fd.session.id}, channel ${fd.channel.id} (encoding=${initMessage.encoding})`);
 
         return callback;
     } else {
@@ -215,23 +216,30 @@ class MultiplexedWebsocketServer extends EventEmitter {
   initPcm(ws, fd) {
       this.emit('session-start', fd.session, fd.channel);
       this.addRunningSession(fd.session, ws, fd, null);
-      ws.on("close", () => {
-          logger.info(`Connection: ${ws} --> closed`);
+      ws.on("close", (code, reason) => {
+          logger.info(`WebSocket closed for session ${fd.session.id}, channel ${fd.channel.id} (code=${code}, reason=${reason || 'none'}, audioChunks=${audioMessageCount})`);
           this.cleanupWebsocket(ws, fd);
       });
-      ws.on("error", () => {
-          logger.error(`Connection: ${ws} --> error`);
+      ws.on("error", (err) => {
+          logger.error(`WebSocket error for session ${fd.session.id}, channel ${fd.channel.id}: ${err.message}`);
           this.cleanupWebsocket(ws, fd);
       });
 
       const key = `${fd.session.id}_${fd.channel.id}`;
 
+      let audioMessageCount = 0;
       return (message) => {
           // Handle both binary audio and JSON metadata messages
           if (this.isJsonMessage(message)) {
               this.handleJsonMessage(fd, message);
           } else {
               // Binary audio data
+              audioMessageCount++;
+              if (audioMessageCount === 1) {
+                  logger.info(`First audio chunk received for session ${fd.session.id}, channel ${fd.channel.id} (${message.length} bytes)`);
+              } else if (audioMessageCount % 500 === 0) {
+                  logger.debug(`Audio chunks received for session ${fd.session.id}, channel ${fd.channel.id}: ${audioMessageCount}`);
+              }
               this.emit('data', message, fd.session.id, fd.channel.id);
           }
       };

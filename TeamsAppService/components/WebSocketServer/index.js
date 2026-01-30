@@ -1,5 +1,6 @@
 const { Server } = require('socket.io')
 const { Component, logger } = require('live-srt-lib')
+const { validateToken } = require('../WebServer/middlewares/auth')
 
 /**
  * WebSocketServer Component
@@ -68,6 +69,31 @@ class WebSocketServer extends Component {
    * Setup Socket.IO event handlers.
    */
   _setupEventHandlers() {
+    // Auth middleware: validate token if provided, continue without auth if absent
+    this.io.use(async (socket, next) => {
+      const token = socket.handshake.auth?.token
+      if (!token) {
+        // No token provided - allow connection (retro-compatible)
+        return next()
+      }
+
+      try {
+        const decoded = await validateToken(token)
+        socket.user = {
+          oid: decoded.oid,
+          name: decoded.name,
+          email: decoded.preferred_username,
+          tenantId: decoded.tid
+        }
+        logger.debug(`[TeamsAppService] Socket authenticated: user=${decoded.oid}`)
+      } catch (err) {
+        logger.debug(`[TeamsAppService] Socket auth token invalid: ${err.message}`)
+        // Continue without user - non-blocking for retro-compatibility
+      }
+
+      next()
+    })
+
     this.io.on('connection', (socket) => {
       logger.info(`[TeamsAppService] Client connected: ${socket.id}`)
 

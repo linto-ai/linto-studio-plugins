@@ -381,6 +381,43 @@
   }
 
   /**
+   * Update the translations checkboxes based on the selected profile.
+   * @param {Object} profile
+   */
+  function updateTranslationOptions(profile) {
+    const container = document.getElementById('translations-container')
+    const list = document.getElementById('translations-list')
+    if (!container || !list) return
+
+    list.innerHTML = ''
+    const available = profile?.config?.availableTranslations || []
+
+    if (available.length === 0) {
+      container.style.display = 'none'
+      return
+    }
+
+    available.forEach(lang => {
+      const chip = document.createElement('label')
+      chip.className = 'translation-chip'
+      chip.innerHTML = `<input type="checkbox" value="${lang}"><span>${getLanguageName(lang)}</span>`
+      list.appendChild(chip)
+    })
+
+    container.style.display = 'block'
+  }
+
+  /**
+   * Get the list of selected translation language codes.
+   * @returns {string[]}
+   */
+  function getSelectedTranslations() {
+    const list = document.getElementById('translations-list')
+    if (!list) return []
+    return Array.from(list.querySelectorAll('input:checked')).map(cb => cb.value)
+  }
+
+  /**
    * Show the "Start Transcription" UI when no active transcription is found.
    */
   function showStartTranscriptionUI() {
@@ -393,6 +430,24 @@
           <label class="profile-label">Transcription profile</label>
           <div id="profile-list" class="profile-list"></div>
           <select id="profile-select" class="profile-select" style="display:none;"></select>
+        </div>
+        <div id="session-options" class="session-options" style="display:none;">
+          <div class="option-row">
+            <label class="option-label" for="opt-diarization">
+              <input type="checkbox" id="opt-diarization">
+              <span>Speaker diarization</span>
+            </label>
+          </div>
+          <div class="option-row">
+            <label class="option-label" for="opt-keep-audio">
+              <input type="checkbox" id="opt-keep-audio" checked>
+              <span>Keep audio recording</span>
+            </label>
+          </div>
+          <div id="translations-container" class="option-row" style="display:none;">
+            <span class="option-section-title">Translations</span>
+            <div id="translations-list" class="translations-list"></div>
+          </div>
         </div>
         <button id="start-transcription-btn" class="btn btn-primary btn-start">
           Start Transcription
@@ -436,9 +491,11 @@
         }
 
         const profileList = document.getElementById('profile-list')
+        const loadedProfiles = {}
 
         // Populate profile cards
         profiles.forEach((profile, index) => {
+          loadedProfiles[profile.id] = profile
           const name = (profile.config && profile.config.name) || `Profile ${profile.id}`
           const description = (profile.config && profile.config.description) || ''
 
@@ -459,20 +516,21 @@
             profileList.querySelectorAll('.profile-card').forEach(c => c.classList.remove('selected'))
             card.classList.add('selected')
             profileSelect.value = profile.id
+            updateTranslationOptions(loadedProfiles[profile.id])
           })
           profileList.appendChild(card)
         })
 
         profileSelect.value = profiles[0].id
+        updateTranslationOptions(profiles[0])
 
-        // If multiple profiles, show selector and wait for user choice
-        if (profiles.length > 1) {
-          profileSelector.style.display = 'block'
-          startBtn.disabled = false
-          startBtn.textContent = 'Start Transcription'
-          startBtn.classList.remove('btn-loading')
-          return
-        }
+        // Show selector and session options, wait for user choice
+        profileSelector.style.display = 'block'
+        document.getElementById('session-options').style.display = 'block'
+        startBtn.disabled = false
+        startBtn.textContent = 'Start Transcription'
+        startBtn.classList.remove('btn-loading')
+        return
       }
 
       const transcriberProfileId = profileSelect.value
@@ -502,7 +560,10 @@
         body: JSON.stringify({
           transcriberProfileId: parseInt(transcriberProfileId, 10),
           meetingJoinUrl,
-          threadId
+          threadId,
+          translations: getSelectedTranslations(),
+          diarization: document.getElementById('opt-diarization').checked,
+          keepAudio: document.getElementById('opt-keep-audio').checked
         })
       })
 

@@ -685,6 +685,80 @@ html, body {
   text-align: center;
 }
 
+/* Session options */
+.session-options {
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: var(--spacing-md);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.option-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.option-label {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  padding: var(--spacing-xs) 0;
+}
+
+.option-label input[type="checkbox"] {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.option-section-title {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.translations-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.translation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.translation-chip:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.translation-chip:has(input:checked) {
+  border-color: var(--accent);
+  background-color: var(--bg-primary);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.translation-chip input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
 /* Responsive */
 @media (max-width: 400px) {
   .app-header {

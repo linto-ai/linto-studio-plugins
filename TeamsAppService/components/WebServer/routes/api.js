@@ -420,7 +420,7 @@ module.exports = function (app) {
    * Body: { transcriberProfileId, meetingJoinUrl, threadId }
    */
   router.post('/sessions', requireEmeetingAuth, async (req, res) => {
-    const { transcriberProfileId, meetingJoinUrl, threadId } = req.body
+    const { transcriberProfileId, meetingJoinUrl, threadId, translations, diarization, keepAudio } = req.body
 
     if (!transcriberProfileId || !meetingJoinUrl || !threadId) {
       return res.status(400).json({
@@ -431,14 +431,21 @@ module.exports = function (app) {
 
     try {
       // 1. Create session via Session-API
+      const channelConfig = {
+        transcriberProfileId,
+        diarization: diarization !== undefined ? diarization : false,
+        enableLiveTranscripts: true,
+        keepAudio: keepAudio !== undefined ? keepAudio : true
+      }
+
+      if (Array.isArray(translations) && translations.length > 0) {
+        channelConfig.translations = translations
+      }
+
       const sessionPayload = {
         owner: req.user.oid,
         organizationId: req.emeetingOrg.organizationId,
-        channels: [{
-          transcriberProfileId,
-          diarization: true,
-          enableLiveTranscripts: true
-        }]
+        channels: [channelConfig]
       }
 
       logger.info(`[TeamsAppService] Creating session for user=${req.user.oid}, org=${req.emeetingOrg.organizationId}, profile=${transcriberProfileId}`)
@@ -526,10 +533,9 @@ module.exports = function (app) {
     try {
       logger.info(`[TeamsAppService] Stopping session ${sessionId} requested by user=${req.user.oid}`)
 
-      const response = await fetch(`${SESSION_API_HOST}/v1/sessions/${sessionId}/stop`, {
+      const response = await fetch(`${SESSION_API_HOST}/v1/sessions/${sessionId}/stop?force=true`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force: true })
+        headers: { 'Content-Type': 'application/json' }
       })
 
       if (!response.ok) {

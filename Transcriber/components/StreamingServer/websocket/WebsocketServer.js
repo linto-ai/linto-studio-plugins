@@ -235,11 +235,6 @@ class MultiplexedWebsocketServer extends EventEmitter {
           } else {
               // Binary audio data
               audioMessageCount++;
-              if (audioMessageCount === 1) {
-                  logger.info(`First audio chunk received for session ${fd.session.id}, channel ${fd.channel.id} (${message.length} bytes)`);
-              } else if (audioMessageCount % 500 === 0) {
-                  logger.debug(`Audio chunks received for session ${fd.session.id}, channel ${fd.channel.id}: ${audioMessageCount}`);
-              }
               this.emit('data', message, fd.session.id, fd.channel.id);
           }
       };

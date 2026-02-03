@@ -57,6 +57,12 @@ namespace TeamsMediaBot.Services.Orchestration
         private EventHandler<AudioDataEventArgs>? _audioHandler;
         private EventHandler<ParticipantEventArgs>? _participantHandler;
         private EventHandler<DominantSpeakerEventArgs>? _speakerHandler;
+        private EventHandler? _emptyMeetingHandler;
+
+        /// <summary>
+        /// Event raised when the bot should automatically leave the meeting (meeting empty timeout).
+        /// </summary>
+        public event EventHandler? AutoLeaveRequested;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ManagedBot"/> class.
@@ -176,6 +182,15 @@ namespace TeamsMediaBot.Services.Orchestration
 
             CallHandler.ParticipantChanged += _participantHandler;
             CallHandler.DominantSpeakerChanged += _speakerHandler;
+
+            // Subscribe to empty meeting timeout for auto-leave
+            _emptyMeetingHandler = (sender, e) =>
+            {
+                _logger.LogWarning("[ManagedBot] Meeting empty timeout received for {Key}", Key);
+                AutoLeaveRequested?.Invoke(this, EventArgs.Empty);
+            };
+            CallHandler.MeetingEmptyTimeout += _emptyMeetingHandler;
+
             _logger.LogDebug("[ManagedBot] Speaker handler wired");
         }
 
@@ -195,6 +210,11 @@ namespace TeamsMediaBot.Services.Orchestration
                 {
                     CallHandler.DominantSpeakerChanged -= _speakerHandler;
                     _speakerHandler = null;
+                }
+                if (_emptyMeetingHandler != null)
+                {
+                    CallHandler.MeetingEmptyTimeout -= _emptyMeetingHandler;
+                    _emptyMeetingHandler = null;
                 }
             }
         }

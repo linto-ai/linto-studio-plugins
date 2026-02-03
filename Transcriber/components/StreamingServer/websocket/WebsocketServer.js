@@ -252,7 +252,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   }
 
   /**
-   * Handle JSON messages (speaker metadata, participant updates)
+   * Handle JSON messages (speaker changes, participant updates)
    */
   handleJsonMessage(fd, message) {
       const key = `${fd.session.id}_${fd.channel.id}`;
@@ -267,9 +267,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
           const data = JSON.parse(message.toString());
 
           switch (data.type) {
-              case 'speaker':
-                  // Speaker activity metadata from AudioMixer
-                  tracker.addSpeakerEvent(data);
+              case 'speakerChanged':
+                  // Speaker change event from bot (only sent when speaker changes)
+                  tracker.addSpeakerChange(data);
                   break;
 
               case 'participant':

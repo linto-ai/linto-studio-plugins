@@ -12,18 +12,19 @@ const ENERGY_THRESHOLD = 500 // VAD threshold for voice detection
  * Takes separate audio streams per participant and:
  * 1. Mixes them into a single coherent audio stream
  * 2. Tracks which participant is speaking via energy detection (VAD)
- * 3. Emits speaker metadata for native diarization
+ * 3. Emits speakerChanged events for native diarization (only on change)
  *
  * @emits audio - Mixed PCM audio buffer (Buffer, S16LE 16kHz mono)
- * @emits speaker - Speaker metadata ({ timestamp, position, speakers: [{id, energy}] })
+ * @emits speakerChanged - Speaker change event ({ type, position, speaker: {id, name} | null })
  */
 class AudioMixer extends EventEmitter {
   constructor () {
     super()
-    this.participantBuffers = new Map() // participantId -> { buffer, writePos, lastTimestamp }
+    this.participantBuffers = new Map() // participantId -> { buffer, writePos, lastTimestamp, name }
     this.mixInterval = null
-    this.mixPosition = 0 // Absolute position in samples (for timestamp correlation)
+    this.mixPosition = 0 // Absolute position in ms (for diarization correlation)
     this.startTime = null // Timestamp when mixing started
+    this.currentSpeaker = null // Current dominant speaker { id, name } or null for silence
   }
 
   /**
@@ -31,19 +32,26 @@ class AudioMixer extends EventEmitter {
    * @param {string} participantId - Unique identifier of the participant
    * @param {Buffer} pcmBuffer - PCM S16LE audio buffer
    * @param {number} timestamp - Timestamp in milliseconds
+   * @param {string} [participantName] - Display name of the participant
    */
-  addAudio (participantId, pcmBuffer, timestamp) {
+  addAudio (participantId, pcmBuffer, timestamp, participantName = null) {
     if (!this.participantBuffers.has(participantId)) {
       this.participantBuffers.set(participantId, {
         buffer: new Int16Array(BUFFER_SIZE),
         writePos: 0,
         readPos: 0,
         lastTimestamp: timestamp,
-        samplesAvailable: 0
+        samplesAvailable: 0,
+        name: participantName || participantId
       })
     }
 
     const participant = this.participantBuffers.get(participantId)
+
+    // Update name if provided
+    if (participantName) {
+      participant.name = participantName
+    }
 
     // Convert Buffer to Int16Array
     const samples = new Int16Array(
@@ -85,7 +93,6 @@ class AudioMixer extends EventEmitter {
   mixAndEmit () {
     const mixedFrame = new Int16Array(SAMPLES_PER_FRAME)
     const activeSpeakers = []
-    const timestamp = Date.now()
 
     // Mix all participants
     for (const [participantId, participant] of this.participantBuffers) {
@@ -117,6 +124,7 @@ class AudioMixer extends EventEmitter {
       if (energy > ENERGY_THRESHOLD) {
         activeSpeakers.push({
           id: participantId,
+          name: participant.name,
           energy: Math.round(energy)
         })
       }
@@ -126,20 +134,28 @@ class AudioMixer extends EventEmitter {
     const outputBuffer = Buffer.from(mixedFrame.buffer)
     this.emit('audio', outputBuffer)
 
-    // Emit speaker metadata if someone is speaking
+    // Determine dominant speaker (highest energy) or null if silence
+    let dominantSpeaker = null
     if (activeSpeakers.length > 0) {
-      // Sort by energy (descending)
+      // Sort by energy (descending) and take the first one
       activeSpeakers.sort((a, b) => b.energy - a.energy)
-
-      this.emit('speaker', {
-        type: 'speaker',
-        timestamp,
-        position: this.mixPosition,
-        speakers: activeSpeakers
-      })
+      dominantSpeaker = { id: activeSpeakers[0].id, name: activeSpeakers[0].name }
     }
 
-    this.mixPosition += SAMPLES_PER_FRAME
+    // Emit speakerChanged only if the dominant speaker has changed
+    const currentId = this.currentSpeaker?.id ?? null
+    const newId = dominantSpeaker?.id ?? null
+
+    if (currentId !== newId) {
+      this.emit('speakerChanged', {
+        type: 'speakerChanged',
+        position: this.mixPosition,
+        speaker: dominantSpeaker
+      })
+      this.currentSpeaker = dominantSpeaker
+    }
+
+    this.mixPosition += FRAME_DURATION_MS
   }
 
   /**
@@ -178,6 +194,7 @@ class AudioMixer extends EventEmitter {
     this.participantBuffers.clear()
     this.mixPosition = 0
     this.startTime = null
+    this.currentSpeaker = null
   }
 
   /**
@@ -185,7 +202,15 @@ class AudioMixer extends EventEmitter {
    * @returns {number}
    */
   getPositionMs () {
-    return (this.mixPosition / SAMPLE_RATE) * 1000
+    return this.mixPosition
+  }
+
+  /**
+   * Gets the current dominant speaker.
+   * @returns {{id: string, name: string}|null}
+   */
+  getCurrentSpeaker () {
+    return this.currentSpeaker
   }
 }
 

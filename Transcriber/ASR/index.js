@@ -142,6 +142,7 @@ class ASR extends eventEmitter {
    * Enriches a transcription with speaker information based on diarization mode.
    *
    * - Native mode: Uses SpeakerTracker to identify speaker from LiveKit participant data
+   *   - Uses position in the audio stream (start field from ASR) to find the speaker
    *   - Provides real participant names and high accuracy
    *   - locutor: participant identity
    *   - locutorName: participant display name
@@ -160,16 +161,16 @@ class ASR extends eventEmitter {
     let locutorName = null;
 
     if (this.diarizationMode === 'native' && this.speakerTracker) {
-      // Native mode: use SpeakerTracker with LiveKit participant identity
-      // Use transcription timestamp and duration to find the dominant speaker
-      const timestamp = transcription.timestamp || Date.now();
-      const duration = transcription.duration || 1000; // Default 1 second if not provided
+      // Native mode: use SpeakerTracker with position in audio stream
+      // The 'start' field from ASR is in seconds, convert to ms
+      const positionMs = (transcription.start || 0) * 1000;
 
-      locutor = this.speakerTracker.getSpeakerForTimestamp(timestamp, duration);
+      const speaker = this.speakerTracker.getSpeakerAtPosition(positionMs);
 
-      if (locutor) {
-        locutorName = this.speakerTracker.getParticipantName(locutor);
-        this.logger.debug(`Native diarization: "${transcription.text.substring(0, 30)}..." -> ${locutorName}`);
+      if (speaker) {
+        locutor = speaker.id;
+        locutorName = speaker.name;
+        this.logger.debug(`Native diarization: "${transcription.text.substring(0, 30)}..." -> ${locutorName} (pos=${positionMs}ms)`);
       }
     } else if (this.diarizationMode === 'asr' && this.channel.transcriberProfile?.config?.diarization) {
       // ASR mode: use speaker ID from ASR provider (if available)

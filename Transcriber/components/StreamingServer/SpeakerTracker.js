@@ -1,21 +1,21 @@
 const { logger } = require('live-srt-lib')
 
 /**
- * SpeakerTracker - Tracks speaker activity from LiveKit native diarization.
+ * SpeakerTracker - Tracks speaker changes for native diarization.
  *
- * Receives speaker metadata from the LivekitBot AudioMixer and correlates
- * it with ASR transcription timestamps to determine who spoke each segment.
+ * Receives speaker change events from the bot (LivekitBot) and provides
+ * a simple lookup to find who was speaking at a given position in the audio stream.
  *
  * This enables native diarization with:
  * - Real-time speaker identification (no ASR delay)
  * - Actual participant names (not "Speaker 1", "Speaker 2")
- * - Higher accuracy than ASR-based diarization
+ * - Simple position-based correlation with ASR results
  */
 class SpeakerTracker {
   constructor () {
-    this.participants = new Map() // id -> { name, ... }
-    this.speakerEvents = [] // [{timestamp, position, speakers}]
-    this.maxEventAge = 60000 // 60 seconds retention
+    this.participants = new Map() // id -> { id, name }
+    this.changes = [] // [{position, speaker: {id, name} | null}]
+    this.maxRetentionMs = 60000 // 60 seconds retention
   }
 
   /**
@@ -33,74 +33,52 @@ class SpeakerTracker {
   }
 
   /**
-   * Adds a speaker event from the AudioMixer.
-   * @param {Object} event - { timestamp, position, speakers: [{id, energy}] }
+   * Records a speaker change event.
+   * @param {Object} event - { position: number, speaker: {id, name} | null }
    */
-  addSpeakerEvent (event) {
-    this.speakerEvents.push({
-      timestamp: event.timestamp,
+  addSpeakerChange (event) {
+    this.changes.push({
       position: event.position,
-      speakers: event.speakers
+      speaker: event.speaker
     })
 
     // Clean up old events to prevent memory leak
-    this.cleanupOldEvents()
+    this.cleanup()
   }
 
   /**
-   * Removes speaker events older than maxEventAge.
+   * Removes speaker changes older than maxRetentionMs based on position.
    */
-  cleanupOldEvents () {
-    const cutoff = Date.now() - this.maxEventAge
-    const originalLength = this.speakerEvents.length
-    this.speakerEvents = this.speakerEvents.filter(e => e.timestamp > cutoff)
+  cleanup () {
+    if (this.changes.length === 0) return
 
-    if (this.speakerEvents.length < originalLength) {
-      logger.debug(`SpeakerTracker: Cleaned up ${originalLength - this.speakerEvents.length} old events`)
+    // Get the latest position
+    const latestPosition = this.changes[this.changes.length - 1].position
+    const cutoff = latestPosition - this.maxRetentionMs
+
+    const originalLength = this.changes.length
+    this.changes = this.changes.filter(c => c.position > cutoff)
+
+    if (this.changes.length < originalLength) {
+      logger.debug(`SpeakerTracker: Cleaned up ${originalLength - this.changes.length} old changes`)
     }
   }
 
   /**
-   * Finds the dominant speaker for a given timestamp range.
-   * Used to associate ASR transcriptions with speakers.
+   * Finds the speaker at a given position in the audio stream.
+   * Returns the last speaker change that occurred before or at this position.
    *
-   * @param {number} timestamp - Start timestamp of the transcription segment
-   * @param {number} duration - Duration of the segment in milliseconds
-   * @returns {string|null} - Speaker ID with highest cumulative energy, or null
+   * @param {number} position - Position in ms in the audio stream (from ASR start/end)
+   * @returns {{id: string, name: string}|null} - Speaker info or null if silence/unknown
    */
-  getSpeakerForTimestamp (timestamp, duration) {
-    // Find events within the time range (with 100ms margin for timing variations)
-    const start = timestamp - 100
-    const end = timestamp + duration + 100
-
-    const relevantEvents = this.speakerEvents.filter(
-      e => e.timestamp >= start && e.timestamp <= end
-    )
-
-    if (relevantEvents.length === 0) {
-      return null
-    }
-
-    // Aggregate energy per speaker across all relevant events
-    const speakerEnergies = new Map()
-    for (const event of relevantEvents) {
-      for (const speaker of event.speakers) {
-        const current = speakerEnergies.get(speaker.id) || 0
-        speakerEnergies.set(speaker.id, current + speaker.energy)
+  getSpeakerAtPosition (position) {
+    // Find the last change that occurred at or before this position
+    for (let i = this.changes.length - 1; i >= 0; i--) {
+      if (this.changes[i].position <= position) {
+        return this.changes[i].speaker
       }
     }
-
-    // Find the speaker with the highest cumulative energy
-    let maxEnergy = 0
-    let dominantSpeaker = null
-    for (const [id, energy] of speakerEnergies) {
-      if (energy > maxEnergy) {
-        maxEnergy = energy
-        dominantSpeaker = id
-      }
-    }
-
-    return dominantSpeaker
+    return null
   }
 
   /**
@@ -122,11 +100,11 @@ class SpeakerTracker {
   }
 
   /**
-   * Checks if there are any speaker events.
+   * Checks if there are any speaker changes recorded.
    * @returns {boolean}
    */
-  hasSpeakerEvents () {
-    return this.speakerEvents.length > 0
+  hasSpeakerChanges () {
+    return this.changes.length > 0
   }
 
   /**
@@ -136,9 +114,9 @@ class SpeakerTracker {
   getStats () {
     return {
       participantCount: this.participants.size,
-      eventCount: this.speakerEvents.length,
-      oldestEventAge: this.speakerEvents.length > 0
-        ? Date.now() - this.speakerEvents[0].timestamp
+      changeCount: this.changes.length,
+      latestPosition: this.changes.length > 0
+        ? this.changes[this.changes.length - 1].position
         : 0
     }
   }
@@ -148,7 +126,7 @@ class SpeakerTracker {
    */
   clear () {
     this.participants.clear()
-    this.speakerEvents = []
+    this.changes = []
   }
 }
 

@@ -187,10 +187,12 @@ class BrokerClient extends Component {
       }
     });
 
-    // Speaker metadata handler - sends speaker activity for native diarization
-    bot.on('speaker', (metadata) => {
+    // Speaker change handler - sends speaker changes for native diarization
+    // Only emitted when the dominant speaker changes (including silence)
+    bot.on('speakerChanged', (event) => {
       if (ws.readyState === WebSocket.OPEN && websocketReady) {
-        ws.send(JSON.stringify(metadata));
+        ws.send(JSON.stringify(event));
+        logger.debug(`Speaker changed at position ${event.position}ms: ${event.speaker?.name || 'silence'}`);
       }
     });
 

@@ -48,7 +48,8 @@ class LivekitBotInstance extends EventEmitter {
 
     // Setup audio mixer events
     this.audioMixer.on('audio', (buffer) => this.emit('audio', buffer));
-    this.audioMixer.on('speaker', (metadata) => this.emit('speaker', metadata));
+    // Forward speaker change events (only emitted when dominant speaker changes)
+    this.audioMixer.on('speakerChanged', (event) => this.emit('speakerChanged', event));
 
     // Transcription segment management (partials/finals)
     // Same ID for consecutive partials, new ID after each final
@@ -440,8 +441,10 @@ class LivekitBotInstance extends EventEmitter {
       pcmBuffer = Buffer.from(frame.data.buffer);
     }
 
-    // Add audio to mixer with participant identity for speaker tracking
-    this.audioMixer.addAudio(participant.identity, pcmBuffer, Date.now());
+    // Add audio to mixer with participant identity and name for speaker tracking
+    const participantInfo = this.participants.get(participant.identity);
+    const participantName = participantInfo?.name || participant.name || participant.identity;
+    this.audioMixer.addAudio(participant.identity, pcmBuffer, Date.now(), participantName);
   }
 
   resampleAudio(frame) {

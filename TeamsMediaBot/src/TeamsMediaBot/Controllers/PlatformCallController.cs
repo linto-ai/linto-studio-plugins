@@ -68,16 +68,86 @@ namespace TeamsMediaBot.Controllers
         [Route(HttpRouteConstants.OnNotificationRequestRoute)]
         public async Task<HttpResponseMessage> OnNotificationRequestAsync()
         {
-            _logger.LogInformation("[PlatformCallController] Notification request received from {RemoteIp}",
-                HttpContext.Connection.RemoteIpAddress);
+            // Copy body to memory so we can read it for logging and still pass it to SDK
+            var memoryStream = new MemoryStream();
+            await Request.Body.CopyToAsync(memoryStream);
+            memoryStream.Position = 0;
+
+            // Log notification details
+            try
+            {
+                using var reader = new StreamReader(memoryStream, leaveOpen: true);
+                var body = await reader.ReadToEndAsync();
+                memoryStream.Position = 0;
+
+                using var doc = System.Text.Json.JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("value", out var valueArray) && valueArray.GetArrayLength() > 0)
+                {
+                    var first = valueArray[0];
+                    var changeType = first.TryGetProperty("changeType", out var ct) ? ct.GetString() : "?";
+                    var resourceUrl = first.TryGetProperty("resourceUrl", out var ru) ? ru.GetString() ?? "" : "";
+
+                    // Extract call ID from resourceUrl (format: /communications/calls/{callId}/...)
+                    var callId = "";
+                    var parts = resourceUrl.Split('/');
+                    var callsIndex = Array.IndexOf(parts, "calls");
+                    if (callsIndex >= 0 && callsIndex + 1 < parts.Length)
+                    {
+                        callId = parts[callsIndex + 1].Split('?')[0]; // Remove query params
+                        if (callId.Length > 8) callId = callId[..8]; // Truncate for readability
+                    }
+
+                    // Determine resource type and extract relevant info
+                    var info = "";
+                    if (resourceUrl.Contains("/participants"))
+                    {
+                        if (first.TryGetProperty("resourceData", out var rd))
+                        {
+                            var displayName = "";
+                            if (rd.TryGetProperty("info", out var infoObj) &&
+                                infoObj.TryGetProperty("identity", out var identity) &&
+                                identity.TryGetProperty("user", out var user) &&
+                                user.TryGetProperty("displayName", out var dn))
+                            {
+                                displayName = dn.GetString() ?? "";
+                            }
+                            var state = rd.TryGetProperty("state", out var st) ? st.GetString() : "";
+                            info = $"participant {displayName} {state}".Trim();
+                        }
+                        else
+                        {
+                            info = "participant";
+                        }
+                    }
+                    else if (resourceUrl.Contains("/calls"))
+                    {
+                        if (first.TryGetProperty("resourceData", out var rd) && rd.TryGetProperty("state", out var st))
+                        {
+                            info = $"call {st.GetString()}";
+                        }
+                        else
+                        {
+                            info = "call";
+                        }
+                    }
+                    else
+                    {
+                        info = resourceUrl.Split('/').LastOrDefault(s => !string.IsNullOrEmpty(s)) ?? "unknown";
+                    }
+
+                    _logger.LogInformation("[Notification] [{CallId}] {ChangeType} {Info}", callId, changeType, info);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[Notification] Parse error");
+            }
+
+            // Replace request body with our memory stream copy
+            Request.Body = memoryStream;
 
             var httpRequestMessage = HttpHelpers.ToHttpRequestMessage(this.Request);
-
-            // Pass the incoming notification to the sdk. The sdk takes care of what to do with it.
             var response = await _botService.Client.ProcessNotificationAsync(httpRequestMessage).ConfigureAwait(false);
-
-            _logger.LogInformation("[PlatformCallController] Notification request processed with status {StatusCode}",
-                response.StatusCode);
 
             return response;
         }

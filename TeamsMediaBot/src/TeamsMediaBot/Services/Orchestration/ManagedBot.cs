@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TeamsMediaBot.Bot;
 using TeamsMediaBot.Events;
 using TeamsMediaBot.Models.Mqtt;
@@ -53,10 +54,9 @@ namespace TeamsMediaBot.Services.Orchestration
         /// </summary>
         public DateTime CreatedAt { get; }
 
-        /// <summary>
-        /// Event handler for audio data from BotMediaStream.
-        /// </summary>
         private EventHandler<AudioDataEventArgs>? _audioHandler;
+        private EventHandler<ParticipantEventArgs>? _participantHandler;
+        private EventHandler<DominantSpeakerEventArgs>? _speakerHandler;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ManagedBot"/> class.
@@ -99,7 +99,7 @@ namespace TeamsMediaBot.Services.Orchestration
             };
 
             CallHandler.BotMediaStream.AudioDataReceived += _audioHandler;
-            _logger.LogInformation("[TeamsMediaBot] Audio handler wired for bot {Key}", Key);
+            _logger.LogDebug("[ManagedBot] Audio handler wired");
         }
 
         /// <summary>
@@ -111,7 +111,91 @@ namespace TeamsMediaBot.Services.Orchestration
             {
                 CallHandler.BotMediaStream.AudioDataReceived -= _audioHandler;
                 _audioHandler = null;
-                _logger.LogInformation("[TeamsMediaBot] Audio handler unwired for bot {Key}", Key);
+            }
+        }
+
+        /// <summary>
+        /// Wires up participant and dominant speaker handlers to forward events as JSON to WebSocket.
+        /// </summary>
+        public void WireSpeakerHandler()
+        {
+            if (CallHandler == null)
+            {
+                _logger.LogWarning("[TeamsMediaBot] Cannot wire speaker handler: CallHandler is null");
+                return;
+            }
+
+            _participantHandler = async (sender, e) =>
+            {
+                try
+                {
+                    string json;
+                    if (e.Action == "join")
+                    {
+                        json = JsonSerializer.Serialize(new
+                        {
+                            type = "participant",
+                            action = "join",
+                            participant = new { id = e.ParticipantId, name = e.DisplayName }
+                        });
+                    }
+                    else
+                    {
+                        json = JsonSerializer.Serialize(new
+                        {
+                            type = "participant",
+                            action = "leave",
+                            participant = new { id = e.ParticipantId }
+                        });
+                    }
+                    await WebSocket.SendJsonMessageAsync(json);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[TeamsMediaBot] Error sending participant event for bot {Key}", Key);
+                }
+            };
+
+            _speakerHandler = async (sender, e) =>
+            {
+                try
+                {
+                    var json = JsonSerializer.Serialize(new
+                    {
+                        type = "speaker",
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        speakers = new[] { new { id = e.ParticipantId, energy = 1 } }
+                    });
+                    await WebSocket.SendJsonMessageAsync(json);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[TeamsMediaBot] Error sending speaker event for bot {Key}", Key);
+                }
+            };
+
+            CallHandler.ParticipantChanged += _participantHandler;
+            CallHandler.DominantSpeakerChanged += _speakerHandler;
+            _logger.LogDebug("[ManagedBot] Speaker handler wired");
+        }
+
+        /// <summary>
+        /// Unwires the speaker and participant handlers.
+        /// </summary>
+        public void UnwireSpeakerHandler()
+        {
+            if (CallHandler != null)
+            {
+                if (_participantHandler != null)
+                {
+                    CallHandler.ParticipantChanged -= _participantHandler;
+                    _participantHandler = null;
+                }
+                if (_speakerHandler != null)
+                {
+                    CallHandler.DominantSpeakerChanged -= _speakerHandler;
+                    _speakerHandler = null;
+                }
             }
         }
 
@@ -121,6 +205,7 @@ namespace TeamsMediaBot.Services.Orchestration
             _disposed = true;
 
             UnwireAudioHandler();
+            UnwireSpeakerHandler();
             WebSocket.Dispose();
         }
     }

@@ -47,6 +47,12 @@ namespace TeamsMediaBot.Bot
         public event EventHandler<AudioDataEventArgs>? AudioDataReceived;
 
         /// <summary>
+        /// Event raised when the dominant speaker changes in the meeting.
+        /// Re-raises the SDK's DominantSpeakerChanged event for external consumers.
+        /// </summary>
+        public event EventHandler<DominantSpeakerChangedEventArgs>? DominantSpeakerChanged;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="BotMediaStream" /> class.
         /// </summary>
         /// <param name="mediaSession">The media session.</param>
@@ -78,6 +84,7 @@ namespace TeamsMediaBot.Bot
             }
 
             this._audioSocket.AudioMediaReceived += this.OnAudioMediaReceived;
+            this._audioSocket.DominantSpeakerChanged += this.OnDominantSpeakerChanged;
         }
 
         /// <summary>
@@ -104,9 +111,16 @@ namespace TeamsMediaBot.Bot
             if (this._audioSocket != null)
             {
                 this._audioSocket.AudioMediaReceived -= this.OnAudioMediaReceived;
+                this._audioSocket.DominantSpeakerChanged -= this.OnDominantSpeakerChanged;
             }
 
             return Task.CompletedTask;
+        }
+
+        private void OnDominantSpeakerChanged(object? sender, DominantSpeakerChangedEventArgs e)
+        {
+            _logger.LogTrace("DominantSpeakerChanged event received");
+            DominantSpeakerChanged?.Invoke(this, e);
         }
 
         /// <summary>

@@ -96,10 +96,14 @@ namespace TeamsMediaBot
 
             builder.Services.AddSingleton<IGraphLogger, GraphLogger>(_ => new GraphLogger("TeamsMediaBotWorker", redirectToTrace: true));
             builder.Services.AddSingleton<IBotMediaLogger, BotMediaLogger>();
-            builder.Logging.AddApplicationInsights();
+            builder.Logging.ClearProviders();
+            builder.Logging.AddSimpleConsole(options =>
+            {
+                options.SingleLine = true;
+                options.TimestampFormat = "HH:mm:ss ";
+                options.IncludeScopes = false;
+            });
             builder.Logging.SetMinimumLevel(LogLevel.Information);
-
-            builder.Logging.AddEventLog(config => config.SourceName = "Teams Media Bot Service");
 
             builder.Services.AddSingleton<IBotService, BotService>();
 
@@ -142,9 +146,8 @@ namespace TeamsMediaBot
             var callListeningUris = new HashSet<string>
             {
                 $"{botInternalHostingProtocol}://{baseDomain}:{appSettings.BotCallingInternalPort}/",
-                $"{botInternalHostingProtocol}://{baseDomain}:{appSettings.BotInternalPort}/"
-                // Port 443 temporairement retiré pour test
-                // $"{botInternalHostingProtocol}://{baseDomain}:{appSettings.BotInstanceExternalPort}/"
+                $"{botInternalHostingProtocol}://{baseDomain}:{appSettings.BotInternalPort}/",
+                $"{botInternalHostingProtocol}://{baseDomain}:{appSettings.BotInstanceExternalPort}/"
             };
 
             builder.WebHost.UseUrls(callListeningUris.ToArray());

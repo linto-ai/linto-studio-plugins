@@ -1,10 +1,13 @@
-﻿using TeamsMediaBot.Util;
+﻿using System.Collections.Concurrent;
+using TeamsMediaBot.Events;
+using TeamsMediaBot.Util;
 using Microsoft.Graph;
 using Microsoft.Graph.Communications.Calls;
 using Microsoft.Graph.Communications.Calls.Media;
 using Microsoft.Graph.Communications.Common.Telemetry;
 using Microsoft.Graph.Communications.Resources;
 using Microsoft.Graph.Models;
+using Microsoft.Skype.Bots.Media;
 using System.Timers;
 
 namespace TeamsMediaBot.Bot
@@ -27,6 +30,11 @@ namespace TeamsMediaBot.Bot
         public BotMediaStream BotMediaStream { get; private set; }
 
         private readonly ILogger _logger;
+        private readonly ConcurrentDictionary<string, (string DisplayName, uint? Msi)> _participants = new();
+        private readonly ConcurrentDictionary<uint, string> _msiToParticipantId = new();
+
+        public event EventHandler<ParticipantEventArgs>? ParticipantChanged;
+        public event EventHandler<Events.DominantSpeakerEventArgs>? DominantSpeakerChanged;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
@@ -50,6 +58,7 @@ namespace TeamsMediaBot.Bot
                 statefulCall.Id, statefulCall.Resource?.ChatInfo?.ThreadId ?? "unknown");
 
             this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings);
+            this.BotMediaStream.DominantSpeakerChanged += this.OnDominantSpeakerChanged;
         }
 
         /// <inheritdoc/>
@@ -66,6 +75,11 @@ namespace TeamsMediaBot.Bot
             this.Call.OnUpdated -= this.CallOnUpdated;
             this.Call.Participants.OnUpdated -= this.ParticipantsOnUpdated;
 
+            if (this.BotMediaStream != null)
+            {
+                this.BotMediaStream.DominantSpeakerChanged -= this.OnDominantSpeakerChanged;
+            }
+
             this.BotMediaStream?.ShutdownAsync().ForgetAndLogExceptionAsync(this.GraphLogger);
             _logger.LogInformation("[CallHandler] CallHandler disposed");
         }
@@ -79,83 +93,18 @@ namespace TeamsMediaBot.Bot
         {
             var oldState = e.OldResource.State;
             var newState = e.NewResource.State;
-            var resultCode = e.NewResource.ResultInfo?.Code;
             var resultMessage = e.NewResource.ResultInfo?.Message;
-            var resultSubcode = e.NewResource.ResultInfo?.Subcode;
 
-            _logger.LogInformation("[CallHandler] === CALL STATE CHANGE ===");
-            _logger.LogInformation("[CallHandler] Call ID: {CallId}", sender.Id);
-            _logger.LogInformation("[CallHandler] State: {OldState} -> {NewState}", oldState, newState);
-            if (resultCode.HasValue)
-            {
-                _logger.LogInformation("[CallHandler] Result Code: {Code}, Subcode: {Subcode}",
-                    resultCode, resultSubcode);
-            }
-            if (!string.IsNullOrEmpty(resultMessage))
-            {
-                _logger.LogInformation("[CallHandler] Result Message: {Message}", resultMessage);
-            }
+            if (oldState == newState) return;
 
+            _logger.LogInformation("[Call] {OldState} -> {NewState}", oldState, newState);
             GraphLogger.Info($"Call status updated to {newState} - {resultMessage}");
 
-            if (oldState != newState && newState == CallState.Established)
+            if (newState == CallState.Terminated && BotMediaStream != null)
             {
-                _logger.LogInformation("[CallHandler] Call is now ESTABLISHED - bot is in the meeting");
+                _logger.LogWarning("[Call] Terminated: {Reason}", resultMessage ?? "unknown");
+                await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
             }
-
-            if (oldState == CallState.Established && newState == CallState.Terminated)
-            {
-                _logger.LogWarning("[CallHandler] === CALL TERMINATED ===");
-                _logger.LogWarning("[CallHandler] Bot was removed from the meeting");
-                _logger.LogWarning("[CallHandler] Reason: {Message}", resultMessage ?? "unknown");
-
-                if (BotMediaStream != null)
-                {
-                    _logger.LogInformation("[CallHandler] Shutting down BotMediaStream...");
-                    await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
-                }
-            }
-
-            // Log other state transitions for debugging
-            if (newState == CallState.Terminating)
-            {
-                _logger.LogWarning("[CallHandler] Call is TERMINATING - bot is being disconnected");
-            }
-            else if (newState == CallState.Establishing)
-            {
-                _logger.LogInformation("[CallHandler] Call is ESTABLISHING - connecting to meeting...");
-            }
-        }
-
-        /// <summary>
-        /// Creates the participant update json.
-        /// </summary>
-        /// <param name="participantId">The participant identifier.</param>
-        /// <param name="participantDisplayName">Display name of the participant.</param>
-        /// <returns>System.String.</returns>
-        private string createParticipantUpdateJson(string participantId, string participantDisplayName = "")
-        {
-            if (participantDisplayName.Length == 0)
-                return "{" + String.Format($"\"Id\": \"{participantId}\"") + "}";
-            else
-                return "{" + String.Format($"\"Id\": \"{participantId}\", \"DisplayName\": \"{participantDisplayName}\"") + "}";
-        }
-
-        /// <summary>
-        /// Updates the participant.
-        /// </summary>
-        /// <param name="participants">The participants.</param>
-        /// <param name="participant">The participant.</param>
-        /// <param name="added">if set to <c>true</c> [added].</param>
-        /// <param name="participantDisplayName">Display name of the participant.</param>
-        /// <returns>System.String.</returns>
-        private string updateParticipant(List<IParticipant> participants, IParticipant participant, bool added, string participantDisplayName = "")
-        {
-            if (added)
-                participants.Add(participant);
-            else
-                participants.Remove(participant);
-            return createParticipantUpdateJson(participant.Id, participantDisplayName);
         }
 
         /// <summary>
@@ -167,22 +116,72 @@ namespace TeamsMediaBot.Bot
         {
             foreach (var participant in eventArgs)
             {
-                var json = string.Empty;
-
-                // todo remove the cast with the new graph implementation,
-                // for now we want the bot to only subscribe to "real" participants
                 var participantDetails = participant.Resource.Info.Identity.User;
+                string? displayName = null;
+                bool isUsable = false;
 
                 if (participantDetails != null)
                 {
-                    json = updateParticipant(this.BotMediaStream.participants, participant, added, participantDetails.DisplayName);
+                    displayName = participantDetails.DisplayName ?? "";
+                    isUsable = true;
                 }
                 else if (participant.Resource.Info.Identity.AdditionalData?.Count > 0)
                 {
-                    if (CheckParticipantIsUsable(participant))
+                    isUsable = CheckParticipantIsUsable(participant);
+                }
+
+                if (!isUsable) continue;
+
+                displayName ??= "";
+                var participantId = participant.Id;
+
+                if (added)
+                {
+                    // Extract MSI from media streams
+                    uint? msi = null;
+                    try
                     {
-                        json = updateParticipant(this.BotMediaStream.participants, participant, added);
+                        var mediaStreams = participant.Resource.MediaStreams;
+                        if (mediaStreams != null)
+                        {
+                            foreach (var ms in mediaStreams)
+                            {
+                                if (ms.MediaType == Modality.Audio && ms.SourceId != null)
+                                {
+                                    if (uint.TryParse(ms.SourceId, out var parsedMsi))
+                                    {
+                                        msi = parsedMsi;
+                                        _msiToParticipantId[parsedMsi] = participantId;
+                                        _logger.LogDebug("[Participant] MSI {Msi} -> {Name}", parsedMsi, displayName);
+                                    }
+                                }
+                            }
+                        }
                     }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[Participant] Error extracting MSI for {Id}", participantId);
+                    }
+
+                    _participants[participantId] = (displayName, msi);
+                    this.BotMediaStream.participants.Add(participant);
+
+                    _logger.LogInformation("[Participant] + {Name}", displayName);
+                    ParticipantChanged?.Invoke(this, new ParticipantEventArgs(participantId, displayName, "join"));
+                }
+                else
+                {
+                    if (_participants.TryRemove(participantId, out var removed))
+                    {
+                        if (removed.Msi.HasValue)
+                        {
+                            _msiToParticipantId.TryRemove(removed.Msi.Value, out _);
+                        }
+                    }
+                    this.BotMediaStream.participants.Remove(participant);
+
+                    _logger.LogInformation("[Participant] - {Name}", displayName);
+                    ParticipantChanged?.Invoke(this, new ParticipantEventArgs(participantId, displayName, "leave"));
                 }
             }
         }
@@ -190,19 +189,40 @@ namespace TeamsMediaBot.Bot
         /// <summary>
         /// Event fired when the participants collection has been updated.
         /// </summary>
-        /// <param name="sender">Participants collection.</param>
-        /// <param name="args">Event args containing added and removed participants.</param>
         public void ParticipantsOnUpdated(IParticipantCollection sender, CollectionEventArgs<IParticipant> args)
         {
             updateParticipants(args.AddedResources);
             updateParticipants(args.RemovedResources, false);
         }
 
-        /// <summary>
-        /// Checks the participant is usable.
-        /// </summary>
-        /// <param name="p">The p.</param>
-        /// <returns><c>true</c> if XXXX, <c>false</c> otherwise.</returns>
+        private void OnDominantSpeakerChanged(object? sender, DominantSpeakerChangedEventArgs e)
+        {
+            try
+            {
+                var msi = e.CurrentDominantSpeaker;
+                if (_msiToParticipantId.TryGetValue(msi, out var participantId))
+                {
+                    var displayName = "";
+                    if (_participants.TryGetValue(participantId, out var info))
+                    {
+                        displayName = info.DisplayName;
+                    }
+
+                    _logger.LogTrace("[CallHandler] Dominant speaker: {Id} ({Name}) MSI={Msi}",
+                        participantId, displayName, msi);
+                    DominantSpeakerChanged?.Invoke(this, new Events.DominantSpeakerEventArgs(participantId, displayName));
+                }
+                else
+                {
+                    _logger.LogDebug("[Speaker] Unknown MSI {Msi}", msi);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[CallHandler] Error handling dominant speaker change");
+            }
+        }
+
         private bool CheckParticipantIsUsable(IParticipant p)
         {
             foreach (var i in p.Resource.Info.Identity.AdditionalData)

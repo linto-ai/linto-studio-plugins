@@ -121,6 +121,23 @@ namespace TeamsMediaBot.Services.Orchestration
             }
         }
 
+        private async void HandleAutoLeaveRequested(object? sender, EventArgs e)
+        {
+            if (sender is ManagedBot bot)
+            {
+                _logger.LogWarning("[Orchestrator] Auto-leave triggered for {Key} (meeting empty timeout)", bot.Key);
+                try
+                {
+                    await StopBotAsync(bot.SessionId, bot.ChannelId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[TeamsMediaBot] Error handling auto-leave for session {SessionId}",
+                        bot.SessionId);
+                }
+            }
+        }
+
         private async Task StartBotAsync(StartBotPayload payload)
         {
             var key = $"{payload.Session.Id}_{payload.Channel.Id}";
@@ -211,6 +228,9 @@ namespace TeamsMediaBot.Services.Orchestration
                     managedBot.CallHandler = callHandler;
                     managedBot.WireAudioHandler();
                     managedBot.WireSpeakerHandler();
+
+                    // Subscribe to auto-leave event for empty meeting handling
+                    managedBot.AutoLeaveRequested += HandleAutoLeaveRequested;
                 }
                 else
                 {
@@ -270,6 +290,9 @@ namespace TeamsMediaBot.Services.Orchestration
                 _logger.LogWarning("[Orchestrator] Bot not found: {Key}", key);
                 return;
             }
+
+            // Unsubscribe from auto-leave event
+            managedBot.AutoLeaveRequested -= HandleAutoLeaveRequested;
 
             // Publish meeting-left event
             if (!string.IsNullOrEmpty(managedBot.ThreadId))

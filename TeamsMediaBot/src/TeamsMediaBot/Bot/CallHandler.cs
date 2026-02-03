@@ -33,8 +33,14 @@ namespace TeamsMediaBot.Bot
         private readonly ConcurrentDictionary<string, (string DisplayName, uint? Msi)> _participants = new();
         private readonly ConcurrentDictionary<uint, string> _msiToParticipantId = new();
 
+        // Track all participants for empty meeting detection (including bots)
+        private readonly ConcurrentDictionary<string, bool> _allParticipants = new(); // participantId -> isHuman
+        private CancellationTokenSource? _emptyMeetingCts;
+        private const int EmptyMeetingTimeoutSeconds = 60;
+
         public event EventHandler<ParticipantEventArgs>? ParticipantChanged;
         public event EventHandler<Events.DominantSpeakerEventArgs>? DominantSpeakerChanged;
+        public event EventHandler? MeetingEmptyTimeout;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
@@ -71,6 +77,10 @@ namespace TeamsMediaBot.Bot
         protected override void Dispose(bool disposing)
         {
             _logger.LogInformation("[CallHandler] Disposing CallHandler for call {CallId}", this.Call?.Id);
+
+            // Cancel empty meeting timer
+            CancelEmptyMeetingTimer();
+
             base.Dispose(disposing);
             this.Call.OnUpdated -= this.CallOnUpdated;
             this.Call.Participants.OnUpdated -= this.ParticipantsOnUpdated;
@@ -164,6 +174,7 @@ namespace TeamsMediaBot.Bot
                     }
 
                     _participants[participantId] = (displayName, msi);
+                    _allParticipants[participantId] = true; // Mark as human (usable participants are humans)
                     this.BotMediaStream.participants.Add(participant);
 
                     _logger.LogInformation("[Participant] + {Name}", displayName);
@@ -178,12 +189,16 @@ namespace TeamsMediaBot.Bot
                             _msiToParticipantId.TryRemove(removed.Msi.Value, out _);
                         }
                     }
+                    _allParticipants.TryRemove(participantId, out _);
                     this.BotMediaStream.participants.Remove(participant);
 
                     _logger.LogInformation("[Participant] - {Name}", displayName);
                     ParticipantChanged?.Invoke(this, new ParticipantEventArgs(participantId, displayName, "leave"));
                 }
             }
+
+            // Check if meeting is now empty (no human participants)
+            CheckEmptyMeeting();
         }
 
         /// <summary>
@@ -230,6 +245,70 @@ namespace TeamsMediaBot.Bot
                     return true;
 
             return false;
+        }
+
+        /// <summary>
+        /// Checks if the meeting is empty (no human participants) and starts/cancels auto-leave timer accordingly.
+        /// </summary>
+        private void CheckEmptyMeeting()
+        {
+            // Count human participants (those tracked in _allParticipants with value true)
+            var humanCount = _allParticipants.Count(kvp => kvp.Value);
+
+            if (humanCount == 0)
+            {
+                // No human participants, start timer if not already running
+                if (_emptyMeetingCts == null)
+                {
+                    _logger.LogWarning("[CallHandler] Meeting empty, auto-leave in {Seconds}s", EmptyMeetingTimeoutSeconds);
+                    StartEmptyMeetingTimer();
+                }
+            }
+            else
+            {
+                // Human participants present, cancel timer if running
+                if (_emptyMeetingCts != null)
+                {
+                    _logger.LogInformation("[CallHandler] Participant joined, cancelling auto-leave");
+                    CancelEmptyMeetingTimer();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Starts the empty meeting timer that triggers auto-leave after timeout.
+        /// </summary>
+        private async void StartEmptyMeetingTimer()
+        {
+            _emptyMeetingCts = new CancellationTokenSource();
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(EmptyMeetingTimeoutSeconds), _emptyMeetingCts.Token);
+                _logger.LogWarning("[CallHandler] Meeting empty timeout - triggering auto-leave");
+                MeetingEmptyTimeout?.Invoke(this, EventArgs.Empty);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("[CallHandler] Auto-leave cancelled - participant joined");
+            }
+            finally
+            {
+                _emptyMeetingCts?.Dispose();
+                _emptyMeetingCts = null;
+            }
+        }
+
+        /// <summary>
+        /// Cancels the empty meeting timer if running.
+        /// </summary>
+        private void CancelEmptyMeetingTimer()
+        {
+            if (_emptyMeetingCts != null)
+            {
+                _emptyMeetingCts.Cancel();
+                _emptyMeetingCts.Dispose();
+                _emptyMeetingCts = null;
+            }
         }
     }
 }

@@ -134,7 +134,7 @@ namespace TeamsMediaBot.Bot
             };
 
             var notificationUrl = new Uri($"https://{_settings.ServiceDnsName}:{_settings.BotInstanceExternalPort}/{HttpRouteConstants.CallSignalingRoutePrefix}/{HttpRouteConstants.OnNotificationRequestRoute}");
-            _logger.LogInformation($"NotificationUrl: ${notificationUrl}");
+            _logger.LogInformation("NotificationUrl: {NotificationUrl}", notificationUrl);
 
             builder.SetAuthenticationProvider(authProvider);
             builder.SetNotificationUrl(notificationUrl);
@@ -210,9 +210,7 @@ namespace TeamsMediaBot.Bot
         /// <returns>The <see cref="ICall" /> that was requested to join.</returns>
         public async Task<ICall> JoinCallAsync(JoinCallBody joinCallBody)
         {
-            _logger.LogInformation("[BotService] === JOINING CALL ===");
-            _logger.LogInformation("[BotService] Join URL: {Url}", joinCallBody.JoinUrl);
-            _logger.LogInformation("[BotService] Display Name: {Name}", joinCallBody.DisplayName ?? "default");
+            _logger.LogInformation("[BotService] Joining call: {Url}", joinCallBody.JoinUrl);
 
             // A tracking id for logging purposes. Helps identify this call in logs.
             var scenarioId = Guid.NewGuid();
@@ -244,20 +242,11 @@ namespace TeamsMediaBot.Bot
                 TenantId = tenantId,
             };
 
-            if (!string.IsNullOrWhiteSpace(joinCallBody.DisplayName))
-            {
-                // Teams client does not allow changing of ones own display name.
-                // If display name is specified, we join as anonymous (guest) user
-                // with the specified display name.  This will put bot into lobby
-                // unless lobby bypass is disabled.
-                joinParams.GuestIdentity = new Identity
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    DisplayName = joinCallBody.DisplayName,
-                };
-                _logger.LogInformation("[BotService] Using guest identity with display name: {Name}",
-                    joinCallBody.DisplayName);
-            }
+            // NOTE: Setting DisplayName on GuestIdentity causes error 580
+            // "Did not receive valid response for JoinCall request from call modality controller"
+            // when bot is admitted from lobby. Join without GuestIdentity to use app identity.
+            // See: https://techcommunity.microsoft.com/discussions/teamsdeveloper/meeting-bot-issue-did-not-receive-valid-response-for-joincall-request-from-call-/4144076
+            _logger.LogInformation("[BotService] Joining as application identity");
 
             if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId, out CallHandler? call))
             {

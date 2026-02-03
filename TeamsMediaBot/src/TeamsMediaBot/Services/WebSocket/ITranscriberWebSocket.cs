@@ -41,6 +41,11 @@ namespace TeamsMediaBot.Services.WebSocket
         Task SendAudioAsync(byte[] audioData, CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Sends a JSON text message to the Transcriber.
+        /// </summary>
+        Task SendJsonMessageAsync(string jsonMessage, CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Closes the WebSocket connection.
         /// </summary>
         Task CloseAsync();

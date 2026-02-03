@@ -16,6 +16,7 @@ class MultiplexedRTMPServer extends EventEmitter {
     this.app = app;
     this.nms = null;
     this.workers = {};
+    this.isRunning = false;
   }
 
   setSessions(sessions) {
@@ -23,6 +24,10 @@ class MultiplexedRTMPServer extends EventEmitter {
   }
 
   async start() {
+      if (this.isRunning) {
+          logger.info(`RTMP server already running on ${STREAMING_HOST}:${STREAMING_RTMP_TCP_PORT}, skipping start`);
+          return;
+      }
       try {
           const config = {
             rtmp: {
@@ -46,6 +51,7 @@ class MultiplexedRTMPServer extends EventEmitter {
             this.cleanupConnection(id);
 
           });
+          this.isRunning = true;
           logger.info(`RTMP server started on ${STREAMING_HOST}:${STREAMING_RTMP_TCP_PORT}`);
       } catch (error) {
           logger.error("Error starting RTMP server", error);

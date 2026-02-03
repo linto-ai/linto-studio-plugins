@@ -18,6 +18,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
     this.wss = null;
     this.workers = [];
     this.runningSessions = {}
+    this.isRunning = false;
   }
 
   // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
@@ -42,11 +43,16 @@ class MultiplexedWebsocketServer extends EventEmitter {
   }
 
   async start() {
+      if (this.isRunning) {
+          logger.info(`WS server already running on ${STREAMING_HOST}:${STREAMING_WS_TCP_PORT}, skipping start`);
+          return;
+      }
       try {
           this.wss = new WebSocket.Server({ port: parseInt(STREAMING_WS_TCP_PORT), host: STREAMING_HOST});
           this.wss.on("connection", (ws, req) => {
               this.onConnection(ws, req);
           });
+          this.isRunning = true;
           logger.info(`WS server started on ${STREAMING_HOST}:${STREAMING_WS_TCP_PORT}`);
       } catch (error) {
           logger.error("Error starting WS server", error);

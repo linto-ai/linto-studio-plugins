@@ -12,6 +12,11 @@
         "quickMeeting": {
           "type": "boolean",
           "default": null
+        },
+        "meta": {
+          "type": "object",
+          "description": "Custom metadata for the transcriber profile",
+          "default": null
         }
       },
       "required": [
@@ -53,6 +58,10 @@
         "quickMeeting": {
           "type": "boolean",
           "description": "True if this transcriber profile is available for a quick meeting"
+        },
+        "meta": {
+          "type": "object",
+          "description": "Custom metadata for the transcriber profile"
         },
         "createdAt": {
           "type": "string",
@@ -183,6 +192,10 @@
         "quickMeeting": {
           "type": "boolean",
           "description": "True if this transcriber profile is available for a quick meeting"
+        },
+        "meta": {
+          "type": "object",
+          "description": "Custom metadata for the transcriber profile"
         }
       }
     },

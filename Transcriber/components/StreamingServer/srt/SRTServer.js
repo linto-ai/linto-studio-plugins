@@ -19,6 +19,7 @@ class MultiplexedSRTServer extends EventEmitter {
         this.runningSessions = {}
         this.runningChannels = {}
         this.channelTimeoutSeconds = 5;
+        this.isRunning = false;
 
         setInterval(() => {
             this.checkTimedOutChannel();
@@ -57,6 +58,10 @@ class MultiplexedSRTServer extends EventEmitter {
     }
 
     async start() {
+        if (this.isRunning) {
+            logger.info(`SRT server already running on ${STREAMING_HOST}:${STREAMING_SRT_UDP_PORT}, skipping start`);
+            return;
+        }
         try {
             this.asyncSrtServer = new SRTServer(parseInt(STREAMING_SRT_UDP_PORT), STREAMING_HOST);
             this.asyncSrtServer.on("connection", (connection) => {
@@ -70,6 +75,7 @@ class MultiplexedSRTServer extends EventEmitter {
                 await this.server.setSocketFlags([SRT.SRTO_PASSPHRASE, SRT.SRTO_PBKEYLEN], [STREAMING_PASSPHRASE, keyLength]);
             }
             this.server.open();
+            this.isRunning = true;
             // log passphrase if set
             logger.info(`SRT server started on ${STREAMING_HOST}:${STREAMING_SRT_UDP_PORT} ${hasPassphrase ? 'with passphrase' : ''}`);
         } catch (error) {

@@ -17,6 +17,7 @@ class BrokerClient extends Component {
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.sessions = []; //sessions will be updated by the system/out/sessions/statuses messages (see controllers/MqttMessages.js)
     this.uniqueId = getAppId(); //unique ID for this instance / path for MQTT
+    this.serversStarted = false; // Track if streaming servers have been started (to handle MQTT reconnection)
 
     this.domainSpecificValues = {
       srt_mode: this.srt_mode,
@@ -76,9 +77,16 @@ class BrokerClient extends Component {
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs });
     this.client.registerDomainSpecificValues(this.domainSpecificValues)
     this.client.on("ready", () => {
-      // status will be published only when scheduler online message is received
-      this.state = WAITING_SCHEDULER;
-      logger.info(`${this.uniqueId} Connected to broker - WAITING_SCHEDULER`)
+      if (this.serversStarted) {
+        // Reconnection: servers are already running, go directly to READY
+        this.state = BrokerClient.states.READY;
+        this.client.publishStatus();
+        logger.info(`${this.uniqueId} Reconnected to broker - READY (servers already running)`)
+      } else {
+        // First connection: wait for scheduler to start servers
+        this.state = WAITING_SCHEDULER;
+        logger.info(`${this.uniqueId} Connected to broker - WAITING_SCHEDULER`)
+      }
     });
     this.client.on("error", (err) => {
       this.state = ERROR;

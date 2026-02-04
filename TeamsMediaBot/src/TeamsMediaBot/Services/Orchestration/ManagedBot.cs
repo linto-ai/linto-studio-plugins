@@ -166,13 +166,16 @@ namespace TeamsMediaBot.Services.Orchestration
             {
                 try
                 {
+                    // Use audio position for correlation with ASR transcriptions
+                    var position = WebSocket.AudioPositionMs;
                     var json = JsonSerializer.Serialize(new
                     {
-                        type = "speaker",
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        speakers = new[] { new { id = e.ParticipantId, energy = 1 } }
+                        type = "speakerChanged",
+                        position = position,
+                        speaker = new { id = e.ParticipantId, name = e.DisplayName }
                     });
                     await WebSocket.SendJsonMessageAsync(json);
+                    _logger.LogDebug("[ManagedBot] Speaker changed at position {Position}ms: {Name}", position, e.DisplayName);
                 }
                 catch (Exception ex)
                 {

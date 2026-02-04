@@ -578,7 +578,13 @@
 
       console.log('[TeamsApp] Session created:', sessionData)
 
-      // 4. Connect to transcriptions
+      // 4. Update language selector with selected translations
+      const selectedTranslations = getSelectedTranslations()
+      if (selectedTranslations.length > 0) {
+        updateLanguageOptions(selectedTranslations)
+      }
+
+      // 5. Connect to transcriptions
       transcriptionManager.clear()
       showStopTranscriptionUI()
       await connectToTranscriptions()
@@ -786,22 +792,51 @@
    */
   function getLanguageName(code) {
     const names = {
-      'en': 'English',
-      'en-US': 'English (US)',
-      'en-GB': 'English (UK)',
-      'fr': 'French',
-      'fr-FR': 'French (France)',
+      'ar': 'Arabic',
+      'bg': 'Bulgarian',
+      'bs': 'Bosnian',
+      'cs': 'Czech',
+      'cy': 'Welsh',
+      'da': 'Danish',
       'de': 'German',
       'de-DE': 'German (Germany)',
+      'el': 'Greek',
+      'en': 'English',
+      'en-GB': 'English (UK)',
+      'en-US': 'English (US)',
       'es': 'Spanish',
       'es-ES': 'Spanish (Spain)',
+      'et': 'Estonian',
+      'eu': 'Basque',
+      'fi': 'Finnish',
+      'fr': 'French',
+      'fr-FR': 'French (France)',
+      'gl': 'Galician',
+      'hi': 'Hindi',
+      'hu': 'Hungarian',
+      'id': 'Indonesian',
       'it': 'Italian',
-      'pt': 'Portuguese',
-      'zh': 'Chinese',
       'ja': 'Japanese',
       'ko': 'Korean',
-      'ar': 'Arabic',
-      'ru': 'Russian'
+      'lt': 'Lithuanian',
+      'lv': 'Latvian',
+      'mk': 'Macedonian',
+      'nb': 'Norwegian',
+      'nl': 'Dutch',
+      'pl': 'Polish',
+      'pt': 'Portuguese',
+      'ro': 'Romanian',
+      'ru': 'Russian',
+      'sk': 'Slovak',
+      'sl': 'Slovenian',
+      'sr': 'Serbian',
+      'sv': 'Swedish',
+      'th': 'Thai',
+      'tr': 'Turkish',
+      'uk': 'Ukrainian',
+      'vi': 'Vietnamese',
+      'zh': 'Chinese',
+      'zhh': 'Chinese (Traditional)'
     }
     return names[code] || code
   }

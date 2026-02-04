@@ -504,7 +504,9 @@ module.exports = function (app) {
       const meetingRegistry = app.components['MeetingRegistry']
       if (meetingRegistry) {
         const normalizedThreadId = normalizeThreadId(threadId)
-        meetingRegistry.registerMeeting(normalizedThreadId, sessionId, channelId)
+        meetingRegistry.registerMeeting(normalizedThreadId, sessionId, channelId, {
+          translations: Array.isArray(translations) ? translations : []
+        })
         logger.info(`[TeamsAppService] Meeting registered: threadId=${normalizedThreadId}, session=${sessionId}`)
       }
 

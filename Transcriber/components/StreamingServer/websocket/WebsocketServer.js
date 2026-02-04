@@ -241,12 +241,14 @@ class MultiplexedWebsocketServer extends EventEmitter {
   }
 
   /**
-   * Check if a message is JSON (starts with '{')
+   * Check if a message is JSON (starts with '{"')
+   * We check for '{"' (0x7B 0x22) to avoid false positives with audio data
+   * that might start with '{' by chance.
    */
   isJsonMessage(message) {
-      if (Buffer.isBuffer(message) && message.length > 0) {
-          // JSON starts with '{' (0x7B)
-          return message[0] === 0x7B;
+      if (Buffer.isBuffer(message) && message.length > 1) {
+          // JSON object starts with '{"' (0x7B 0x22)
+          return message[0] === 0x7B && message[1] === 0x22;
       }
       return false;
   }

@@ -38,12 +38,26 @@ namespace TeamsMediaBot.Services.WebSocket
         private const int SampleRate = 16000;
         private const int BytesPerSample = 2;
 
+        // Position tracking for native diarization (in milliseconds)
+        private long _audioPositionMs;
+        private readonly object _positionLock = new();
+
         public TranscriberWebSocket(ILogger<TranscriberWebSocket> logger)
         {
             _logger = logger;
             _audioBuffer = new ConcurrentQueue<byte[]>();
             _maxBufferSeconds = 10; // MAX_AUDIO_BUFFER from config
             _bytesPerSecond = SampleRate * BytesPerSample; // 32000 bytes/sec
+            _audioPositionMs = 0;
+        }
+
+        /// <summary>
+        /// Gets the current audio stream position in milliseconds.
+        /// Used for correlating speaker changes with audio position.
+        /// </summary>
+        public long AudioPositionMs
+        {
+            get { lock (_positionLock) { return _audioPositionMs; } }
         }
 
         /// <inheritdoc/>
@@ -236,6 +250,14 @@ namespace TeamsMediaBot.Services.WebSocket
                     WebSocketMessageType.Binary,
                     true,
                     cancellationToken);
+
+                // Update audio position for diarization correlation
+                // Position in ms = (bytes / bytesPerSample) / sampleRate * 1000
+                var durationMs = (audioData.Length / BytesPerSample) * 1000 / SampleRate;
+                lock (_positionLock)
+                {
+                    _audioPositionMs += durationMs;
+                }
             }
             catch (WebSocketException ex)
             {

@@ -16,6 +16,12 @@ namespace TeamsMediaBot.Services.WebSocket
         bool IsConnecting { get; }
 
         /// <summary>
+        /// Gets the current audio stream position in milliseconds.
+        /// Used for correlating speaker changes with audio position for native diarization.
+        /// </summary>
+        long AudioPositionMs { get; }
+
+        /// <summary>
         /// Event raised when the WebSocket connection is closed.
         /// </summary>
         event EventHandler? OnClosed;

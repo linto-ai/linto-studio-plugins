@@ -29,6 +29,8 @@ namespace TeamsMediaBot
     {
         private readonly ILogger<BotHost> _logger;
         private WebApplication? _app;
+        private IBotOrchestratorService? _orchestrator;
+        private IBotService? _botService;
 
         /// <summary>
         /// Bot Host constructor
@@ -162,15 +164,13 @@ namespace TeamsMediaBot
 
             _app = builder.Build();
 
-            using (var scope = _app.Services.CreateScope())
-            {
-                var bot = scope.ServiceProvider.GetRequiredService<IBotService>();
-                bot.Initialize();
+            // Get singleton services and store references for shutdown
+            _botService = _app.Services.GetRequiredService<IBotService>();
+            _botService.Initialize();
 
-                // Initialize the bot orchestrator (MQTT connection and command handling)
-                var orchestrator = scope.ServiceProvider.GetRequiredService<IBotOrchestratorService>();
-                await orchestrator.InitializeAsync();
-            }
+            // Initialize the bot orchestrator (MQTT connection and command handling)
+            _orchestrator = _app.Services.GetRequiredService<IBotOrchestratorService>();
+            await _orchestrator.InitializeAsync();
 
             // Configure the HTTP request pipeline.
             if (_app.Environment.IsDevelopment())
@@ -200,21 +200,35 @@ namespace TeamsMediaBot
         /// <returns></returns>
         public async Task StopAsync()
         {
-            if (_app != null)
+            try
             {
-                using (var scope = _app.Services.CreateScope())
-                {
-                    // Shutdown the orchestrator first (stops all managed bots)
-                    var orchestrator = scope.ServiceProvider.GetRequiredService<IBotOrchestratorService>();
-                    await orchestrator.ShutdownAsync();
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
-                    var bot = scope.ServiceProvider.GetRequiredService<IBotService>();
-                    // terminate all calls and dispose of the call client
-                    await bot.Shutdown();
+                // Shutdown the orchestrator first (stops all managed bots)
+                if (_orchestrator != null)
+                {
+                    await _orchestrator.ShutdownAsync();
                 }
 
-                // stop the bot web application
-                await _app.StopAsync();
+                // Terminate all calls and dispose of the call client
+                if (_botService != null)
+                {
+                    await _botService.Shutdown();
+                }
+
+                // Stop the bot web application
+                if (_app != null)
+                {
+                    await _app.StopAsync(cts.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Shutdown timeout, forcing exit");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error during shutdown: {Message}", ex.Message);
             }
         }
     }

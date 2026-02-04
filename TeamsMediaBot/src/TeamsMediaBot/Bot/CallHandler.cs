@@ -37,6 +37,7 @@ namespace TeamsMediaBot.Bot
         private readonly ConcurrentDictionary<string, bool> _allParticipants = new(); // participantId -> isHuman
         private CancellationTokenSource? _emptyMeetingCts;
         private const int EmptyMeetingTimeoutSeconds = 60;
+        private bool _disposing;
 
         public event EventHandler<ParticipantEventArgs>? ParticipantChanged;
         public event EventHandler<Events.DominantSpeakerEventArgs>? DominantSpeakerChanged;
@@ -76,6 +77,7 @@ namespace TeamsMediaBot.Bot
         /// <inheritdoc />
         protected override void Dispose(bool disposing)
         {
+            _disposing = true;
             _logger.LogInformation("[CallHandler] Disposing CallHandler for call {CallId}", this.Call?.Id);
 
             // Cancel empty meeting timer
@@ -252,6 +254,9 @@ namespace TeamsMediaBot.Bot
         /// </summary>
         private void CheckEmptyMeeting()
         {
+            // Don't start timer if we're already disposing
+            if (_disposing) return;
+
             // Count human participants (those tracked in _allParticipants with value true)
             var humanCount = _allParticipants.Count(kvp => kvp.Value);
 

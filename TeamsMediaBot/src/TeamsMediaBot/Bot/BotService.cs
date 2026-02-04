@@ -153,8 +153,22 @@ namespace TeamsMediaBot.Bot
         public async Task Shutdown()
         {
             _logger.LogWarning("Terminating all calls during shutdown event");
-            await this.Client.TerminateAsync();
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await this.Client.TerminateAsync().WaitAsync(cts.Token);
+                _logger.LogInformation("All calls terminated successfully");
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Timeout waiting for calls to terminate, forcing shutdown");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error during call termination: {Message}", ex.Message);
+            }
             this.Dispose();
+            _logger.LogInformation("BotService disposed");
         }
 
         /// <summary>
@@ -168,9 +182,10 @@ namespace TeamsMediaBot.Bot
             _logger.LogInformation("[BotService] ThreadId: {ThreadId}", threadId);
 
             string callId = string.Empty;
+            CallHandler? callHandler = null;
             try
             {
-                var callHandler = this.GetHandlerOrThrow(threadId);
+                callHandler = this.GetHandlerOrThrow(threadId);
                 callId = callHandler.Call.Id;
                 _logger.LogInformation("[BotService] Found CallHandler, Call ID: {CallId}", callId);
 
@@ -199,6 +214,24 @@ namespace TeamsMediaBot.Bot
                 {
                     _logger.LogInformation("[BotService] Force removing call {CallId} from SDK state", callId);
                     this.Client.Calls().TryForceRemove(callId, out ICall _);
+                }
+            }
+            finally
+            {
+                // Dispose the CallHandler to stop receiving events and prevent timer issues
+                if (callHandler != null)
+                {
+                    _logger.LogInformation("[BotService] Disposing CallHandler for threadId {ThreadId}", threadId);
+                    try
+                    {
+                        await callHandler.BotMediaStream.ShutdownAsync();
+                        callHandler.Dispose();
+                        _logger.LogInformation("[BotService] CallHandler disposed successfully");
+                    }
+                    catch (Exception disposeEx)
+                    {
+                        _logger.LogWarning(disposeEx, "[BotService] Error disposing CallHandler: {Message}", disposeEx.Message);
+                    }
                 }
             }
         }

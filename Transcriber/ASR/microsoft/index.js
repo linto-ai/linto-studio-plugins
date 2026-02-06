@@ -42,8 +42,10 @@ class RecognizerListener {
     }
 
     async handleCanceled(s, e) {
-        // The ASR is cancelled until the end of the stream
-        // and can be restarted with a new stream
+        // Guard: ignore subsequent canceled events while already stopping
+        if (this.transcriber._stopping) return;
+        this.transcriber._stopping = true;
+
         this.transcriber.logger.info(`${this.formatErrorMsg(e)}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
@@ -143,6 +145,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.pushStreams = [];
         this.pushStream = AudioInputStream.createPushStream();
         this.pushStream2 = null;
+        this._stopping = false;
         this.emit('closed');
     }
 
@@ -191,6 +194,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.logger.info(msg);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
+        this._stopping = false;
         this.startedAt = new Date().toISOString();
 
         // If translation and diarization are enabled, we use the same listener
@@ -339,8 +343,10 @@ class MicrosoftTranscriber extends EventEmitter {
             for (const pushStream of this.pushStreams) {
                 pushStream.write(buffer);
             }
-        } else {
-            this.logger.warn("Microsoft ASR transcriber can't decode buffer");
+        } else if (!this._transcribeWarnThrottled) {
+            this._transcribeWarnThrottled = true;
+            this.logger.warn("Microsoft ASR: no active recognizer, dropping audio");
+            setTimeout(() => { this._transcribeWarnThrottled = false; }, 5000);
         }
     }
 

@@ -321,8 +321,8 @@ After creating the `.envtest` file (as documented at the beginning of integratio
 
 ## Custom ASR
 
-There are currently three ASRs available: Microsoft, LinTO, and Amazon.
-They are located in Transcriber/ASR/linto, Transcriber/ASR/microsoft, and Transcriber/ASR/amazon.
+There are currently five ASR providers available: Microsoft, LinTO, Amazon, OpenAI Streaming and Voxstral.
+They are located in `Transcriber/ASR/microsoft`, `Transcriber/ASR/linto`, `Transcriber/ASR/amazon`, `Transcriber/ASR/openai_streaming` and `Transcriber/ASR/voxstral`.
 You can use them as inspiration to create your own ASR.
 
 Here are the rules to follow:
@@ -358,21 +358,71 @@ class MyASRTranscriber extends EventEmitter {
 - `this.emit('connecting')` -> Called in the `start` function when the ASR connection is not ready yet
 - `this.emit('ready')` -> Called in the `start` function when the ASR connexion is ready to work
 - `this.emit('closed')` -> Called in the `stop` function when the ASR connexion is really closed.
-- `this.emit('transcribing', text: string)` -> Called in the `transcribe` function for partial transcription. `text` is the partial transcription.
-- `this.emit('transcribed', data: object)` -> Called in the `transcriber` function for final transcription. The `data` argument is an object with the following attributes:
+- `this.emit('transcribing', data: object)` -> Partial (interim) transcription result. Same payload structure as `transcribed`.
+- `this.emit('transcribed', data: object)` -> Final (confirmed) transcription result. See MQTT Packet Reference below.
+- `this.emit('error', text: string)` -> Called when there is an error. `text` is the error message.
 
-```
-const data = {
-    "astart": ISO format datetime of the ASR session start,
-    "text": The final transcription,
-    "start": The number of seconds since the start of the transcription,
-    "end": Start plus the duration of this transcription in seconds,
-    "lang": The language,
-    "locutor": The locutor (may be null),
+### MQTT Topics
+
+The Transcriber publishes transcription results to MQTT using the following topic structure:
+
+| Topic | Description |
+|-------|-------------|
+| `transcriber/out/{sessionId}/{channelId}/partial` | Interim transcription results (not stored in DB) |
+| `transcriber/out/{sessionId}/{channelId}/final` | Confirmed transcription results (stored by Scheduler) |
+| `transcriber/out/{uniqueId}/status` | Transcriber online/offline status |
+| `transcriber/out/{uniqueId}/session` | Stream status updates per session/channel |
+
+The Scheduler only subscribes to `final` messages and appends them to the `closedCaptions` JSONB column in PostgreSQL.
+
+### MQTT Packet Reference
+
+Both `partial` and `final` messages use the same JSON structure:
+
+```json
+{
+    "astart": "2025-01-15T10:30:45.123Z",
+    "text": "transcribed text content",
+    "translations": {
+        "fr": "contenu textuel transcrit",
+        "es": "contenido textual transcrito"
+    },
+    "start": 12.5,
+    "end": 18.7,
+    "lang": "en-US",
+    "locutor": "speaker-id"
 }
 ```
 
-- `this.emit('error', text: string)` -> Called when there is an error. `text` is the error message.
+| Field | Type | Description |
+|-------|------|-------------|
+| `astart` | string | ISO 8601 timestamp of when the transcription session started |
+| `text` | string | Transcribed text in the source language |
+| `translations` | object | Map of language code to translated text. Empty `{}` when no translation is configured |
+| `start` | number | Segment start time in seconds relative to the audio stream |
+| `end` | number | Segment end time in seconds relative to the audio stream |
+| `lang` | string | Source language code (BCP 47 format, e.g. `en-US`, `fr-FR`) |
+| `locutor` | string \| null | Speaker identifier from diarization, or `null` if unavailable |
+
+A special minimal packet is emitted when the audio stream stops:
+
+```json
+{
+    "astart": "2025-01-15T10:30:45.123Z",
+    "aend": "2025-01-15T10:45:12.456Z",
+    "locutor": "TRANSCRIBER_BOT_NAME"
+}
+```
+
+### Provider Feature Matrix
+
+| Feature | Microsoft | LinTO | Amazon | OpenAI Streaming | Voxstral |
+|---------|-----------|-------|--------|-------------------|----------|
+| `translations` | Populated from Azure Translation | `{}` | `{}` | `{}` | `{}` |
+| `locutor` | Speaker ID (with diarization) | `null` | `spk_N` (with diarization) | `null` | `null` |
+| `lang` | Detected or configured (BCP 47) | From `ASR_LANGUAGE` env | Configured (BCP 47) | Detected via franc | Detected via franc |
+| Multi-language | Yes (auto-detect) | No | No | Yes (franc detection) | Yes (franc detection) |
+| Diarization | Yes | No | Yes | No | No |
 
 ## Some useful documentation below
 

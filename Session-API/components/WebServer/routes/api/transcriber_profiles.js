@@ -25,6 +25,17 @@ const validateTranscriberProfile = (body, update=false) => {
         // certificate and privateKey will be validated in the route handler after file upload
         return;
     }
+    if (config.type === 'openai_streaming') {
+        if (!config.endpoint || !config.model) {
+            return { error: 'OpenAI Streaming profiles require endpoint and model', status: 400 };
+        }
+        if (config.protocol && !['vllm', 'openai'].includes(config.protocol)) {
+            return { error: 'Invalid protocol. Must be "vllm" or "openai"', status: 400 };
+        }
+    }
+    if (config.type === 'voxstral' && !config.endpoint) {
+        return { error: 'Voxstral profiles require an endpoint', status: 400 };
+    }
     if (config.languages.some(lang => typeof lang !== 'object')) {
         return { error: 'Invalid TranscriberProfile languages', status: 400 };
     }
@@ -50,6 +61,9 @@ const cryptTranscriberProfileKey = (body) => {
     if (body.config.credentials) {
         body.config.credentials = new Security().encrypt(body.config.credentials);
     }
+    if (body.config.apiKey) {
+        body.config.apiKey = new Security().encrypt(body.config.apiKey);
+    }
 
     return body;
 }
@@ -60,6 +74,9 @@ const obfuscateTranscriberProfileKey = (transcriberProfile) => {
     }
     if (transcriberProfile.config.credentials) {
         transcriberProfile.config.credentials = "Secret credentials are hidden";
+    }
+    if (transcriberProfile.config.apiKey) {
+        transcriberProfile.config.apiKey = "Secret key is hidden";
     }
     return transcriberProfile;
 }
@@ -238,6 +255,10 @@ module.exports = (webserver) => {
                 // Handle credentials encryption if new credentials are provided
                 if (req.body.config.credentials) {
                     mergedConfig.credentials = new Security().encrypt(req.body.config.credentials);
+                }
+                // Handle apiKey encryption if a new apiKey is provided
+                if (req.body.config.apiKey) {
+                    mergedConfig.apiKey = new Security().encrypt(req.body.config.apiKey);
                 }
 
                 // Prepare the body with merged config and all other fields from request

@@ -84,10 +84,17 @@ const obfuscateTranscriberProfileKey = (transcriberProfile) => {
 const injectExternalTranslations = (profile, onlineTranslators) => {
     const config = profile.config;
 
-    // discrete: from stored profile config (legacy string array or object array)
+    // discrete: from stored profile config (legacy string array, object array, or already-expanded object)
     const stored = config.availableTranslations || [];
+    let discreteLangs;
+    if (Array.isArray(stored)) {
+        discreteLangs = stored.map(entry => typeof entry === 'string' ? entry : entry.target);
+    } else {
+        // Already in {discrete, external} format (saved back from frontend)
+        discreteLangs = stored.discrete || [];
+    }
     config.availableTranslations = {
-        discrete: stored.map(entry => typeof entry === 'string' ? entry : entry.target),
+        discrete: discreteLangs,
         external: onlineTranslators.map(t => ({ translator: t.name, languages: t.languages }))
     };
 
@@ -98,8 +105,11 @@ const extendTranscriberProfile = (body) => {
     const config = body.config;
     const translationEnv = process.env[`ASR_AVAILABLE_TRANSLATIONS_${config.type.toUpperCase()}`];
     if ('availableTranslations' in config) {
-        // Convert legacy string arrays to object format
-        if (Array.isArray(config.availableTranslations) && config.availableTranslations.length > 0 && typeof config.availableTranslations[0] === 'string') {
+        if (!Array.isArray(config.availableTranslations) && config.availableTranslations.discrete) {
+            // Frontend sent back expanded {discrete, external} format — convert to internal array
+            body.config.availableTranslations = config.availableTranslations.discrete.map(lang => ({ target: lang.trim(), mode: 'discrete' }));
+        } else if (Array.isArray(config.availableTranslations) && config.availableTranslations.length > 0 && typeof config.availableTranslations[0] === 'string') {
+            // Legacy string array
             body.config.availableTranslations = config.availableTranslations.map(lang => ({ target: lang.trim(), mode: 'discrete' }));
         }
         // else keep as-is (already object format or empty)

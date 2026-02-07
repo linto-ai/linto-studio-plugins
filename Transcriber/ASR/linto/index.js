@@ -33,6 +33,7 @@ class LintoTranscriber extends EventEmitter {
 
     getMqttPayload(text) {
         return {
+            "segmentId": this.segmentId,
             "astart": this.startedAt,
             "text": text,
             "translations": {},
@@ -45,6 +46,7 @@ class LintoTranscriber extends EventEmitter {
 
     start() {
         this.startedAt = new Date().toISOString();
+        this.segmentId = 1;
         const { transcriberProfile } = this.channel;
 
         if (!transcriberProfile) {
@@ -72,6 +74,7 @@ class LintoTranscriber extends EventEmitter {
                 const result = this.getMqttPayload(data.text);
                 this.lastEndTime = result.end;
                 this.emit('transcribed', result);
+                this.segmentId++;
                 this.logger.debug(`ASR transcription: ${data.text}`);
             } else if (data.partial) {
                 if (!this.startTime) {

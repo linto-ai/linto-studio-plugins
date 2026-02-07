@@ -27,6 +27,7 @@ class RecognizerListener {
     handleRecognized(s, e) {
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
             this.emitTranscribed(this.transcriber.getMqttPayload(e.result))
+            this.transcriber.segmentId++;
         }
     }
 
@@ -107,6 +108,7 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
     handleRecognized(s, e) {
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
             this.emitTranscribed(this.transcriber.getMqttPayload(e.result))
+            this.transcriber.segmentId++;
         }
     }
 
@@ -155,16 +157,29 @@ class MicrosoftTranscriber extends EventEmitter {
             return;
         }
 
-        return translations.map(lang => lang.split('-')[0]);
+        // Filter for discrete translations only (external translations are handled by TranslationBus)
+        const discreteTranslations = translations.filter(entry =>
+            typeof entry === 'object' ? entry.mode === 'discrete' : true
+        );
+
+        if (!discreteTranslations.length) {
+            return;
+        }
+
+        return discreteTranslations.map(entry =>
+            typeof entry === 'object' ? entry.target.split('-')[0] : entry.split('-')[0]
+        );
     }
 
     getMqttPayload(result) {
         let translations = {};
-        if (result.translations) {
-            translations = Object.fromEntries(this.getTargetLanguages().map((key, i) => [key, result.translations.get(key)]));
+        const targetLanguages = this.getTargetLanguages();
+        if (result.translations && targetLanguages) {
+            translations = Object.fromEntries(targetLanguages.map((key, i) => [key, result.translations.get(key)]));
         }
         const lang = result.language ? result.language : this.channel.transcriberProfile.config.languages[0].candidate;
         return {
+            "segmentId": this.segmentId,
             "astart": this.startedAt,
             "text": result.text,
             "translations": translations,
@@ -196,8 +211,9 @@ class MicrosoftTranscriber extends EventEmitter {
         this.recognizers = [];
         this._stopping = false;
         this.startedAt = new Date().toISOString();
+        this.segmentId = 1;
 
-        // If translation and diarization are enabled, we use the same listener
+        // If translation and diarization are enabled, we use two recognizers
         if (translations && translations.length && diarization) {
             this.pushStreams.push(AudioInputStream.createPushStream());
 

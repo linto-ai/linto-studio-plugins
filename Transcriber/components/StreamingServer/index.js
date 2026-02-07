@@ -54,10 +54,10 @@ class StreamingServer extends Component {
         try {
           const asr = new ASR(session, channel);
           asr.on('partial', (transcription) => {
-            this.emit('partial', transcription, session.id, channel.id);
+            this.emit('partial', transcription, session.id, channel.id, channel);
           });
           asr.on('final', (transcription) => {
-            this.emit('final', transcription, session.id, channel.id);
+            this.emit('final', transcription, session.id, channel.id, channel);
           });
           this.ASRs.set(`${session.id}_${channel.id}`, asr);
           this.emit('session-start', session, channel);
@@ -129,7 +129,7 @@ class StreamingServer extends Component {
             bot.updateCaptions(subtitle, false);
           }
 
-          this.emit('partial', transcription, session.id, channel.id);
+          this.emit('partial', transcription, session.id, channel.id, channel);
         });
         asr.on('final', (transcription) => {
           let subtitle = transcription.text;
@@ -141,7 +141,7 @@ class StreamingServer extends Component {
             bot.updateCaptions(subtitle, true);
           }
 
-          this.emit('final', transcription, session.id, channel.id);
+          this.emit('final', transcription, session.id, channel.id, channel);
         });
         this.ASRs.set(`${session.id}_${channel.id}`, asr);
         // pass to controllers/StreamingServer.js to forward to broker and mark the session as active / set channel status in database
@@ -160,6 +160,31 @@ class StreamingServer extends Component {
       await bot.init();
       this.bots.set(`${session.id}_${channel.id}`, bot);
 
+      // Subscribe to external translations for bot subtitles
+      if (subSource && enableDisplaySub) {
+        const translationTopic = `transcriber/out/${session.id}/${channel.id}/final/translations`
+        const mqttClient = this.app.components['BrokerClient']?.client
+        if (mqttClient) {
+          mqttClient.subscribe(translationTopic)
+          const translationHandler = (topic, message) => {
+            if (topic !== translationTopic) return
+            try {
+              const translation = JSON.parse(message.toString())
+              if (translation.targetLang === subSource) {
+                bot.updateCaptions(translation.text, true)
+              }
+            } catch (err) {
+              logger.error(`Error handling bot translation: ${err.message}`)
+            }
+          }
+          mqttClient.on('message', translationHandler)
+          // Store handler for cleanup
+          bot._translationHandler = translationHandler
+          bot._translationTopic = translationTopic
+          bot._translationMqttClient = mqttClient
+        }
+      }
+
     } catch (error) {
       logger.error(`Error starting bot: ${error.message}`);
     }
@@ -174,6 +199,14 @@ class StreamingServer extends Component {
       if (!bot) {
         logger.warn(`No bot found for session ${sessionId}, channel ${channelId}`);
         return;
+      }
+      // Clean up translation subscription
+      if (bot._translationHandler && bot._translationTopic) {
+        const mqttClient = bot._translationMqttClient
+        if (mqttClient) {
+          mqttClient.removeListener('message', bot._translationHandler)
+          mqttClient.unsubscribe(bot._translationTopic)
+        }
       }
       this.emit('session-stop', bot.session, channelId);
       await bot.dispose();

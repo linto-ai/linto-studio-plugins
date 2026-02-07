@@ -133,6 +133,7 @@ class AmazonTranscriber extends EventEmitter {
         const languageCode = transcriberProfile.config.languages[0].candidate;
 
         return {
+            "segmentId": this.segmentId,
             "astart": this.startedAt,
             "text": result.text || '',
             "translations": {},
@@ -197,6 +198,7 @@ class AmazonTranscriber extends EventEmitter {
                                 // Clear last partial when we get a final result
                                 this.lastPartialResult = null;
                                 this.emit('transcribed', this.getMqttPayload(payload));
+                                this.segmentId++;
                             }
                         }
                     }
@@ -291,6 +293,7 @@ class AmazonTranscriber extends EventEmitter {
 
         this.logger.info(msg);
         this.startedAt = new Date().toISOString();
+        this.segmentId = 1;
         this.isStreaming = true;
         this.audioQueue = [];
 
@@ -356,6 +359,7 @@ class AmazonTranscriber extends EventEmitter {
         if (this.lastPartialResult) {
             this.logger.info('Amazon ASR: Flushing pending partial result as final');
             this.emit('transcribed', this.getMqttPayload(this.lastPartialResult));
+            this.segmentId++;
             this.lastPartialResult = null;
         }
 

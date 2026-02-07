@@ -2,6 +2,16 @@ const { logger } = require('live-srt-lib')
 
 module.exports = async function () {
   this.client.on("message", async (topic, message) => {
+    // transcriber/out/+/+/final/translations
+    if (topic.endsWith('final/translations')) {
+      const parts = topic.split('/');
+      const sessionId = parts[2];
+      const channelId = parts[3];
+      const translation = JSON.parse(message.toString());
+      await this.saveTranslation(translation, sessionId, channelId);
+      return;
+    }
+
     // transcriber/out/+/+/final
     if (topic.endsWith('final')) {
       const [type, direction, sessionId, channelId, action] = topic.split('/');
@@ -31,6 +41,16 @@ module.exports = async function () {
             channelId: channelId
           } = JSON.parse(message.toString());
           this.updateSession(transcriberId, sessionId, channelId, newStreamStatus);
+        }
+        break;
+      case 'translator':
+        if (action === 'status') {
+          const translator = JSON.parse(message.toString());
+          if (translator.online) {
+            await this.registerTranslator(translator);
+          } else {
+            await this.unregisterTranslator(translator);
+          }
         }
         break;
       case 'scheduler':

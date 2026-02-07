@@ -81,14 +81,31 @@ const obfuscateTranscriberProfileKey = (transcriberProfile) => {
     return transcriberProfile;
 }
 
+const injectExternalTranslations = (profile, onlineTranslators) => {
+    const config = profile.config;
+
+    // discrete: from stored profile config (legacy string array or object array)
+    const stored = config.availableTranslations || [];
+    config.availableTranslations = {
+        discrete: stored.map(entry => typeof entry === 'string' ? entry : entry.target),
+        external: onlineTranslators.map(t => ({ translator: t.name, languages: t.languages }))
+    };
+
+    return profile;
+};
+
 const extendTranscriberProfile = (body) => {
     const config = body.config;
     const translationEnv = process.env[`ASR_AVAILABLE_TRANSLATIONS_${config.type.toUpperCase()}`];
     if ('availableTranslations' in config) {
-        // keep the custom availableTranslations
+        // Convert legacy string arrays to object format
+        if (Array.isArray(config.availableTranslations) && config.availableTranslations.length > 0 && typeof config.availableTranslations[0] === 'string') {
+            body.config.availableTranslations = config.availableTranslations.map(lang => ({ target: lang.trim(), mode: 'discrete' }));
+        }
+        // else keep as-is (already object format or empty)
     }
     else if (translationEnv) {
-        body.config.availableTranslations = translationEnv.split(',');
+        body.config.availableTranslations = translationEnv.split(',').map(lang => ({ target: lang.trim(), mode: 'discrete' }));
     }
     else {
         body.config.availableTranslations = [];
@@ -129,7 +146,9 @@ module.exports = (webserver) => {
                 const obfuscatedConfigs = configs.map(cfg =>
                   obfuscateTranscriberProfileKey(cfg.toJSON())
                 );
-                res.json(obfuscatedConfigs);
+                const onlineTranslators = await Model.Translator.findAll({ where: { online: true } });
+                const result = obfuscatedConfigs.map(cfg => injectExternalTranslations(cfg, onlineTranslators));
+                res.json(result);
             } catch (err) {
                 next(err);
             }
@@ -143,7 +162,9 @@ module.exports = (webserver) => {
                 if (!config) {
                     return res.status(404).send('Transcriber config not found');
                 }
-                res.json(obfuscateTranscriberProfileKey(config));
+                const obfuscated = obfuscateTranscriberProfileKey(config.toJSON());
+                const onlineTranslators = await Model.Translator.findAll({ where: { online: true } });
+                res.json(injectExternalTranslations(obfuscated, onlineTranslators));
             } catch (err) {
                 next(err);
             }

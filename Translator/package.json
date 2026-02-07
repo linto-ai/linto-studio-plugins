@@ -1,0 +1,12 @@
+{
+  "name": "translator-stub",
+  "version": "1.0.0",
+  "description": "Echo stub for testing MQTT translation plumbing",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.0.0"
+  }
+}

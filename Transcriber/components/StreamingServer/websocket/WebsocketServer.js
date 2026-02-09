@@ -214,8 +214,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
   }
 
   initPcm(ws, fd) {
-      this.emit('session-start', fd.session, fd.channel);
+      // addRunningSession must be called BEFORE emitting session-start,
+      // so that getDiarizationMode() can find the fd in runningSessions
       this.addRunningSession(fd.session, ws, fd, null);
+      this.emit('session-start', fd.session, fd.channel);
       ws.on("close", (code, reason) => {
           logger.info(`WebSocket closed for session ${fd.session.id}, channel ${fd.channel.id} (code=${code}, reason=${reason || 'none'}, audioChunks=${audioMessageCount})`);
           this.cleanupWebsocket(ws, fd);

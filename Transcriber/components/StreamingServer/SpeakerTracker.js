@@ -40,6 +40,7 @@ class SpeakerTracker {
    */
   addSpeakerChange (event) {
     this.currentSpeaker = event.speaker
+    logger.debug(`SpeakerTracker: Dominant speaker changed: ${event.speaker?.name || 'silence'} (position: ${event.position}ms)`)
   }
 
   /**

@@ -377,7 +377,6 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         const payload = this.getMqttPayload(text, lang);
         this.lastEndTime = payload.end;
         this.emit('transcribed', payload);
-
         this.logger.debug(`ASR final transcription: ${text}`);
 
         // Reset for next segment
@@ -402,7 +401,6 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         const payload = this.getMqttPayload(trimmedText, lang);
         this.lastEndTime = payload.end;
         this.emit('transcribed', payload);
-
         this.logger.debug(`ASR final transcription (${reason}) [lang: ${lang || 'null'}]: ${trimmedText}`);
 
         // Reset for next segment
@@ -459,7 +457,6 @@ class OpenAIStreamingTranscriber extends EventEmitter {
                     const payload = this.getMqttPayload(emitText, lang);
                     this.lastEndTime = payload.end;
                     this.emit('transcribed', payload);
-            
                     this.logger.debug(`ASR final transcription (hard max, split): ${emitText}`);
 
                     this.accumulatedText = ' ' + remaining;

@@ -70,48 +70,67 @@ describe('SpeakerTracker', () => {
     });
   });
 
-  describe('#addSpeakerEvent()', () => {
-    it('should store speaker events', () => {
+  describe('#addSpeakerChange()', () => {
+    it('should update currentSpeaker', () => {
       const tracker = new SpeakerTracker();
-      const now = Date.now();
-      tracker.addSpeakerEvent({ timestamp: now, speakers: [{ id: 'u1', energy: 1000 }] });
-      assert.equal(tracker.hasSpeakerEvents(), true);
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      assert.deepEqual(tracker.currentSpeaker, { id: 'u1', name: 'Alice' });
+    });
+
+    it('should set currentSpeaker to null for silence', () => {
+      const tracker = new SpeakerTracker();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.addSpeakerChange({ position: 200, speaker: null });
+      assert.equal(tracker.currentSpeaker, null);
     });
   });
 
-  describe('#getSpeakerForTimestamp()', () => {
-    it('should find dominant speaker for timestamp', () => {
+  describe('#assignSpeakerToSegment()', () => {
+    it('should freeze speaker at first call for a segmentId', () => {
       const tracker = new SpeakerTracker();
-      const now = Date.now();
-
-      tracker.addSpeakerEvent({ timestamp: now, speakers: [{ id: 'u1', energy: 1000 }] });
-      tracker.addSpeakerEvent({ timestamp: now + 20, speakers: [{ id: 'u1', energy: 800 }, { id: 'u2', energy: 200 }] });
-      tracker.addSpeakerEvent({ timestamp: now + 40, speakers: [{ id: 'u2', energy: 1500 }] });
-
-      // u1 dominates at the start
-      assert.equal(tracker.getSpeakerForTimestamp(now, 30), 'u1');
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
     });
 
-    it('should return null when no events in range', () => {
+    it('should not change speaker on subsequent calls for same segmentId', () => {
       const tracker = new SpeakerTracker();
-      const now = Date.now();
-      tracker.addSpeakerEvent({ timestamp: now, speakers: [{ id: 'u1', energy: 1000 }] });
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
 
-      // Search 10 seconds later - no events
-      assert.equal(tracker.getSpeakerForTimestamp(now + 10000, 100), null);
+      // Speaker changes to Bob, but segment 1 should stay Alice
+      tracker.addSpeakerChange({ position: 200, speaker: { id: 'u2', name: 'Bob' } });
+      tracker.assignSpeakerToSegment(1);
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
     });
 
-    it('should select speaker with highest cumulative energy', () => {
+    it('should assign different speakers to different segments', () => {
       const tracker = new SpeakerTracker();
-      const now = Date.now();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
 
-      // u2 has more total energy over the period
-      tracker.addSpeakerEvent({ timestamp: now, speakers: [{ id: 'u1', energy: 500 }] });
-      tracker.addSpeakerEvent({ timestamp: now + 20, speakers: [{ id: 'u2', energy: 600 }] });
-      tracker.addSpeakerEvent({ timestamp: now + 40, speakers: [{ id: 'u2', energy: 600 }] });
+      tracker.addSpeakerChange({ position: 500, speaker: { id: 'u2', name: 'Bob' } });
+      tracker.assignSpeakerToSegment(2);
 
-      // u2: 1200 total, u1: 500 total -> u2 wins
-      assert.equal(tracker.getSpeakerForTimestamp(now, 100), 'u2');
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+      assert.deepEqual(tracker.getSpeakerForSegment(2), { id: 'u2', name: 'Bob' });
+    });
+  });
+
+  describe('#getSpeakerForSegment()', () => {
+    it('should return null for unknown segmentId', () => {
+      const tracker = new SpeakerTracker();
+      assert.equal(tracker.getSpeakerForSegment(99), null);
+    });
+  });
+
+  describe('#clearSegment()', () => {
+    it('should remove segment from map', () => {
+      const tracker = new SpeakerTracker();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+      tracker.clearSegment(1);
+      assert.equal(tracker.getSpeakerForSegment(1), null);
     });
   });
 
@@ -119,12 +138,14 @@ describe('SpeakerTracker', () => {
     it('should clear all data', () => {
       const tracker = new SpeakerTracker();
       tracker.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
-      tracker.addSpeakerEvent({ timestamp: Date.now(), speakers: [{ id: 'u1', energy: 1000 }] });
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
 
       tracker.clear();
 
-      assert.equal(tracker.hasSpeakerEvents(), false);
-      assert.equal(tracker.getParticipantName('u1'), 'u1'); // Falls back to ID
+      assert.equal(tracker.currentSpeaker, null);
+      assert.equal(tracker.getSpeakerForSegment(1), null);
+      assert.equal(tracker.getParticipantName('u1'), 'u1');
     });
   });
 
@@ -133,11 +154,13 @@ describe('SpeakerTracker', () => {
       const tracker = new SpeakerTracker();
       tracker.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
       tracker.updateParticipant({ action: 'join', participant: { id: 'u2', name: 'Bob' } });
-      tracker.addSpeakerEvent({ timestamp: Date.now(), speakers: [{ id: 'u1', energy: 1000 }] });
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
 
       const stats = tracker.getStats();
       assert.equal(stats.participantCount, 2);
-      assert.equal(stats.eventCount, 1);
+      assert.equal(stats.activeSegments, 1);
+      assert.equal(stats.currentSpeaker, 'Alice');
     });
   });
 });

@@ -48,7 +48,7 @@ class ASR extends eventEmitter {
     this.diarizationMode = options.diarizationMode || 'asr';
 
     if (this.diarizationMode === 'native' && this.speakerTracker) {
-      this.logger.info('Native diarization enabled via LiveKit speaker tracking');
+      this.logger.info('Native diarization enabled via speaker tracking');
     }
 
     this.init();
@@ -122,7 +122,6 @@ class ASR extends eventEmitter {
       this.state = ASR.states.TRANSCRIBING;
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this.segmentId;
-        // Enrich with speaker info if native diarization is enabled
         const enrichedTranscription = this.enrichWithSpeaker(transcription);
         this.emit('partial', enrichedTranscription);
       }
@@ -130,9 +129,11 @@ class ASR extends eventEmitter {
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this.segmentId;
-        // Enrich with speaker info if native diarization is enabled
         const enrichedTranscription = this.enrichWithSpeaker(transcription);
         this.emit('final', enrichedTranscription);
+        if (this.speakerTracker) {
+          this.speakerTracker.clearSegment(this.segmentId);
+        }
         this.segmentId++;
       }
     });
@@ -141,9 +142,9 @@ class ASR extends eventEmitter {
   /**
    * Enriches a transcription with speaker information based on diarization mode.
    *
-   * - Native mode: Uses SpeakerTracker to identify speaker from LiveKit participant data
-   *   - Uses position in the audio stream (start field from ASR) to find the speaker
-   *   - Provides real participant names and high accuracy
+   * - Native mode: Uses SpeakerTracker with segment-based speaker assignment.
+   *   The speaker is "frozen" at the first partial of each segment (segmentId),
+   *   ensuring all partials and the final of a segment have the same speaker.
    *   - locutor: participant identity
    *   - locutorName: participant display name
    *
@@ -161,23 +162,17 @@ class ASR extends eventEmitter {
     let locutorName = null;
 
     if (this.diarizationMode === 'native' && this.speakerTracker) {
-      // Native mode: use SpeakerTracker with position in audio stream
-      // The 'start' field from ASR is in seconds, convert to ms
-      const positionMs = (transcription.start || 0) * 1000;
-
-      const speaker = this.speakerTracker.getSpeakerAtPosition(positionMs);
+      // Assign current speaker to this segment (no-op if already assigned)
+      this.speakerTracker.assignSpeakerToSegment(transcription.segmentId);
+      const speaker = this.speakerTracker.getSpeakerForSegment(transcription.segmentId);
 
       if (speaker) {
         locutor = speaker.id;
         locutorName = speaker.name;
-        this.logger.debug(`Native diarization: "${transcription.text.substring(0, 30)}..." -> ${locutorName} (pos=${positionMs}ms)`);
       }
     } else if (this.diarizationMode === 'asr' && this.channel.transcriberProfile?.config?.diarization) {
-      // ASR mode: use speaker ID from ASR provider (if available)
-      // Microsoft/Amazon provide speakerId in transcription result
       locutor = transcription.speakerId || null;
     }
-    // 'none' mode: locutor stays null
 
     return {
       ...transcription,

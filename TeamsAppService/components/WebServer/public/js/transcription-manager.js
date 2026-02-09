@@ -23,7 +23,8 @@ class TranscriptionManager {
    */
   addPartial(data) {
     // Update or create partial entry
-    const entryId = `partial-${data.speakerId || 'unknown'}`
+    const speakerDisplay = data.locutorName || data.locutor || 'Speaker'
+    const entryId = `partial-${data.locutor || 'unknown'}`
 
     // Remove existing partial for this speaker
     this._removeEntry(entryId)
@@ -32,7 +33,7 @@ class TranscriptionManager {
     this.currentPartial = {
       id: entryId,
       type: 'partial',
-      speakerId: data.speakerId || 'Speaker',
+      speakerId: speakerDisplay,
       text: this._getText(data),
       timestamp: new Date(),
       data: data
@@ -60,7 +61,7 @@ class TranscriptionManager {
     const entry = {
       id: `final-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'final',
-      speakerId: data.speakerId || 'Speaker',
+      speakerId: data.locutorName || data.locutor || 'Speaker',
       text: this._getText(data),
       timestamp: new Date(),
       data: data
@@ -161,7 +162,7 @@ class TranscriptionManager {
       const entry = {
         id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         type: 'final',
-        speakerId: data.locutor || 'Speaker',
+        speakerId: data.locutorName || data.locutor || 'Speaker',
         text: this._getText(data),
         timestamp: data.astart ? new Date(data.astart) : new Date(),
         data: data

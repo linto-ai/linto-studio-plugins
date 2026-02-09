@@ -104,6 +104,8 @@ services:
       dockerfile: BotService/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=botservice:*
       - SERVICE_HOSTNAME=emeeting-botservice-1
@@ -121,6 +123,8 @@ services:
       dockerfile: LivekitBot/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=livekitbot:*
       - SERVICE_HOSTNAME=emeeting-livekitbot-1
@@ -143,6 +147,8 @@ services:
       dockerfile: Microsoft-Teams-Scheduler/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=msteams-scheduler:*
     depends_on:
@@ -159,6 +165,8 @@ services:
       dockerfile: TeamsAppService/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=teamsappservice:*
       - TEAMSAPPSERVICE_HTTPS_PORT=443

@@ -4,6 +4,65 @@ using System.Text.Json.Serialization;
 namespace TeamsMediaBot.Models.Mqtt
 {
     /// <summary>
+    /// JSON converter that handles translation entries as either plain strings ("fr")
+    /// or objects with a "target" field ({"target": "fr", "mode": "discrete"}).
+    /// Always deserializes to List&lt;string&gt; containing only the language codes.
+    /// </summary>
+    public class TranslationListConverter : JsonConverter<List<string>?>
+    {
+        public override List<string>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+                return null;
+
+            if (reader.TokenType != JsonTokenType.StartArray)
+                throw new JsonException("Expected array for translations");
+
+            var result = new List<string>();
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray)
+                    return result;
+
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    var value = reader.GetString();
+                    if (value != null) result.Add(value);
+                }
+                else if (reader.TokenType == JsonTokenType.StartObject)
+                {
+                    string? target = null;
+                    while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+                    {
+                        if (reader.TokenType == JsonTokenType.PropertyName)
+                        {
+                            var prop = reader.GetString();
+                            reader.Read();
+                            if (prop == "target" && reader.TokenType == JsonTokenType.String)
+                                target = reader.GetString();
+                        }
+                    }
+                    if (target != null) result.Add(target);
+                }
+            }
+            return result;
+        }
+
+        public override void Write(Utf8JsonWriter writer, List<string>? value, JsonSerializerOptions options)
+        {
+            if (value == null)
+            {
+                writer.WriteNullValue();
+                return;
+            }
+            writer.WriteStartArray();
+            foreach (var item in value)
+                writer.WriteStringValue(item);
+            writer.WriteEndArray();
+        }
+    }
+
+    /// <summary>
     /// JSON converter that handles both string and number values, converting them to string.
     /// </summary>
     public class StringOrNumberConverter : JsonConverter<string>
@@ -121,6 +180,7 @@ namespace TeamsMediaBot.Models.Mqtt
         /// List of translation languages.
         /// </summary>
         [JsonPropertyName("translations")]
+        [JsonConverter(typeof(TranslationListConverter))]
         public List<string>? Translations { get; set; }
     }
 }

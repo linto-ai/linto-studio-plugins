@@ -416,7 +416,8 @@
     if (!container || !list) return
 
     list.innerHTML = ''
-    const available = profile?.config?.availableTranslations || []
+    const raw = profile?.config?.availableTranslations
+    const available = Array.isArray(raw) ? raw : (raw?.discrete || [])
 
     if (available.length === 0) {
       container.style.display = 'none'

@@ -80,6 +80,11 @@ BROKER_USERNAME=
 BROKER_PASSWORD=
 BROKER_KEEPALIVE=60
 BROKER_PROTOCOL=mqtt
+BROKER_USE_TLS=false # Enable TLS/SSL (automatically switches protocol to mqtts)
+BROKER_CA_FILEPATH= # Path to CA certificate file (optional, for custom/self-signed CA)
+BROKER_CERT_FILEPATH= # Path to client certificate file (optional, for mutual TLS)
+BROKER_KEY_FILEPATH= # Path to client private key file (optional, for mutual TLS)
+BROKER_REJECT_UNAUTHORIZED=true # Reject connections to brokers with untrusted certificates (set to false for self-signed certs)
 
 ##### Session API #####
 SESSION_API_HOST=http://localhost:8000 # Host used by the Swagger doc to request the Session API

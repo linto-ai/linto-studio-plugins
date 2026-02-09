@@ -236,7 +236,7 @@ namespace TeamsMediaBot.Bot
                         displayName = info.DisplayName;
                     }
 
-                    _logger.LogTrace("[CallHandler] Dominant speaker: {Id} ({Name}) MSI={Msi}",
+                    _logger.LogInformation("[CallHandler] Dominant speaker: {Id} ({Name}) MSI={Msi}",
                         participantId, displayName, msi);
                     DominantSpeakerChanged?.Invoke(this, new Events.DominantSpeakerEventArgs(participantId, displayName));
                 }

@@ -83,22 +83,55 @@ describe('SpeakerTracker', () => {
       tracker.addSpeakerChange({ position: 200, speaker: null });
       assert.equal(tracker.currentSpeaker, null);
     });
+
+    it('should track lastKnownSpeaker', () => {
+      const tracker = new SpeakerTracker();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      assert.deepEqual(tracker.lastKnownSpeaker, { id: 'u1', name: 'Alice' });
+    });
+
+    it('should not reset lastKnownSpeaker on silence', () => {
+      const tracker = new SpeakerTracker();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.addSpeakerChange({ position: 200, speaker: null });
+      assert.equal(tracker.currentSpeaker, null);
+      assert.deepEqual(tracker.lastKnownSpeaker, { id: 'u1', name: 'Alice' });
+    });
+
+    it('should not update segments with null speaker (silence)', () => {
+      const tracker = new SpeakerTracker();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+
+      // Silence event should not overwrite the segment
+      tracker.addSpeakerChange({ position: 200, speaker: null });
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+    });
   });
 
   describe('#assignSpeakerToSegment()', () => {
-    it('should freeze speaker at first call for a segmentId', () => {
+    it('should assign speaker at first call for a segmentId', () => {
       const tracker = new SpeakerTracker();
       tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
       tracker.assignSpeakerToSegment(1);
       assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
     });
 
-    it('should not change speaker on subsequent calls for same segmentId', () => {
+    it('should use lastKnownSpeaker when currentSpeaker is null', () => {
       const tracker = new SpeakerTracker();
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.addSpeakerChange({ position: 200, speaker: null }); // silence
+      tracker.assignSpeakerToSegment(1);
+      // Should fall back to Alice (lastKnownSpeaker)
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+    });
+
+    it('should not create new entry on subsequent calls for same segmentId (no grace period)', () => {
+      const tracker = new SpeakerTracker({ gracePeriodMs: 0 });
       tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
       tracker.assignSpeakerToSegment(1);
 
-      // Speaker changes to Bob, but segment 1 should stay Alice
+      // Speaker changes, but without grace period, segment stays frozen
       tracker.addSpeakerChange({ position: 200, speaker: { id: 'u2', name: 'Bob' } });
       tracker.assignSpeakerToSegment(1);
       assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
@@ -109,11 +142,81 @@ describe('SpeakerTracker', () => {
       tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
       tracker.assignSpeakerToSegment(1);
 
+      // Segment 1 finishes (simulates final + clearSegment)
+      tracker.clearSegment(1);
+
       tracker.addSpeakerChange({ position: 500, speaker: { id: 'u2', name: 'Bob' } });
       tracker.assignSpeakerToSegment(2);
 
-      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
       assert.deepEqual(tracker.getSpeakerForSegment(2), { id: 'u2', name: 'Bob' });
+    });
+  });
+
+  describe('grace period', () => {
+    it('should allow reactive correction within grace period', () => {
+      const tracker = new SpeakerTracker(); // default 200ms grace
+      // First partial arrives, assigned to Alice
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+
+      // speakerChanged(Bob) arrives shortly after (within grace period)
+      // This corrects segment 1: Bob was actually speaking
+      tracker.addSpeakerChange({ position: 150, speaker: { id: 'u2', name: 'Bob' } });
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u2', name: 'Bob' });
+    });
+
+    it('should lock speaker after grace period expires', (done) => {
+      const tracker = new SpeakerTracker({ gracePeriodMs: 50 });
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+
+      setTimeout(() => {
+        // Grace period expired, speakerChanged should NOT update segment 1
+        tracker.addSpeakerChange({ position: 500, speaker: { id: 'u2', name: 'Bob' } });
+        assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+        done();
+      }, 100);
+    });
+
+    it('should not reactively update with grace period of 0', () => {
+      const tracker = new SpeakerTracker({ gracePeriodMs: 0 });
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+
+      // speakerChanged(Bob) arrives, but grace period is 0 so no reactive update
+      tracker.addSpeakerChange({ position: 150, speaker: { id: 'u2', name: 'Bob' } });
+      assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+    });
+
+    it('should not update cleared segments', () => {
+      const tracker = new SpeakerTracker(); // default 200ms grace
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+
+      // Segment 1 finishes (final emitted, segment cleared)
+      tracker.clearSegment(1);
+
+      // speakerChanged arrives, but segment 1 is already gone
+      tracker.addSpeakerChange({ position: 200, speaker: { id: 'u2', name: 'Bob' } });
+      assert.equal(tracker.getSpeakerForSegment(1), null);
+    });
+
+    it('should only update segments within grace period, not old ones', (done) => {
+      const tracker = new SpeakerTracker({ gracePeriodMs: 50 });
+      tracker.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+      tracker.assignSpeakerToSegment(1);
+
+      setTimeout(() => {
+        // Segment 1 grace expired. Create segment 2 (within grace)
+        tracker.assignSpeakerToSegment(2);
+
+        // speakerChanged should update segment 2 but NOT segment 1
+        tracker.addSpeakerChange({ position: 500, speaker: { id: 'u2', name: 'Bob' } });
+        assert.deepEqual(tracker.getSpeakerForSegment(1), { id: 'u1', name: 'Alice' });
+        assert.deepEqual(tracker.getSpeakerForSegment(2), { id: 'u2', name: 'Bob' });
+        done();
+      }, 100);
     });
   });
 
@@ -144,6 +247,7 @@ describe('SpeakerTracker', () => {
       tracker.clear();
 
       assert.equal(tracker.currentSpeaker, null);
+      assert.equal(tracker.lastKnownSpeaker, null);
       assert.equal(tracker.getSpeakerForSegment(1), null);
       assert.equal(tracker.getParticipantName('u1'), 'u1');
     });

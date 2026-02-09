@@ -140,6 +140,17 @@ namespace TeamsMediaBot.Bot
                 else if (participant.Resource.Info.Identity.AdditionalData?.Count > 0)
                 {
                     isUsable = CheckParticipantIsUsable(participant);
+                    if (isUsable)
+                    {
+                        foreach (var entry in participant.Resource.Info.Identity.AdditionalData)
+                        {
+                            if (entry.Key != "applicationInstance" && entry.Value is Identity identity)
+                            {
+                                displayName = identity.DisplayName ?? "";
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 if (!isUsable) continue;

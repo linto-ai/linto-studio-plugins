@@ -50,6 +50,23 @@
   const fontSizes = ['sm', 'md', 'lg']
 
   /**
+   * Extract the OID (Object ID) from a JWT token.
+   * @param {string} token - JWT token
+   * @returns {string|null} The OID or null if extraction fails
+   */
+  function getOidFromToken(token) {
+    if (!token) return null
+    try {
+      const payload = token.split('.')[1]
+      const decoded = JSON.parse(atob(payload))
+      return decoded.oid || null
+    } catch (e) {
+      console.error('[TeamsApp] Failed to decode token:', e)
+      return null
+    }
+  }
+
+  /**
    * Get a fresh auth token from Teams SDK.
    * Teams SDK handles caching and refresh internally.
    * @returns {Promise<string|null>}
@@ -358,9 +375,18 @@
 
       console.log('[TeamsApp] Meeting found:', meeting)
 
+      // Check if current user is the owner
+      const currentUserOid = getOidFromToken(authToken)
+      const isOwner = currentUserOid && meeting.owner && currentUserOid === meeting.owner
+
       // Update language selector if translations available
       if (meeting.translations && meeting.translations.length > 0) {
         updateLanguageOptions(meeting.translations)
+      }
+
+      // Show stop button only if current user is the owner
+      if (isOwner) {
+        showStopTranscriptionUI()
       }
 
       // Load transcription history before connecting to live feed

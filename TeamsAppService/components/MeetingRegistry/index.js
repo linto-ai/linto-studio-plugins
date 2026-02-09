@@ -38,6 +38,7 @@ class MeetingRegistry extends Component {
       sessionId,
       channelId,
       threadId,
+      owner: options.owner || null,
       languages: options.languages || [],
       translations: options.translations || [],
       connectedAt: new Date().toISOString()

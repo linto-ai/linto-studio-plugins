@@ -3,19 +3,20 @@ const { logger } = require('live-srt-lib')
 /**
  * SpeakerTracker - Tracks speaker changes for native diarization.
  *
- * Receives speaker change events from the bot (LivekitBot) and provides
- * a simple lookup to find who was speaking at a given position in the audio stream.
+ * Receives speaker change events from the bot (LiveKit/Teams) and provides
+ * segment-based speaker assignment for ASR transcriptions.
  *
- * This enables native diarization with:
- * - Real-time speaker identification (no ASR delay)
- * - Actual participant names (not "Speaker 1", "Speaker 2")
- * - Simple position-based correlation with ASR results
+ * Speaker assignment strategy:
+ * - The bot updates `currentSpeaker` in real-time via speakerChanged events
+ * - When the ASR wrapper sees a new segmentId for the first time, it calls
+ *   assignSpeakerToSegment() which "freezes" currentSpeaker for that segment
+ * - All subsequent partials and the final of that segment return the same speaker
  */
 class SpeakerTracker {
   constructor () {
     this.participants = new Map() // id -> { id, name }
-    this.changes = [] // [{position, speaker: {id, name} | null}]
-    this.maxRetentionMs = 60000 // 60 seconds retention
+    this.currentSpeaker = null // {id, name} | null — updated in real-time by bot
+    this.segmentSpeakers = new Map() // segmentId -> {id, name} | null
   }
 
   /**
@@ -33,52 +34,42 @@ class SpeakerTracker {
   }
 
   /**
-   * Records a speaker change event.
+   * Records a speaker change event from the bot.
+   * Updates currentSpeaker in real-time.
    * @param {Object} event - { position: number, speaker: {id, name} | null }
    */
   addSpeakerChange (event) {
-    this.changes.push({
-      position: event.position,
-      speaker: event.speaker
-    })
-
-    // Clean up old events to prevent memory leak
-    this.cleanup()
+    this.currentSpeaker = event.speaker
   }
 
   /**
-   * Removes speaker changes older than maxRetentionMs based on position.
+   * Associates the current speaker with a segment.
+   * Called at each partial/final. Only the first call for a given segmentId
+   * "freezes" the speaker — subsequent calls are no-ops.
+   * @param {number} segmentId
    */
-  cleanup () {
-    if (this.changes.length === 0) return
-
-    // Get the latest position
-    const latestPosition = this.changes[this.changes.length - 1].position
-    const cutoff = latestPosition - this.maxRetentionMs
-
-    const originalLength = this.changes.length
-    this.changes = this.changes.filter(c => c.position > cutoff)
-
-    if (this.changes.length < originalLength) {
-      logger.debug(`SpeakerTracker: Cleaned up ${originalLength - this.changes.length} old changes`)
+  assignSpeakerToSegment (segmentId) {
+    if (!this.segmentSpeakers.has(segmentId)) {
+      this.segmentSpeakers.set(segmentId, this.currentSpeaker)
     }
   }
 
   /**
-   * Finds the speaker at a given position in the audio stream.
-   * Returns the last speaker change that occurred before or at this position.
-   *
-   * @param {number} position - Position in ms in the audio stream (from ASR start/end)
-   * @returns {{id: string, name: string}|null} - Speaker info or null if silence/unknown
+   * Returns the speaker assigned to a segment.
+   * @param {number} segmentId
+   * @returns {{id: string, name: string}|null}
    */
-  getSpeakerAtPosition (position) {
-    // Find the last change that occurred at or before this position
-    for (let i = this.changes.length - 1; i >= 0; i--) {
-      if (this.changes[i].position <= position) {
-        return this.changes[i].speaker
-      }
-    }
-    return null
+  getSpeakerForSegment (segmentId) {
+    return this.segmentSpeakers.get(segmentId) || null
+  }
+
+  /**
+   * Removes a completed segment from the map.
+   * Called by the ASR wrapper after emitting a final.
+   * @param {number} segmentId
+   */
+  clearSegment (segmentId) {
+    this.segmentSpeakers.delete(segmentId)
   }
 
   /**
@@ -100,24 +91,14 @@ class SpeakerTracker {
   }
 
   /**
-   * Checks if there are any speaker changes recorded.
-   * @returns {boolean}
-   */
-  hasSpeakerChanges () {
-    return this.changes.length > 0
-  }
-
-  /**
    * Gets statistics for debugging.
    * @returns {Object}
    */
   getStats () {
     return {
       participantCount: this.participants.size,
-      changeCount: this.changes.length,
-      latestPosition: this.changes.length > 0
-        ? this.changes[this.changes.length - 1].position
-        : 0
+      activeSegments: this.segmentSpeakers.size,
+      currentSpeaker: this.currentSpeaker?.name || null
     }
   }
 
@@ -126,7 +107,8 @@ class SpeakerTracker {
    */
   clear () {
     this.participants.clear()
-    this.changes = []
+    this.segmentSpeakers.clear()
+    this.currentSpeaker = null
   }
 }
 

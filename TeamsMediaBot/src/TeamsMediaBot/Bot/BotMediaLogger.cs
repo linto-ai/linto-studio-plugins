@@ -21,13 +21,25 @@ namespace TeamsMediaBot.Bot
             _logger = logger;
         }
 
+        /// <summary>
+        /// Media platform error messages that are expected during normal teardown
+        /// and should be downgraded from Error to Warning.
+        /// </summary>
+        private static readonly string[] TeardownErrorPatterns = new[]
+        {
+            "Endpoints not found",
+            "GetAllChannelsQoe",
+            "MediaPerf is not registered",
+        };
+
         public void WriteLog(MediaLogLevel level, string logStatement)
         {
             LogLevel logLevel;
             switch (level)
             {
                 case MediaLogLevel.Error:
-                    logLevel = LogLevel.Error;
+                    // Downgrade known teardown noise from Error to Warning
+                    logLevel = IsTeardownNoise(logStatement) ? LogLevel.Warning : LogLevel.Error;
                     break;
                 case MediaLogLevel.Warning:
                     logLevel = LogLevel.Warning;
@@ -44,6 +56,16 @@ namespace TeamsMediaBot.Bot
             }
 
             this._logger.Log(logLevel, logStatement);
+        }
+
+        private static bool IsTeardownNoise(string logStatement)
+        {
+            foreach (var pattern in TeardownErrorPatterns)
+            {
+                if (logStatement.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
     }
 }

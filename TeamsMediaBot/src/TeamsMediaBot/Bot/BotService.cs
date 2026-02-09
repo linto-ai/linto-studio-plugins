@@ -450,7 +450,7 @@ namespace TeamsMediaBot.Bot
                 }
                 else
                 {
-                    _logger.LogWarning("[BotService] No CallHandler found for removed call threadId {ThreadId}", threadId);
+                    _logger.LogDebug("[BotService] No CallHandler found for removed call threadId {ThreadId} (already cleaned up by EndCallByThreadIdAsync)", threadId);
                 }
 
                 _logger.LogInformation("[BotService] Remaining CallHandlers: {Count}", this.CallHandlers.Count);

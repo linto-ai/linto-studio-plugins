@@ -273,6 +273,7 @@ module.exports = function (app) {
       sessionId: meeting.sessionId,
       channelId: meeting.channelId,
       threadId: meeting.threadId,
+      owner: meeting.owner,
       languages: meeting.languages,
       translations: meeting.translations,
       connectedAt: meeting.connectedAt
@@ -505,7 +506,8 @@ module.exports = function (app) {
       if (meetingRegistry) {
         const normalizedThreadId = normalizeThreadId(threadId)
         meetingRegistry.registerMeeting(normalizedThreadId, sessionId, channelId, {
-          translations: Array.isArray(translations) ? translations : []
+          translations: Array.isArray(translations) ? translations : [],
+          owner: req.user.oid
         })
         logger.info(`[TeamsAppService] Meeting registered: threadId=${normalizedThreadId}, session=${sessionId}`)
       }

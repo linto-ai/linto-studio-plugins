@@ -29,6 +29,8 @@ services:
       dockerfile: migration/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
     depends_on:
@@ -42,6 +44,8 @@ services:
       dockerfile: Transcriber/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=transcriber:*
       - SERVICE_HOSTNAME=emeeting-transcriber-1
@@ -60,6 +64,8 @@ services:
       dockerfile: Session-API/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=session-api:*
     expose:
@@ -80,6 +86,8 @@ services:
       dockerfile: Scheduler/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=scheduler:*
     depends_on:
@@ -96,6 +104,8 @@ services:
       dockerfile: BotService/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=botservice:*
       - SERVICE_HOSTNAME=emeeting-botservice-1
@@ -113,6 +123,8 @@ services:
       dockerfile: LivekitBot/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=livekitbot:*
       - SERVICE_HOSTNAME=emeeting-livekitbot-1
@@ -135,6 +147,8 @@ services:
       dockerfile: Microsoft-Teams-Scheduler/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=msteams-scheduler:*
     depends_on:
@@ -151,6 +165,8 @@ services:
       dockerfile: TeamsAppService/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=teamsappservice:*
       - TEAMSAPPSERVICE_HTTPS_PORT=443

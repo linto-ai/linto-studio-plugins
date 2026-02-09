@@ -40,8 +40,8 @@ STREAMING_WS_SECURE=false
 STREAMING_WS_ENDPOINT=transcriber-ws
 STREAMING_RTMP_SECURE=false
 
-##### Database #####
-DB_HOST=database
+##### Database (PostgreSQL) #####
+DB_HOST=database # Hostname (use "database" for Docker, "localhost" for local dev)
 DB_PORT=5433
 DB_USER=myuser
 DB_PASSWORD=mypass
@@ -53,35 +53,37 @@ TRANSCRIBER_RESET_MESSAGE="Channel reset."
 ASR_AVAILABLE_TRANSLATIONS_MICROSOFT="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
 ASR_HAS_DIARIZATION_MICROSOFT=true
 
-##### MQTT compatible Broker #####
-BROKER_HOST=broker
+##### MQTT Broker (Eclipse Mosquitto) #####
+BROKER_HOST=broker # Hostname (use "broker" for Docker, "localhost" for local dev)
 BROKER_PORT=1883
-BROKER_USERNAME=
-BROKER_PASSWORD=
-BROKER_KEEPALIVE=60
-BROKER_PROTOCOL=mqtt
+BROKER_USERNAME= # Leave empty for no authentication
+BROKER_PASSWORD= # Leave empty for no authentication
+BROKER_KEEPALIVE=60 # Keepalive interval in seconds
+BROKER_PROTOCOL=mqtt # mqtt or mqtts
 
 ##### Session API #####
-SESSION_API_HOST=http://localhost:8005
+SESSION_API_HOST=http://localhost:8005 # Internal URL used by other services to reach Session-API
 SESSION_API_WEBSERVER_HTTP_PORT=8005
 
-# Microsoft Teams Scheduler
-MSTEAMS_SCHEDULER_AZURE_TENANT_ID=
-MSTEAMS_SCHEDULER_AZURE_CLIENT_ID=
-MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET=
-MSTEAMS_SCHEDULER_USER_ID=
-MSTEAMS_SCHEDULER_PUBLIC_BASE=http://msteams-scheduler:8081
-MSTEAMS_SCHEDULER_BASE_URL=http://msteams-scheduler:8081
+# Microsoft Teams Scheduler (Graph API calendar webhooks)
+MSTEAMS_SCHEDULER_AZURE_TENANT_ID= # Azure AD tenant ID
+MSTEAMS_SCHEDULER_AZURE_CLIENT_ID= # Azure AD app registration client ID
+MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET= # Azure AD app registration client secret
+MSTEAMS_SCHEDULER_USER_ID= # Microsoft 365 user ID to monitor calendar events
+MSTEAMS_SCHEDULER_PUBLIC_BASE=http://msteams-scheduler:8081 # Public URL for Graph API webhook callbacks
+MSTEAMS_SCHEDULER_BASE_URL=http://msteams-scheduler:8081 # Internal service URL
 MSTEAMS_SCHEDULER_PORT=8081
 
 # Teams App Service (Live Transcription side panel)
 TEAMSAPPSERVICE_HTTP_PORT=8082
-TEAMSAPPSERVICE_APP_ID=40ce8848-ebe0-42d1-aab8-e992443977bc
-TEAMSAPPSERVICE_BASE_URL=https://teams.devops-expert.com
+TEAMSAPPSERVICE_APP_ID=40ce8848-ebe0-42d1-aab8-e992443977bc # Azure Bot registration App ID
+TEAMSAPPSERVICE_BASE_URL=https://teams.devops-expert.com # Public HTTPS URL for the Teams app
+TEAMSAPPSERVICE_AZURE_TENANT_ID= # Azure AD tenant ID for token validation
 
 # LiveKit Bot Configuration
 LIVEKITBOT_COMPONENTS=BrokerClient
-LIVEKIT_URL=wss://your-livekit-server.com
-LIVEKIT_API_KEY=
-LIVEKIT_API_SECRET=
-BOT_DISPLAY_NAME=Transcription Bot
+LIVEKIT_MEET_URL= # LiveKit Meet frontend URL (e.g. https://meet.example.com)
+LIVEKIT_URL= # LiveKit server WebSocket URL (e.g. wss://livekit.example.com)
+LIVEKIT_API_KEY= # LiveKit API key for authentication
+LIVEKIT_API_SECRET= # LiveKit API secret for authentication
+BOT_DISPLAY_NAME=Transcription Bot # Display name shown in meeting participants list

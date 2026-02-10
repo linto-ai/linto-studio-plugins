@@ -40,6 +40,13 @@ namespace TeamsMediaBot.Bot
         private readonly ILogger _logger;
         private int shutdown;
 
+        // Active speaker tracking from AudioMediaBuffer.ActiveSpeakers (per-frame, real-time)
+        private uint _confirmedSpeakerMsi = uint.MaxValue;
+        private uint _pendingSpeakerMsi = uint.MaxValue;
+        private long _pendingSpeakerSinceTicks;
+        private const int SpeakerDebounceMs = 200;
+        private const int SilenceDebounceMs = 2000;
+
         /// <summary>
         /// Event raised when audio data is received from Teams.
         /// Used to stream audio to external consumers (e.g., Transcriber WebSocket).
@@ -47,10 +54,11 @@ namespace TeamsMediaBot.Bot
         public event EventHandler<AudioDataEventArgs>? AudioDataReceived;
 
         /// <summary>
-        /// Event raised when the dominant speaker changes in the meeting.
-        /// Re-raises the SDK's DominantSpeakerChanged event for external consumers.
+        /// Event raised when the active speaker MSI changes, detected from AudioMediaBuffer.ActiveSpeakers.
+        /// More reliable and faster than SDK's DominantSpeakerChanged: real-time with 200ms debounce,
+        /// works for all participant types including external/anonymous users.
         /// </summary>
-        public event EventHandler<DominantSpeakerChangedEventArgs>? DominantSpeakerChanged;
+        public event Action<uint>? ActiveSpeakerMsiChanged;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BotMediaStream" /> class.
@@ -84,7 +92,6 @@ namespace TeamsMediaBot.Bot
             }
 
             this._audioSocket.AudioMediaReceived += this.OnAudioMediaReceived;
-            this._audioSocket.DominantSpeakerChanged += this.OnDominantSpeakerChanged;
         }
 
         /// <summary>
@@ -111,16 +118,9 @@ namespace TeamsMediaBot.Bot
             if (this._audioSocket != null)
             {
                 this._audioSocket.AudioMediaReceived -= this.OnAudioMediaReceived;
-                this._audioSocket.DominantSpeakerChanged -= this.OnDominantSpeakerChanged;
             }
 
             return Task.CompletedTask;
-        }
-
-        private void OnDominantSpeakerChanged(object? sender, DominantSpeakerChangedEventArgs e)
-        {
-            _logger.LogTrace("DominantSpeakerChanged event received");
-            DominantSpeakerChanged?.Invoke(this, e);
         }
 
         /// <summary>
@@ -134,6 +134,9 @@ namespace TeamsMediaBot.Bot
 
             try
             {
+                // Detect active speaker from per-frame ActiveSpeakers array
+                DetectActiveSpeaker(e.Buffer.ActiveSpeakers);
+
                 // Extract audio data for external consumers
                 var length = e.Buffer.Length;
                 if (length > 0)
@@ -153,6 +156,33 @@ namespace TeamsMediaBot.Bot
             finally
             {
                 e.Buffer.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Detects active speaker changes from AudioMediaBuffer.ActiveSpeakers with debounce.
+        /// A speaker change is confirmed only after the new MSI is stable for 200ms.
+        /// </summary>
+        private void DetectActiveSpeaker(uint[]? activeSpeakers)
+        {
+            uint currentMsi = (activeSpeakers != null && activeSpeakers.Length > 0)
+                ? activeSpeakers[0]
+                : uint.MaxValue;
+
+            if (currentMsi != _pendingSpeakerMsi)
+            {
+                // New candidate speaker, start debounce
+                _pendingSpeakerMsi = currentMsi;
+                _pendingSpeakerSinceTicks = Environment.TickCount64;
+            }
+            else if (currentMsi != _confirmedSpeakerMsi)
+            {
+                var debounce = (currentMsi == uint.MaxValue) ? SilenceDebounceMs : SpeakerDebounceMs;
+                if ((Environment.TickCount64 - _pendingSpeakerSinceTicks) >= debounce)
+                {
+                    _confirmedSpeakerMsi = currentMsi;
+                    ActiveSpeakerMsiChanged?.Invoke(currentMsi);
+                }
             }
         }
     }

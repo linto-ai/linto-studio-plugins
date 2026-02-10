@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Text.Json;
 using TeamsMediaBot.Events;
 using TeamsMediaBot.Util;
 using Microsoft.Graph;
@@ -65,7 +66,7 @@ namespace TeamsMediaBot.Bot
                 statefulCall.Id, statefulCall.Resource?.ChatInfo?.ThreadId ?? "unknown");
 
             this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings);
-            this.BotMediaStream.DominantSpeakerChanged += this.OnDominantSpeakerChanged;
+            this.BotMediaStream.ActiveSpeakerMsiChanged += this.OnActiveSpeakerChanged;
         }
 
         /// <inheritdoc/>
@@ -89,7 +90,7 @@ namespace TeamsMediaBot.Bot
 
             if (this.BotMediaStream != null)
             {
-                this.BotMediaStream.DominantSpeakerChanged -= this.OnDominantSpeakerChanged;
+                this.BotMediaStream.ActiveSpeakerMsiChanged -= this.OnActiveSpeakerChanged;
             }
 
             this.BotMediaStream?.ShutdownAsync().ForgetAndLogExceptionAsync(this.GraphLogger);
@@ -142,14 +143,7 @@ namespace TeamsMediaBot.Bot
                     isUsable = CheckParticipantIsUsable(participant);
                     if (isUsable)
                     {
-                        foreach (var entry in participant.Resource.Info.Identity.AdditionalData)
-                        {
-                            if (entry.Key != "applicationInstance" && entry.Value is Identity identity)
-                            {
-                                displayName = identity.DisplayName ?? "";
-                                break;
-                            }
-                        }
+                        displayName = ExtractDisplayNameFromAdditionalData(participant.Resource.Info.Identity.AdditionalData);
                     }
                 }
 
@@ -223,41 +217,145 @@ namespace TeamsMediaBot.Bot
             updateParticipants(args.RemovedResources, false);
         }
 
-        private void OnDominantSpeakerChanged(object? sender, DominantSpeakerChangedEventArgs e)
+        private void OnActiveSpeakerChanged(uint msi)
         {
             try
             {
-                var msi = e.CurrentDominantSpeaker;
-                if (_msiToParticipantId.TryGetValue(msi, out var participantId))
+                // Silence: no one is speaking
+                if (msi == uint.MaxValue)
                 {
-                    var displayName = "";
-                    if (_participants.TryGetValue(participantId, out var info))
-                    {
-                        displayName = info.DisplayName;
-                    }
-
-                    _logger.LogInformation("[CallHandler] Dominant speaker: {Id} ({Name}) MSI={Msi}",
-                        participantId, displayName, msi);
-                    DominantSpeakerChanged?.Invoke(this, new Events.DominantSpeakerEventArgs(participantId, displayName));
+                    _logger.LogInformation("[CallHandler] Silence detected");
+                    DominantSpeakerChanged?.Invoke(this, new Events.DominantSpeakerEventArgs(null, null));
+                    return;
                 }
-                else
+
+                var participantId = ResolveParticipantFromMsi(msi);
+                if (participantId == null)
                 {
-                    _logger.LogDebug("[Speaker] Unknown MSI {Msi}", msi);
+                    _logger.LogDebug("[Speaker] Unknown MSI {Msi}, could not resolve participant", msi);
+                    return;
+                }
+
+                var displayName = "";
+                if (_participants.TryGetValue(participantId, out var info))
+                {
+                    displayName = info.DisplayName;
+                }
+
+                _logger.LogInformation("[CallHandler] Active speaker: {Id} ({Name}) MSI={Msi}",
+                    participantId, displayName, msi);
+                DominantSpeakerChanged?.Invoke(this, new Events.DominantSpeakerEventArgs(participantId, displayName));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[CallHandler] Error handling active speaker change");
+            }
+        }
+
+        /// <summary>
+        /// Resolves a participant ID from an MSI. First checks the cache, then lazily scans
+        /// Call.Participants to find who has this MSI in their MediaStreams.
+        /// This handles external/anonymous users whose MSI was not available at join time.
+        /// </summary>
+        private string? ResolveParticipantFromMsi(uint msi)
+        {
+            // 1. Check cache
+            if (_msiToParticipantId.TryGetValue(msi, out var cached))
+                return cached;
+
+            // 2. Lazy resolution: scan current participants
+            try
+            {
+                foreach (var participant in Call.Participants)
+                {
+                    var streams = participant.Resource?.MediaStreams;
+                    if (streams == null) continue;
+
+                    foreach (var ms in streams)
+                    {
+                        if (ms.MediaType == Modality.Audio && ms.SourceId != null
+                            && uint.TryParse(ms.SourceId, out var parsedMsi) && parsedMsi == msi)
+                        {
+                            // Cache the mapping
+                            _msiToParticipantId[msi] = participant.Id;
+
+                            // Ensure participant is tracked if not already
+                            if (!_participants.ContainsKey(participant.Id))
+                            {
+                                var name = ExtractParticipantName(participant);
+                                _participants[participant.Id] = (name, msi);
+                                _allParticipants[participant.Id] = true;
+                                _logger.LogInformation("[Speaker] Lazy-resolved MSI {Msi} -> {Name} ({Id})",
+                                    msi, name, participant.Id);
+                            }
+
+                            return participant.Id;
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[CallHandler] Error handling dominant speaker change");
+                _logger.LogWarning(ex, "[Speaker] Error during lazy MSI resolution for MSI {Msi}", msi);
             }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Extracts the display name from a participant regardless of identity type.
+        /// </summary>
+        private string ExtractParticipantName(IParticipant participant)
+        {
+            var user = participant.Resource?.Info?.Identity?.User;
+            if (user != null) return user.DisplayName ?? "";
+
+            var additionalData = participant.Resource?.Info?.Identity?.AdditionalData;
+            if (additionalData?.Count > 0)
+                return ExtractDisplayNameFromAdditionalData(additionalData);
+
+            return "";
         }
 
         private bool CheckParticipantIsUsable(IParticipant p)
         {
-            foreach (var i in p.Resource.Info.Identity.AdditionalData)
-                if (i.Key != "applicationInstance" && i.Value is Identity)
+            foreach (var entry in p.Resource.Info.Identity.AdditionalData)
+            {
+                if (entry.Key == "applicationInstance") continue;
+
+                // Identity objects are deserialized for known types (e.g., "guest", "phone")
+                if (entry.Value is Identity)
                     return true;
 
+                // Anonymous/external users may have their identity as a JsonElement
+                if (entry.Value is JsonElement)
+                    return true;
+            }
+
             return false;
+        }
+
+        /// <summary>
+        /// Extracts display name from AdditionalData, handling both Identity objects and JsonElement values
+        /// (anonymous/external users without a Teams account).
+        /// </summary>
+        private string ExtractDisplayNameFromAdditionalData(IDictionary<string, object> additionalData)
+        {
+            foreach (var entry in additionalData)
+            {
+                if (entry.Key == "applicationInstance") continue;
+
+                if (entry.Value is Identity identity)
+                    return identity.DisplayName ?? "";
+
+                if (entry.Value is JsonElement json && json.ValueKind == JsonValueKind.Object)
+                {
+                    if (json.TryGetProperty("displayName", out var nameElement) && nameElement.ValueKind == JsonValueKind.String)
+                        return nameElement.GetString() ?? "";
+                }
+            }
+
+            return "";
         }
 
         /// <summary>

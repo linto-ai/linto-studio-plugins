@@ -162,12 +162,38 @@
     if (profileLabel) profileLabel.textContent = window.i18n.t('profileLabel')
 
     // Re-translate session options
-    const optDiarization = document.querySelector('label[for="opt-diarization"] span')
-    if (optDiarization) optDiarization.textContent = window.i18n.t('optDiarization')
-    const optKeepAudio = document.querySelector('label[for="opt-keep-audio"] span')
-    if (optKeepAudio) optKeepAudio.textContent = window.i18n.t('optKeepAudio')
-    const optTranslationsTitle = document.querySelector('.option-section-title')
-    if (optTranslationsTitle) optTranslationsTitle.textContent = window.i18n.t('optTranslations')
+    const diarizationLabelEl = document.getElementById('diarization-label')
+    if (diarizationLabelEl) diarizationLabelEl.textContent = window.i18n.t('diarizationLabel')
+    const keepAudioLabelEl = document.getElementById('keep-audio-label')
+    if (keepAudioLabelEl) keepAudioLabelEl.textContent = window.i18n.t('keepAudioLabel')
+    const translationsLabelEl = document.getElementById('translations-label')
+    if (translationsLabelEl) translationsLabelEl.textContent = window.i18n.t('optTranslations')
+    // Re-translate translation chip labels
+    document.querySelectorAll('#translations-list .translation-chip span').forEach(span => {
+      const checkbox = span.previousElementSibling
+      if (checkbox && checkbox.value) {
+        span.textContent = getLanguageName(checkbox.value)
+      }
+    })
+    const diarizationTooltip = document.getElementById('diarization-tooltip')
+    if (diarizationTooltip) diarizationTooltip.textContent = window.i18n.t('diarizationTooltip')
+    const diarizationNativeLabel = document.getElementById('diarization-label-native')
+    if (diarizationNativeLabel) diarizationNativeLabel.textContent = window.i18n.t('diarizationNative')
+    const diarizationSoftwareLabel = document.getElementById('diarization-label-software')
+    if (diarizationSoftwareLabel) diarizationSoftwareLabel.textContent = window.i18n.t('diarizationSoftware')
+    const diarizationHint = document.getElementById('diarization-hint')
+    if (diarizationHint) {
+      const diarizationCheckbox = document.getElementById('opt-diarization')
+      diarizationHint.textContent = diarizationCheckbox && diarizationCheckbox.checked
+        ? window.i18n.t('diarizationSoftwareHint')
+        : window.i18n.t('diarizationNativeHint')
+    }
+    const keepAudioTooltip = document.getElementById('keep-audio-tooltip')
+    if (keepAudioTooltip) keepAudioTooltip.textContent = window.i18n.t('keepAudioTooltip')
+    const keepAudioOnLabel = document.getElementById('keep-audio-label-on')
+    if (keepAudioOnLabel) keepAudioOnLabel.textContent = window.i18n.t('keepAudioOn')
+    const keepAudioOffLabel = document.getElementById('keep-audio-label-off')
+    if (keepAudioOffLabel) keepAudioOffLabel.textContent = window.i18n.t('keepAudioOff')
 
     // Re-translate inline pairing UI if visible
     const pairingText = document.querySelector('.inline-pairing-text')
@@ -562,20 +588,37 @@
           <select id="profile-select" class="profile-select" style="display:none;"></select>
         </div>
         <div id="session-options" class="session-options" style="display:none;">
-          <div class="option-row">
-            <label class="option-label" for="opt-diarization">
-              <input type="checkbox" id="opt-diarization">
-              <span>${window.i18n.t('optDiarization')}</span>
-            </label>
+          <div class="option-group">
+            <div class="option-group-header">
+              <span class="option-group-title" id="diarization-label">${window.i18n.t('diarizationLabel')}</span>
+              <span class="help-icon" id="diarization-help">?<span class="help-tooltip" id="diarization-tooltip">${window.i18n.t('diarizationTooltip')}</span></span>
+            </div>
+            <div class="toggle-row">
+              <span id="diarization-label-native" class="toggle-label active">${window.i18n.t('diarizationNative')}</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="opt-diarization">
+                <span class="toggle-slider"></span>
+              </label>
+              <span id="diarization-label-software" class="toggle-label">${window.i18n.t('diarizationSoftware')}</span>
+            </div>
+            <span id="diarization-hint" class="toggle-hint">${window.i18n.t('diarizationNativeHint')}</span>
           </div>
-          <div class="option-row">
-            <label class="option-label" for="opt-keep-audio">
-              <input type="checkbox" id="opt-keep-audio" checked>
-              <span>${window.i18n.t('optKeepAudio')}</span>
-            </label>
+          <div class="option-group">
+            <div class="option-group-header">
+              <span class="option-group-title" id="keep-audio-label">${window.i18n.t('keepAudioLabel')}</span>
+              <span class="help-icon">?<span class="help-tooltip" id="keep-audio-tooltip">${window.i18n.t('keepAudioTooltip')}</span></span>
+            </div>
+            <div class="toggle-row">
+              <span id="keep-audio-label-on" class="toggle-label active">${window.i18n.t('keepAudioOn')}</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="opt-keep-audio">
+                <span class="toggle-slider"></span>
+              </label>
+              <span id="keep-audio-label-off" class="toggle-label">${window.i18n.t('keepAudioOff')}</span>
+            </div>
           </div>
-          <div id="translations-container" class="option-row" style="display:none;">
-            <span class="option-section-title">${window.i18n.t('optTranslations')}</span>
+          <div id="translations-container" class="option-group" style="display:none;">
+            <span class="option-group-title" id="translations-label">${window.i18n.t('optTranslations')}</span>
             <div id="translations-list" class="translations-list"></div>
           </div>
         </div>
@@ -587,6 +630,40 @@
 
     const startBtn = document.getElementById('start-transcription-btn')
     startBtn.addEventListener('click', onStartTranscription)
+
+    // Diarization toggle logic
+    const diarizationCheckbox = document.getElementById('opt-diarization')
+    const nativeLabel = document.getElementById('diarization-label-native')
+    const softwareLabel = document.getElementById('diarization-label-software')
+    const hint = document.getElementById('diarization-hint')
+
+    function updateDiarizationUI() {
+      const isSoftware = diarizationCheckbox.checked
+      nativeLabel.classList.toggle('active', !isSoftware)
+      softwareLabel.classList.toggle('active', isSoftware)
+      hint.textContent = isSoftware
+        ? window.i18n.t('diarizationSoftwareHint')
+        : window.i18n.t('diarizationNativeHint')
+    }
+
+    diarizationCheckbox.addEventListener('change', updateDiarizationUI)
+    nativeLabel.addEventListener('click', () => { diarizationCheckbox.checked = false; updateDiarizationUI() })
+    softwareLabel.addEventListener('click', () => { diarizationCheckbox.checked = true; updateDiarizationUI() })
+
+    // Keep audio toggle logic
+    const keepAudioCheckbox = document.getElementById('opt-keep-audio')
+    const keepAudioOffLabel = document.getElementById('keep-audio-label-off')
+    const keepAudioOnLabel = document.getElementById('keep-audio-label-on')
+
+    function updateKeepAudioUI() {
+      const isOff = keepAudioCheckbox.checked
+      keepAudioOnLabel.classList.toggle('active', !isOff)
+      keepAudioOffLabel.classList.toggle('active', isOff)
+    }
+
+    keepAudioCheckbox.addEventListener('change', updateKeepAudioUI)
+    keepAudioOnLabel.addEventListener('click', () => { keepAudioCheckbox.checked = false; updateKeepAudioUI() })
+    keepAudioOffLabel.addEventListener('click', () => { keepAudioCheckbox.checked = true; updateKeepAudioUI() })
   }
 
   /**
@@ -693,7 +770,7 @@
           threadId,
           translations: getSelectedTranslations(),
           diarization: document.getElementById('opt-diarization').checked,
-          keepAudio: document.getElementById('opt-keep-audio').checked
+          keepAudio: !document.getElementById('opt-keep-audio').checked
         })
       })
 

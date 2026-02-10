@@ -34,11 +34,13 @@ class MeetingRegistry extends Component {
    * @param {Object} options - Additional options (languages, translations)
    */
   registerMeeting(threadId, sessionId, channelId, options = {}) {
+    // Preserve owner from existing meeting if not provided in new registration
+    const existing = this._meetings.get(threadId)
     const meeting = {
       sessionId,
       channelId,
       threadId,
-      owner: options.owner || null,
+      owner: options.owner || (existing && existing.owner) || null,
       languages: options.languages || [],
       translations: options.translations || [],
       connectedAt: new Date().toISOString()

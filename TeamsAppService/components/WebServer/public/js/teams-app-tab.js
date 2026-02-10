@@ -45,6 +45,7 @@
   let currentFontSize = 'md'
   let authToken = null
   let isAccountLinked = false
+  let isSessionOwner = false
 
   // Font sizes
   const fontSizes = ['sm', 'md', 'lg']
@@ -128,10 +129,8 @@
         threadId = await window.teamsSdk.getThreadId()
         console.log('[TeamsApp] Thread ID:', threadId)
 
-        // Silent auth in background - don't block init
-        refreshAuthToken().then(token => {
-          if (token) console.log('[TeamsApp] SSO token acquired in background')
-        })
+        // Get auth token before meeting lookup (needed for ownership check)
+        await refreshAuthToken()
       } else {
         // For testing outside of Teams
         console.log('[TeamsApp] Running outside of Teams')
@@ -144,6 +143,9 @@
 
       // If we have sessionId/channelId from params, skip account check and meeting lookup
       if (sessionId && channelId) {
+        if (isSessionOwner) {
+          showStopTranscriptionUI()
+        }
         await connectToTranscriptions()
         return
       }
@@ -377,7 +379,9 @@
 
       // Check if current user is the owner
       const currentUserOid = getOidFromToken(authToken)
-      const isOwner = currentUserOid && meeting.owner && currentUserOid === meeting.owner
+      isSessionOwner = !!(currentUserOid && meeting.owner && currentUserOid === meeting.owner)
+      console.log('[TeamsApp] Ownership check: currentOid=%s, meetingOwner=%s, isOwner=%s',
+        currentUserOid, meeting.owner, isSessionOwner)
 
       // Update language selector if translations available
       if (meeting.translations && meeting.translations.length > 0) {
@@ -385,7 +389,7 @@
       }
 
       // Show stop button only if current user is the owner
-      if (isOwner) {
+      if (isSessionOwner) {
         showStopTranscriptionUI()
       }
 
@@ -612,6 +616,7 @@
       }
 
       // 5. Connect to transcriptions
+      isSessionOwner = true
       transcriptionManager.clear()
       showStopTranscriptionUI()
       await connectToTranscriptions()
@@ -691,6 +696,7 @@
       // Reset state
       sessionId = null
       channelId = null
+      isSessionOwner = false
 
       // Show start UI again
       showStartTranscriptionUI()
@@ -899,6 +905,16 @@
   languageSelect.addEventListener('change', onLanguageChange)
   fontSizeDecreaseBtn.addEventListener('click', () => changeFontSize(-1))
   fontSizeIncreaseBtn.addEventListener('click', () => changeFontSize(1))
+
+  // Restore Stop button when tab becomes visible again (Teams hides/shows iframe on panel switch)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && sessionId && isSessionOwner) {
+      if (!document.getElementById('stop-transcription-btn')) {
+        console.log('[TeamsApp] Restoring Stop button after visibility change')
+        showStopTranscriptionUI()
+      }
+    }
+  })
 
   // Initialize on load
   init()

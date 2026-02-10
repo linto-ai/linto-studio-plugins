@@ -64,11 +64,11 @@ deploy_migration:
   image: registry.fpfis.eu/scic/open-source-speech-to-text/source/node:20-alpine
   stage: deploy
   variables:
-    DB_HOST: "10.178.181.91"
-    DB_PORT: 5432
-    DB_USER: "myuser"
-    DB_PASSWORD: "mypass"
-    DB_NAME: "mydb"
+    DB_HOST: "$MIGRATION_DB_HOST"
+    DB_PORT: "$MIGRATION_DB_PORT"
+    DB_USER: "$MIGRATION_DB_USER"
+    DB_PASSWORD: "$MIGRATION_DB_PASSWORD"
+    DB_NAME: "$MIGRATION_DB_NAME"
     NODE_ENV: "production"
   script: 
     - cd migration/ && npm install && npm run migrate

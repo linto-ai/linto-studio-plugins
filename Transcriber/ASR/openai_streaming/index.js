@@ -40,8 +40,12 @@ const DEFAULT_SILENCE_MS = 1000;
 const DEFAULT_PUNCT_SILENCE_MS = 500;
 const DEFAULT_HARD_SILENCE_MS = 2500;
 const DEFAULT_MIN_WORDS = 3;
-const DEFAULT_SOFT_MAX_WORDS = 30;
-const DEFAULT_HARD_MAX_WORDS = 45;
+const DEFAULT_SOFT_MAX_WORDS = 80;
+const DEFAULT_HARD_MAX_WORDS = 150;
+
+// Internal sentence boundary: sentence-ending punct followed by space+uppercase
+// Matches: ". Le", "! On", "? Est", "。「" etc.
+const INTERNAL_SENTENCE_BOUNDARY = /[.!?。！？]\s+(?=[A-ZÀ-ÖØ-ÞÉÈÊËÎÏÔÙÛÜŸŒÆ])/;
 
 // Grace period after sending a commit: wait for server to flush trailing tokens (punctuation, etc.)
 const DRAIN_GRACE_MS = 750;
@@ -349,6 +353,11 @@ class OpenAIStreamingTranscriber extends EventEmitter {
                 this.startTime = Date.now();
             }
 
+            // Priority 0: Check for internal sentence boundary in accumulated text.
+            // When Voxtral emits punctuation (possibly delayed), we split immediately
+            // at the boundary rather than waiting for silence.
+            this._checkInternalBoundary();
+
             const lang = this.detectLanguage(this.accumulatedText);
             const payload = this.getMqttPayload(this.accumulatedText, lang);
             this.emit('transcribing', payload);
@@ -408,11 +417,17 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     /**
      * Hybrid segmentation timer for protocols without server-side final events (e.g. vLLM).
      *
+     * NOTE: The primary segmentation is now handled by _checkInternalBoundary()
+     * in handlePartial(), which splits at internal punctuation boundaries
+     * (e.g. ". Le", "! On") as soon as they appear. This timer handles the
+     * remaining cases where punctuation is absent or delayed.
+     *
      * Segmentation strategy (priority order):
+     * 0. [In handlePartial] Internal sentence boundary → immediate split (primary)
      * 1. Hard max words exceeded → force cut at last punctuation or word boundary
      * 2. Soft max words + sentence-ending punctuation → cut
-     * 3. Silence > silenceMs + sentence-ending punctuation + min words → cut (sentence boundary)
-     * 4. Silence > punctSilenceMs + sentence-ending punctuation + soft max words → cut (long sentence)
+     * 3. Silence > silenceMs + sentence-ending punctuation + min words → cut
+     * 4. Silence > punctSilenceMs + sentence-ending punctuation + enough words → cut
      * 5. Silence > hardSilenceMs + min words → cut (hard fallback, no punctuation needed)
      */
     startSegmentationTimer() {
@@ -525,6 +540,44 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             }
         }
         return bestIdx;
+    }
+
+    /**
+     * Check for internal sentence boundaries in accumulated text.
+     * If found, emit everything up to the boundary as a final segment
+     * and keep the rest as the start of the next segment.
+     *
+     * This is the primary segmentation mechanism for models like Voxtral
+     * that produce reliable punctuation (possibly delayed). It cuts at
+     * natural sentence boundaries without waiting for silence.
+     */
+    _checkInternalBoundary() {
+        const trimmed = this.accumulatedText.trim();
+        if (this._wordCount(trimmed) < this.minWords) return;
+
+        const match = INTERNAL_SENTENCE_BOUNDARY.exec(trimmed);
+        if (!match) return;
+
+        // Split at the boundary: emit up to and including the punctuation
+        const boundaryIdx = match.index;  // index of the . ! ? character
+        const emitText = trimmed.substring(0, boundaryIdx + 1).trim();
+        const remaining = trimmed.substring(boundaryIdx + 1).trim();
+
+        // Only split if the emitted part has enough words
+        if (this._wordCount(emitText) < this.minWords) return;
+
+        const lang = this.detectLanguage(emitText, true);
+        const payload = this.getMqttPayload(emitText, lang);
+        this.lastEndTime = payload.end;
+        this.emit('transcribed', payload);
+        this.segmentId++;
+        this.logger.debug(`ASR final transcription (sentence boundary): ${emitText}`);
+
+        // Keep remainder for next segment
+        this.accumulatedText = ' ' + remaining;
+        this.startTime = Date.now();
+        this._lastLangCheckLen = 0;
+        this._draining = false;
     }
 
     _sendCommit() {

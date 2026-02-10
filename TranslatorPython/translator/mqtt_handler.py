@@ -111,6 +111,7 @@ class MqttHandler:
             port=self.broker_port,
             clean_session=True,
             will=will,
+            keepalive=60,
         ) as client:
             self._client = client
             logger.info("Connected to MQTT broker at %s:%d", self.broker_host, self.broker_port)
@@ -129,14 +130,39 @@ class MqttHandler:
             # Start stats logger
             await self.pipeline.start_stats_logger()
 
+            # Start periodic status heartbeat (re-publishes online status)
+            heartbeat_task = asyncio.create_task(
+                self._status_heartbeat(client)
+            )
+
             # Process messages
-            async for message in client.messages:
-                if self._shutdown_event.is_set():
-                    break
+            try:
+                async for message in client.messages:
+                    if self._shutdown_event.is_set():
+                        break
+                    try:
+                        await self._handle_message(message)
+                    except Exception:
+                        logger.exception("Error processing message on topic %s", message.topic)
+            finally:
+                heartbeat_task.cancel()
                 try:
-                    await self._handle_message(message)
-                except Exception:
-                    logger.exception("Error processing message on topic %s", message.topic)
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _status_heartbeat(self, client: aiomqtt.Client) -> None:
+        """Re-publish online status every 60s to survive broker restarts."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await client.publish(
+                    self.status_topic, self.online_payload, qos=1, retain=True
+                )
+                logger.debug("Heartbeat: re-published online status")
+            except Exception:
+                logger.warning("Heartbeat: failed to publish status")
+                break  # Connection likely dead, let reconnect loop handle it
 
     async def _handle_message(self, message: aiomqtt.Message) -> None:
         """Route an incoming MQTT message through the pipeline."""

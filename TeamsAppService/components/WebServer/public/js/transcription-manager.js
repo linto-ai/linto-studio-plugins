@@ -23,7 +23,7 @@ class TranscriptionManager {
    */
   addPartial(data) {
     // Update or create partial entry
-    const speakerDisplay = data.locutorName || data.locutor || 'Speaker'
+    const speakerDisplay = data.locutorName || data.locutor || window.i18n.t('defaultSpeaker')
     const entryId = `partial-${data.locutor || 'unknown'}`
 
     // Remove existing partial for this speaker
@@ -61,7 +61,7 @@ class TranscriptionManager {
     const entry = {
       id: `final-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'final',
-      speakerId: data.locutorName || data.locutor || 'Speaker',
+      speakerId: data.locutorName || data.locutor || window.i18n.t('defaultSpeaker'),
       text: this._getText(data),
       timestamp: new Date(),
       data: data
@@ -162,7 +162,7 @@ class TranscriptionManager {
       const entry = {
         id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         type: 'final',
-        speakerId: data.locutorName || data.locutor || 'Speaker',
+        speakerId: data.locutorName || data.locutor || window.i18n.t('defaultSpeaker'),
         text: this._getText(data),
         timestamp: data.astart ? new Date(data.astart) : new Date(),
         data: data
@@ -283,8 +283,8 @@ class TranscriptionManager {
     emptyState.className = 'empty-state'
     emptyState.innerHTML = `
       <div class="empty-state-icon">&#128172;</div>
-      <div class="empty-state-title">No transcriptions yet</div>
-      <div class="empty-state-text">Transcriptions will appear here when the meeting starts</div>
+      <div class="empty-state-title">${window.i18n.t('emptyStateTitle')}</div>
+      <div class="empty-state-text">${window.i18n.t('emptyStateText')}</div>
     `
     this.container.appendChild(emptyState)
   }
@@ -296,7 +296,7 @@ class TranscriptionManager {
     this.container.innerHTML = `
       <div class="loading">
         <div class="spinner"></div>
-        <div class="loading-text">Connecting...</div>
+        <div class="loading-text">${window.i18n.t('connecting')}</div>
       </div>
     `
   }
@@ -309,7 +309,7 @@ class TranscriptionManager {
     this.container.innerHTML = `
       <div class="error-state">
         <div class="error-state-icon">&#9888;</div>
-        <div class="error-state-title">Connection Error</div>
+        <div class="error-state-title">${window.i18n.t('connectionError')}</div>
         <div class="error-state-text">${message}</div>
       </div>
     `

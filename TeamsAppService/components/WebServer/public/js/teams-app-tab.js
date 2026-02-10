@@ -35,6 +35,9 @@
   const fontSizeDecreaseBtn = document.getElementById('font-size-decrease')
   const fontSizeIncreaseBtn = document.getElementById('font-size-increase')
   const transcriptionContainer = document.getElementById('transcription-container')
+  const settingsBtn = document.getElementById('settings-btn')
+  const settingsDropdown = document.getElementById('settings-dropdown')
+  const uiLanguageSelect = document.getElementById('ui-language-select')
 
   // State
   let sessionId = null
@@ -106,6 +109,80 @@
   }
 
   /**
+   * Populate the UI language selector with supported locales.
+   */
+  function populateUILanguageSelect() {
+    uiLanguageSelect.innerHTML = ''
+    window.i18n.supportedLocales.forEach(loc => {
+      const option = document.createElement('option')
+      option.value = loc
+      try {
+        const dn = new Intl.DisplayNames([loc], { type: 'language' })
+        const name = dn.of(loc)
+        option.textContent = name.charAt(0).toUpperCase() + name.slice(1)
+      } catch (e) {
+        option.textContent = loc
+      }
+      uiLanguageSelect.appendChild(option)
+    })
+    uiLanguageSelect.value = window.i18n.locale
+  }
+
+  /**
+   * Refresh all dynamic content after a locale change.
+   */
+  function refreshDynamicContent() {
+    // Re-translate the "Original" option in language select
+    const originalOption = languageSelect.querySelector('option[value=""]')
+    if (originalOption) {
+      originalOption.textContent = window.i18n.t('languageOriginal')
+    }
+
+    // Re-translate language names in the translation selector using Intl.DisplayNames
+    for (let i = 1; i < languageSelect.options.length; i++) {
+      const opt = languageSelect.options[i]
+      opt.textContent = getLanguageName(opt.value)
+    }
+
+    // Re-translate stop button if present
+    const stopBtn = document.getElementById('stop-transcription-btn')
+    if (stopBtn && !stopBtn.disabled) {
+      stopBtn.textContent = window.i18n.t('btnStop')
+      stopBtn.title = window.i18n.t('btnStopTranscription')
+    }
+
+    // Re-translate start session UI if visible
+    const startTitle = document.querySelector('.start-session-title')
+    if (startTitle) startTitle.textContent = window.i18n.t('startTitle')
+    const startText = document.querySelector('.start-session-text')
+    if (startText) startText.textContent = window.i18n.t('startDescription')
+    const startBtn = document.getElementById('start-transcription-btn')
+    if (startBtn && !startBtn.disabled) startBtn.textContent = window.i18n.t('btnStartTranscription')
+    const profileLabel = document.querySelector('.profile-label')
+    if (profileLabel) profileLabel.textContent = window.i18n.t('profileLabel')
+
+    // Re-translate session options
+    const optDiarization = document.querySelector('label[for="opt-diarization"] span')
+    if (optDiarization) optDiarization.textContent = window.i18n.t('optDiarization')
+    const optKeepAudio = document.querySelector('label[for="opt-keep-audio"] span')
+    if (optKeepAudio) optKeepAudio.textContent = window.i18n.t('optKeepAudio')
+    const optTranslationsTitle = document.querySelector('.option-section-title')
+    if (optTranslationsTitle) optTranslationsTitle.textContent = window.i18n.t('optTranslations')
+
+    // Re-translate inline pairing UI if visible
+    const pairingText = document.querySelector('.inline-pairing-text')
+    if (pairingText) pairingText.textContent = window.i18n.t('pairingText')
+    const pairingLabel = document.querySelector('.pairing-label')
+    if (pairingLabel) pairingLabel.textContent = window.i18n.t('pairingKeyLabel')
+    const pairingInput = document.getElementById('pairing-key-input')
+    if (pairingInput) pairingInput.placeholder = window.i18n.t('pairingKeyPlaceholder')
+    const pairBtn = document.getElementById('pair-btn')
+    if (pairBtn && !pairBtn.disabled) pairBtn.textContent = window.i18n.t('btnLinkAccount')
+    const cancelBtn = document.getElementById('pair-cancel-btn')
+    if (cancelBtn && !cancelBtn.disabled) cancelBtn.textContent = window.i18n.t('btnCancel')
+  }
+
+  /**
    * Initialize the app.
    */
   async function init() {
@@ -114,7 +191,7 @@
       transcriptionContainer.innerHTML = `
         <div class="loading">
           <div class="spinner"></div>
-          <div class="loading-text">Initializing...</div>
+          <div class="loading-text">${window.i18n.t('initializing')}</div>
         </div>
       `
 
@@ -126,6 +203,13 @@
       // Initialize Teams SDK
       if (window.teamsSdk && window.teamsSdk.isInTeams()) {
         await window.teamsSdk.initialize()
+
+        // Initialize i18n from Teams locale
+        const locale = await window.teamsSdk.getLocale()
+        window.i18n.init(locale)
+        window.i18n.apply()
+        populateUILanguageSelect()
+
         threadId = await window.teamsSdk.getThreadId()
         console.log('[TeamsApp] Thread ID:', threadId)
 
@@ -134,11 +218,26 @@
       } else {
         // For testing outside of Teams
         console.log('[TeamsApp] Running outside of Teams')
+
+        // Initialize i18n with default locale
+        window.i18n.init('en')
+        window.i18n.apply()
+        populateUILanguageSelect()
+
         // Use query params for testing
         const params = new URLSearchParams(window.location.search)
         threadId = params.get('threadId')
         sessionId = params.get('sessionId')
         channelId = params.get('channelId')
+
+        // Allow locale override via query param for testing
+        const localeParam = params.get('locale')
+        if (localeParam) {
+          window.i18n.init(localeParam)
+          window.i18n.apply()
+          uiLanguageSelect.value = window.i18n.locale
+          refreshDynamicContent()
+        }
       }
 
       // If we have sessionId/channelId from params, skip account check and meeting lookup
@@ -154,14 +253,14 @@
       if (threadId) {
         await lookupMeeting(threadId)
       } else {
-        transcriptionManager.showError('Unable to determine meeting context')
-        updateStatus('disconnected', 'No meeting context')
+        transcriptionManager.showError(window.i18n.t('errorNoMeetingContext'))
+        updateStatus('disconnected', window.i18n.t('statusError'))
       }
 
     } catch (err) {
       console.error('[TeamsApp] Initialization error:', err)
-      transcriptionManager.showError('Failed to initialize: ' + err.message)
-      updateStatus('disconnected', 'Error')
+      transcriptionManager.showError(window.i18n.t('errorInitFailed') + ': ' + err.message)
+      updateStatus('disconnected', window.i18n.t('statusError'))
     }
   }
 
@@ -194,14 +293,14 @@
     if (authToken) return
 
     if (!window.teamsSdk || !window.teamsSdk.isInTeams()) {
-      throw new Error('Sign-in is required to start a transcription. Please open this app inside Microsoft Teams.')
+      throw new Error(window.i18n.t('errorSignInRequired'))
     }
 
     try {
       authToken = await window.teamsSdk.getAuthToken()
     } catch (err) {
       console.error('[TeamsApp] SSO authentication failed:', err)
-      throw new Error('Sign-in is required to start a transcription. Please ensure the app has been consented by your Teams administrator.')
+      throw new Error(window.i18n.t('errorSignInConsent'))
     }
   }
 
@@ -249,19 +348,19 @@
       pairingEl.id = 'inline-pairing'
       pairingEl.className = 'inline-pairing'
       pairingEl.innerHTML = `
-        <p class="inline-pairing-text">To start a transcription, link your account first.</p>
+        <p class="inline-pairing-text">${window.i18n.t('pairingText')}</p>
         <div class="pairing-form">
-          <label class="pairing-label" for="pairing-key-input">Pairing Key</label>
+          <label class="pairing-label" for="pairing-key-input">${window.i18n.t('pairingKeyLabel')}</label>
           <input
             type="text"
             id="pairing-key-input"
             class="pairing-input"
-            placeholder="EMT-XXXX-XXXX-XXXX-XXXX"
+            placeholder="${window.i18n.t('pairingKeyPlaceholder')}"
             autocomplete="off"
             spellcheck="false"
           />
-          <button id="pair-btn" class="btn btn-primary btn-pair">Link Account</button>
-          <button id="pair-cancel-btn" class="btn btn-secondary btn-pair">Cancel</button>
+          <button id="pair-btn" class="btn btn-primary btn-pair">${window.i18n.t('btnLinkAccount')}</button>
+          <button id="pair-cancel-btn" class="btn btn-secondary btn-pair">${window.i18n.t('btnCancel')}</button>
           <p id="pair-error" class="pairing-error" style="display:none;"></p>
         </div>
       `
@@ -279,7 +378,7 @@
         if (startBtn) {
           startBtn.style.display = ''
           startBtn.disabled = false
-          startBtn.textContent = 'Start Transcription'
+          startBtn.textContent = window.i18n.t('btnStartTranscription')
           startBtn.classList.remove('btn-loading')
         }
       }
@@ -292,13 +391,13 @@
       async function onSubmit() {
         const key = keyInput.value.trim()
         if (!key) {
-          errorEl.textContent = 'Please enter a pairing key'
+          errorEl.textContent = window.i18n.t('errorPairingKeyRequired')
           errorEl.style.display = 'block'
           return
         }
 
         pairBtn.disabled = true
-        pairBtn.textContent = 'Linking...'
+        pairBtn.textContent = window.i18n.t('btnLinking')
         pairBtn.classList.add('btn-loading')
         keyInput.disabled = true
         cancelBtn.disabled = true
@@ -314,14 +413,14 @@
           const data = await response.json()
 
           if (!response.ok) {
-            let message = data.message || 'Failed to link account'
+            let message = data.message || window.i18n.t('errorLinkFailed')
             if (response.status === 429) {
-              message = 'Too many attempts. Please wait a moment and try again.'
+              message = window.i18n.t('errorTooManyAttempts')
             }
             errorEl.textContent = message
             errorEl.style.display = 'block'
             pairBtn.disabled = false
-            pairBtn.textContent = 'Link Account'
+            pairBtn.textContent = window.i18n.t('btnLinkAccount')
             pairBtn.classList.remove('btn-loading')
             keyInput.disabled = false
             cancelBtn.disabled = false
@@ -334,10 +433,10 @@
           resolve()
         } catch (err) {
           console.error('[TeamsApp] Pairing error:', err)
-          errorEl.textContent = 'Network error. Please try again.'
+          errorEl.textContent = window.i18n.t('errorNetwork')
           errorEl.style.display = 'block'
           pairBtn.disabled = false
-          pairBtn.textContent = 'Link Account'
+          pairBtn.textContent = window.i18n.t('btnLinkAccount')
           pairBtn.classList.remove('btn-loading')
           keyInput.disabled = false
           cancelBtn.disabled = false
@@ -356,19 +455,19 @@
    * @param {string} threadId
    */
   async function lookupMeeting(threadId) {
-    updateStatus('connecting', 'Looking up meeting...')
+    updateStatus('connecting', window.i18n.t('statusLookingUp'))
 
     try {
       const response = await fetchWithTimeout(`/v1/meetings/${encodeURIComponent(threadId)}`)
 
       if (response.status === 404) {
         showStartTranscriptionUI()
-        updateStatus('disconnected', 'No active transcription')
+        updateStatus('disconnected', window.i18n.t('statusNoActive'))
         return
       }
 
       if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`)
+        throw new Error(window.i18n.t('errorServerError') + ': ' + response.status)
       }
 
       const meeting = await response.json()
@@ -401,11 +500,11 @@
     } catch (err) {
       console.error('[TeamsApp] Meeting lookup error:', err)
       if (err.name === 'AbortError') {
-        transcriptionManager.showError('Meeting lookup timed out. Please try again.')
-        updateStatus('disconnected', 'Timeout')
+        transcriptionManager.showError(window.i18n.t('errorLookupTimeout'))
+        updateStatus('disconnected', window.i18n.t('statusTimeout'))
       } else {
-        transcriptionManager.showError('Failed to lookup meeting: ' + err.message)
-        updateStatus('disconnected', 'Error')
+        transcriptionManager.showError(window.i18n.t('errorLookupFailed') + ': ' + err.message)
+        updateStatus('disconnected', window.i18n.t('statusError'))
       }
     }
   }
@@ -455,10 +554,10 @@
     transcriptionContainer.innerHTML = `
       <div class="start-session-container">
         <div class="start-session-icon">T</div>
-        <h2 class="start-session-title">No Active Transcription</h2>
-        <p class="start-session-text">Start a live transcription for this meeting.</p>
+        <h2 class="start-session-title">${window.i18n.t('startTitle')}</h2>
+        <p class="start-session-text">${window.i18n.t('startDescription')}</p>
         <div id="profile-selector" class="profile-selector" style="display:none;">
-          <label class="profile-label">Transcription profile</label>
+          <label class="profile-label">${window.i18n.t('profileLabel')}</label>
           <div id="profile-list" class="profile-list"></div>
           <select id="profile-select" class="profile-select" style="display:none;"></select>
         </div>
@@ -466,22 +565,22 @@
           <div class="option-row">
             <label class="option-label" for="opt-diarization">
               <input type="checkbox" id="opt-diarization">
-              <span>Speaker diarization</span>
+              <span>${window.i18n.t('optDiarization')}</span>
             </label>
           </div>
           <div class="option-row">
             <label class="option-label" for="opt-keep-audio">
               <input type="checkbox" id="opt-keep-audio" checked>
-              <span>Keep audio recording</span>
+              <span>${window.i18n.t('optKeepAudio')}</span>
             </label>
           </div>
           <div id="translations-container" class="option-row" style="display:none;">
-            <span class="option-section-title">Translations</span>
+            <span class="option-section-title">${window.i18n.t('optTranslations')}</span>
             <div id="translations-list" class="translations-list"></div>
           </div>
         </div>
         <button id="start-transcription-btn" class="btn btn-primary btn-start">
-          Start Transcription
+          ${window.i18n.t('btnStartTranscription')}
         </button>
       </div>
     `
@@ -496,7 +595,7 @@
   async function onStartTranscription() {
     const startBtn = document.getElementById('start-transcription-btn')
     startBtn.disabled = true
-    startBtn.textContent = 'Starting...'
+    startBtn.textContent = window.i18n.t('btnStarting')
     startBtn.classList.add('btn-loading')
 
     try {
@@ -512,13 +611,13 @@
         const profilesResponse = await authFetch('/v1/transcriber-profiles')
 
         if (!profilesResponse.ok) {
-          throw new Error('Failed to load transcription profiles')
+          throw new Error(window.i18n.t('errorLoadProfiles'))
         }
 
         const profiles = await profilesResponse.json()
 
         if (!profiles || profiles.length === 0) {
-          throw new Error('No transcription profiles available')
+          throw new Error(window.i18n.t('errorNoProfiles'))
         }
 
         const profileList = document.getElementById('profile-list')
@@ -527,7 +626,7 @@
         // Populate profile cards
         profiles.forEach((profile, index) => {
           loadedProfiles[profile.id] = profile
-          const name = (profile.config && profile.config.name) || `Profile ${profile.id}`
+          const name = (profile.config && profile.config.name) || `${window.i18n.t('profileFallbackName')} ${profile.id}`
           const description = (profile.config && profile.config.description) || ''
 
           const option = document.createElement('option')
@@ -559,7 +658,7 @@
         profileSelector.style.display = 'block'
         document.getElementById('session-options').style.display = 'block'
         startBtn.disabled = false
-        startBtn.textContent = 'Start Transcription'
+        startBtn.textContent = window.i18n.t('btnStartTranscription')
         startBtn.classList.remove('btn-loading')
         return
       }
@@ -567,11 +666,11 @@
       const transcriberProfileId = profileSelect.value
 
       if (!transcriberProfileId) {
-        throw new Error('Please select a transcription profile')
+        throw new Error(window.i18n.t('errorSelectProfile'))
       }
 
       // 2. Get the meeting join URL
-      updateStatus('connecting', 'Getting meeting info...')
+      updateStatus('connecting', window.i18n.t('statusGettingInfo'))
       let meetingJoinUrl = null
 
       if (window.teamsSdk && window.teamsSdk.isInTeams()) {
@@ -579,11 +678,11 @@
       }
 
       if (!meetingJoinUrl) {
-        throw new Error('Unable to get meeting join URL. Make sure you are in a Teams meeting.')
+        throw new Error(window.i18n.t('errorNoJoinUrl'))
       }
 
       // 3. Create session
-      updateStatus('connecting', 'Creating session...')
+      updateStatus('connecting', window.i18n.t('statusCreatingSession'))
 
       const sessionResponse = await authFetch('/v1/sessions', {
         method: 'POST',
@@ -600,7 +699,7 @@
 
       if (!sessionResponse.ok) {
         const errData = await sessionResponse.json().catch(() => ({}))
-        throw new Error(errData.message || 'Failed to create transcription session')
+        throw new Error(errData.message || window.i18n.t('errorCreateSession'))
       }
 
       const sessionData = await sessionResponse.json()
@@ -627,9 +726,9 @@
 
       console.error('[TeamsApp] Start transcription error:', err)
       startBtn.disabled = false
-      startBtn.textContent = 'Start Transcription'
+      startBtn.textContent = window.i18n.t('btnStartTranscription')
       startBtn.classList.remove('btn-loading')
-      updateStatus('disconnected', 'Error')
+      updateStatus('disconnected', window.i18n.t('statusError'))
 
       // Show error inline
       let errorEl = document.getElementById('start-error')
@@ -657,8 +756,8 @@
     const stopBtn = document.createElement('button')
     stopBtn.id = 'stop-transcription-btn'
     stopBtn.className = 'btn btn-danger btn-stop'
-    stopBtn.textContent = 'Stop'
-    stopBtn.title = 'Stop Transcription'
+    stopBtn.textContent = window.i18n.t('btnStop')
+    stopBtn.title = window.i18n.t('btnStopTranscription')
     stopBtn.addEventListener('click', onStopTranscription)
 
     controls.prepend(stopBtn)
@@ -672,7 +771,7 @@
     if (!stopBtn || !sessionId) return
 
     stopBtn.disabled = true
-    stopBtn.textContent = 'Stopping...'
+    stopBtn.textContent = window.i18n.t('btnStopping')
 
     try {
       const response = await authFetch(`/v1/sessions/${sessionId}/stop`, {
@@ -680,12 +779,12 @@
       })
 
       if (!response.ok) {
-        throw new Error('Failed to stop session')
+        throw new Error(window.i18n.t('errorStopSession'))
       }
 
       console.log('[TeamsApp] Session stopped')
       stopBtn.remove()
-      updateStatus('disconnected', 'Stopped')
+      updateStatus('disconnected', window.i18n.t('statusStopped'))
 
       // Disconnect WebSocket
       if (wsClient) {
@@ -704,7 +803,7 @@
     } catch (err) {
       console.error('[TeamsApp] Stop transcription error:', err)
       stopBtn.disabled = false
-      stopBtn.textContent = 'Stop'
+      stopBtn.textContent = window.i18n.t('btnStop')
     }
   }
 
@@ -744,31 +843,31 @@
    * Connect to the WebSocket for transcriptions.
    */
   async function connectToTranscriptions() {
-    updateStatus('connecting', 'Connecting...')
+    updateStatus('connecting', window.i18n.t('statusConnecting'))
 
     try {
       wsClient = new WebSocketClient()
 
       wsClient.on('connect', () => {
         console.log('[TeamsApp] WebSocket connected')
-        updateStatus('connected', 'Connected')
+        updateStatus('connected', window.i18n.t('statusConnected'))
         wsClient.joinRoom(sessionId, channelId)
         // Don't clear - we want to keep the history loaded before connection
       })
 
       wsClient.on('disconnect', (reason) => {
         console.log('[TeamsApp] WebSocket disconnected:', reason)
-        updateStatus('disconnected', 'Disconnected')
+        updateStatus('disconnected', window.i18n.t('statusDisconnected'))
       })
 
       wsClient.on('error', (err) => {
         console.error('[TeamsApp] WebSocket error:', err)
-        updateStatus('disconnected', 'Error')
+        updateStatus('disconnected', window.i18n.t('statusError'))
       })
 
       wsClient.on('brokerStatus', ({ connected }) => {
         if (!connected) {
-          updateStatus('disconnected', 'Broker offline')
+          updateStatus('disconnected', window.i18n.t('statusBrokerOffline'))
         }
       })
 
@@ -784,8 +883,8 @@
 
     } catch (err) {
       console.error('[TeamsApp] Connection error:', err)
-      transcriptionManager.showError('Failed to connect: ' + err.message)
-      updateStatus('disconnected', 'Connection failed')
+      transcriptionManager.showError(window.i18n.t('errorConnectFailed') + ': ' + err.message)
+      updateStatus('disconnected', window.i18n.t('statusConnectionFailed'))
     }
   }
 
@@ -819,59 +918,18 @@
   }
 
   /**
-   * Get human-readable language name.
+   * Get human-readable language name using Intl.DisplayNames.
    * @param {string} code - BCP47 language code
    * @returns {string}
    */
   function getLanguageName(code) {
-    const names = {
-      'ar': 'Arabic',
-      'bg': 'Bulgarian',
-      'bs': 'Bosnian',
-      'cs': 'Czech',
-      'cy': 'Welsh',
-      'da': 'Danish',
-      'de': 'German',
-      'de-DE': 'German (Germany)',
-      'el': 'Greek',
-      'en': 'English',
-      'en-GB': 'English (UK)',
-      'en-US': 'English (US)',
-      'es': 'Spanish',
-      'es-ES': 'Spanish (Spain)',
-      'et': 'Estonian',
-      'eu': 'Basque',
-      'fi': 'Finnish',
-      'fr': 'French',
-      'fr-FR': 'French (France)',
-      'gl': 'Galician',
-      'hi': 'Hindi',
-      'hu': 'Hungarian',
-      'id': 'Indonesian',
-      'it': 'Italian',
-      'ja': 'Japanese',
-      'ko': 'Korean',
-      'lt': 'Lithuanian',
-      'lv': 'Latvian',
-      'mk': 'Macedonian',
-      'nb': 'Norwegian',
-      'nl': 'Dutch',
-      'pl': 'Polish',
-      'pt': 'Portuguese',
-      'ro': 'Romanian',
-      'ru': 'Russian',
-      'sk': 'Slovak',
-      'sl': 'Slovenian',
-      'sr': 'Serbian',
-      'sv': 'Swedish',
-      'th': 'Thai',
-      'tr': 'Turkish',
-      'uk': 'Ukrainian',
-      'vi': 'Vietnamese',
-      'zh': 'Chinese',
-      'zhh': 'Chinese (Traditional)'
+    try {
+      const dn = new Intl.DisplayNames([window.i18n.locale], { type: 'language' })
+      const name = dn.of(code)
+      return name.charAt(0).toUpperCase() + name.slice(1)
+    } catch (e) {
+      return code
     }
-    return names[code] || code
   }
 
   /**
@@ -905,6 +963,27 @@
   languageSelect.addEventListener('change', onLanguageChange)
   fontSizeDecreaseBtn.addEventListener('click', () => changeFontSize(-1))
   fontSizeIncreaseBtn.addEventListener('click', () => changeFontSize(1))
+
+  // Settings dropdown toggle
+  settingsBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const isVisible = settingsDropdown.style.display !== 'none'
+    settingsDropdown.style.display = isVisible ? 'none' : 'block'
+  })
+
+  // Close settings dropdown on outside click
+  document.addEventListener('click', (e) => {
+    if (!settingsDropdown.contains(e.target) && e.target !== settingsBtn) {
+      settingsDropdown.style.display = 'none'
+    }
+  })
+
+  // UI language change handler
+  uiLanguageSelect.addEventListener('change', () => {
+    window.i18n.init(uiLanguageSelect.value)
+    window.i18n.apply()
+    refreshDynamicContent()
+  })
 
   // Restore Stop button when tab becomes visible again (Teams hides/shows iframe on panel switch)
   document.addEventListener('visibilitychange', () => {

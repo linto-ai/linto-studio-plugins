@@ -157,6 +157,15 @@ class TeamsSdkWrapper {
   }
 
   /**
+   * Get the locale from the Teams context.
+   * @returns {Promise<string>} Locale string (e.g. 'en-us', 'fr-fr')
+   */
+  async getLocale() {
+    const context = await this.getContext()
+    return context.app?.locale || 'en-us'
+  }
+
+  /**
    * Notify Teams that configuration is complete.
    * Used in configuration/settings pages.
    */

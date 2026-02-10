@@ -18,25 +18,37 @@
   <div class="teams-app">
     <!-- Header -->
     <header class="app-header">
-      <h1 class="app-title">Live Transcription</h1>
+      <h1 class="app-title" data-i18n="appTitle">Live Transcription</h1>
       <div class="controls">
         <!-- Status indicator -->
         <div class="status-indicator">
           <span id="status-dot" class="status-dot connecting"></span>
-          <span id="status-text">Connecting...</span>
+          <span id="status-text" data-i18n="statusConnecting">Connecting...</span>
         </div>
 
         <!-- Language selector -->
         <div class="select-wrapper">
           <select id="language-select" class="select" title="Select language">
-            <option value="">Original</option>
+            <option value="" data-i18n="languageOriginal">Original</option>
           </select>
         </div>
 
-        <!-- Font size controls -->
-        <div class="font-size-controls">
-          <button id="font-size-decrease" class="btn btn-icon btn-secondary" title="Decrease font size">A-</button>
-          <button id="font-size-increase" class="btn btn-icon btn-secondary" title="Increase font size">A+</button>
+        <!-- Settings button -->
+        <div class="settings-wrapper">
+          <button id="settings-btn" class="btn btn-icon btn-secondary" data-i18n-title="settingsTitle">&#9881;</button>
+          <div id="settings-dropdown" class="settings-dropdown" style="display:none">
+            <div class="settings-section">
+              <label class="settings-label" data-i18n="settingsLanguage">Language</label>
+              <select id="ui-language-select" class="select settings-select"></select>
+            </div>
+            <div class="settings-section">
+              <label class="settings-label" data-i18n="settingsFontSize">Font size</label>
+              <div class="font-size-controls">
+                <button id="font-size-decrease" class="btn btn-icon btn-secondary" data-i18n-title="fontDecrease">A-</button>
+                <button id="font-size-increase" class="btn btn-icon btn-secondary" data-i18n-title="fontIncrease">A+</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </header>
@@ -45,12 +57,13 @@
     <div id="transcription-container" class="transcription-container">
       <div class="loading">
         <div class="spinner"></div>
-        <div class="loading-text">Loading...</div>
+        <div class="loading-text" data-i18n="loading">Loading...</div>
       </div>
     </div>
   </div>
 
   <!-- App Scripts -->
+  <script src="/js/i18n.js"></script>
   <script src="/js/teams-sdk.js"></script>
   <script src="/js/websocket-client.js"></script>
   <script src="/js/transcription-manager.js"></script>

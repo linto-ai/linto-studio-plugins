@@ -1,0 +1,24 @@
+# Default configuration for the Python Translator service
+# Override by creating a .env file in the same directory or by setting environment variables
+
+##### Translator #####
+TRANSLATOR_NAME=gemma
+TRANSLATION_PROVIDER=echo # echo or translategemma
+LOG_LEVEL=INFO
+
+##### TranslateGemma provider #####
+TRANSLATEGEMMA_ENDPOINT= # vLLM endpoint (required for translategemma provider)
+TRANSLATEGEMMA_MODEL=Infomaniak-AI/vllm-translategemma-4b-it
+TRANSLATEGEMMA_MAX_TOKENS=500
+
+##### MQTT Broker #####
+BROKER_HOST=localhost
+BROKER_PORT=1883
+
+##### Anti-flicker pipeline #####
+CHANGE_THRESHOLD=85 # RapidFuzz similarity (0-100). Above = skip translation
+MIN_NEW_CHARS=10 # Min chars added before considering translation
+PARTIAL_DEBOUNCE_MS=300 # Debounce for mid-sentence partials (ms)
+STABILITY_THRESHOLD=0.6 # Min prefix preservation ratio (0.0-1.0)
+MAX_HOLD_SECONDS=2.0 # Max time to hold a rejected translation (s)
+MAX_CONSECUTIVE_HOLDS=2 # Force-publish after N consecutive holds

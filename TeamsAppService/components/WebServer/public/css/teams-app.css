@@ -759,6 +759,46 @@ html, body {
   height: 14px;
 }
 
+/* Settings dropdown */
+.settings-wrapper {
+  position: relative;
+}
+
+.settings-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: var(--spacing-xs);
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 200px;
+}
+
+.settings-section {
+  margin-bottom: var(--spacing-md);
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.settings-select {
+  width: 100%;
+  min-width: unset;
+}
+
 /* Responsive */
 @media (max-width: 400px) {
   .app-header {

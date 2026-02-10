@@ -1,0 +1,560 @@
+/**
+ * Internationalization (i18n) module
+ * Lightweight translation system for the Teams app.
+ * Supports: en, fr, de, es, it, pt, nl
+ */
+window.i18n = {
+  locale: 'en',
+  supportedLocales: ['en', 'fr', 'de', 'es', 'it', 'pt', 'nl'],
+
+  translations: {
+    en: {
+      // App
+      appTitle: 'Live Transcription',
+      loading: 'Loading...',
+      initializing: 'Initializing...',
+
+      // Status
+      statusConnecting: 'Connecting...',
+      statusConnected: 'Connected',
+      statusDisconnected: 'Disconnected',
+      statusError: 'Error',
+      statusStopped: 'Stopped',
+      statusTimeout: 'Timeout',
+      statusBrokerOffline: 'Broker offline',
+      statusConnectionFailed: 'Connection failed',
+      statusLookingUp: 'Looking up meeting...',
+      statusNoActive: 'No active transcription',
+      statusGettingInfo: 'Getting meeting info...',
+      statusCreatingSession: 'Creating session...',
+
+      // Buttons
+      btnStartTranscription: 'Start Transcription',
+      btnStop: 'Stop',
+      btnStopTranscription: 'Stop Transcription',
+      btnLinkAccount: 'Link Account',
+      btnCancel: 'Cancel',
+      btnStarting: 'Starting...',
+      btnStopping: 'Stopping...',
+      btnLinking: 'Linking...',
+
+      // Start UI
+      startTitle: 'No Active Transcription',
+      startDescription: 'Start a live transcription for this meeting.',
+      profileLabel: 'Transcription profile',
+      profileFallbackName: 'Profile',
+      optDiarization: 'Speaker diarization',
+      optKeepAudio: 'Keep audio recording',
+      optTranslations: 'Translations',
+
+      // Pairing
+      pairingText: 'To start a transcription, link your account first.',
+      pairingKeyLabel: 'Pairing Key',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      // Selectors & Settings
+      languageOriginal: 'Original',
+      fontDecrease: 'Decrease font size',
+      fontIncrease: 'Increase font size',
+      settingsTitle: 'Settings',
+      settingsLanguage: 'Language',
+      settingsFontSize: 'Font size',
+
+      // Transcription manager
+      defaultSpeaker: 'Speaker',
+      emptyStateTitle: 'No transcriptions yet',
+      emptyStateText: 'Transcriptions will appear here when the meeting starts',
+      connecting: 'Connecting...',
+      connectionError: 'Connection Error',
+
+      // Errors
+      errorNoMeetingContext: 'Unable to determine meeting context',
+      errorInitFailed: 'Failed to initialize',
+      errorSignInRequired: 'Sign-in is required to start a transcription. Please open this app inside Microsoft Teams.',
+      errorSignInConsent: 'Sign-in is required to start a transcription. Please ensure the app has been consented by your Teams administrator.',
+      errorPairingKeyRequired: 'Please enter a pairing key',
+      errorLinkFailed: 'Failed to link account',
+      errorTooManyAttempts: 'Too many attempts. Please wait a moment and try again.',
+      errorNetwork: 'Network error. Please try again.',
+      errorServerError: 'Server error',
+      errorLookupTimeout: 'Meeting lookup timed out. Please try again.',
+      errorLookupFailed: 'Failed to lookup meeting',
+      errorLoadProfiles: 'Failed to load transcription profiles',
+      errorNoProfiles: 'No transcription profiles available',
+      errorSelectProfile: 'Please select a transcription profile',
+      errorNoJoinUrl: 'Unable to get meeting join URL. Make sure you are in a Teams meeting.',
+      errorCreateSession: 'Failed to create transcription session',
+      errorStopSession: 'Failed to stop session',
+      errorConnectFailed: 'Failed to connect'
+    },
+
+    fr: {
+      appTitle: 'Transcription en direct',
+      loading: 'Chargement...',
+      initializing: 'Initialisation...',
+
+      statusConnecting: 'Connexion...',
+      statusConnected: 'Connect\u00e9',
+      statusDisconnected: 'D\u00e9connect\u00e9',
+      statusError: 'Erreur',
+      statusStopped: 'Arr\u00eat\u00e9',
+      statusTimeout: 'D\u00e9lai d\u00e9pass\u00e9',
+      statusBrokerOffline: 'Broker hors ligne',
+      statusConnectionFailed: '\u00c9chec de connexion',
+      statusLookingUp: 'Recherche de la r\u00e9union...',
+      statusNoActive: 'Aucune transcription active',
+      statusGettingInfo: 'R\u00e9cup\u00e9ration des infos...',
+      statusCreatingSession: 'Cr\u00e9ation de la session...',
+
+      btnStartTranscription: 'D\u00e9marrer la transcription',
+      btnStop: 'Arr\u00eater',
+      btnStopTranscription: 'Arr\u00eater la transcription',
+      btnLinkAccount: 'Lier le compte',
+      btnCancel: 'Annuler',
+      btnStarting: 'D\u00e9marrage...',
+      btnStopping: 'Arr\u00eat...',
+      btnLinking: 'Liaison...',
+
+      startTitle: 'Aucune transcription active',
+      startDescription: 'D\u00e9marrez une transcription en direct pour cette r\u00e9union.',
+      profileLabel: 'Profil de transcription',
+      profileFallbackName: 'Profil',
+      optDiarization: 'Diarisation des locuteurs',
+      optKeepAudio: 'Conserver l\u2019enregistrement audio',
+      optTranslations: 'Traductions',
+
+      pairingText: 'Pour d\u00e9marrer une transcription, liez d\u2019abord votre compte.',
+      pairingKeyLabel: 'Cl\u00e9 d\u2019appairage',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      languageOriginal: 'Original',
+      fontDecrease: 'R\u00e9duire la taille de police',
+      fontIncrease: 'Augmenter la taille de police',
+      settingsTitle: 'Param\u00e8tres',
+      settingsLanguage: 'Langue',
+      settingsFontSize: 'Taille de police',
+
+      defaultSpeaker: 'Locuteur',
+      emptyStateTitle: 'Aucune transcription',
+      emptyStateText: 'Les transcriptions appara\u00eetront ici lorsque la r\u00e9union commencera',
+      connecting: 'Connexion...',
+      connectionError: 'Erreur de connexion',
+
+      errorNoMeetingContext: 'Impossible de d\u00e9terminer le contexte de la r\u00e9union',
+      errorInitFailed: '\u00c9chec de l\u2019initialisation',
+      errorSignInRequired: 'La connexion est requise pour d\u00e9marrer une transcription. Veuillez ouvrir cette application dans Microsoft Teams.',
+      errorSignInConsent: 'La connexion est requise pour d\u00e9marrer une transcription. Veuillez vous assurer que l\u2019application a \u00e9t\u00e9 approuv\u00e9e par votre administrateur Teams.',
+      errorPairingKeyRequired: 'Veuillez entrer une cl\u00e9 d\u2019appairage',
+      errorLinkFailed: '\u00c9chec de la liaison du compte',
+      errorTooManyAttempts: 'Trop de tentatives. Veuillez patienter un instant et r\u00e9essayer.',
+      errorNetwork: 'Erreur r\u00e9seau. Veuillez r\u00e9essayer.',
+      errorServerError: 'Erreur serveur',
+      errorLookupTimeout: 'La recherche de la r\u00e9union a expir\u00e9. Veuillez r\u00e9essayer.',
+      errorLookupFailed: '\u00c9chec de la recherche de la r\u00e9union',
+      errorLoadProfiles: '\u00c9chec du chargement des profils de transcription',
+      errorNoProfiles: 'Aucun profil de transcription disponible',
+      errorSelectProfile: 'Veuillez s\u00e9lectionner un profil de transcription',
+      errorNoJoinUrl: 'Impossible d\u2019obtenir l\u2019URL de la r\u00e9union. V\u00e9rifiez que vous \u00eates dans une r\u00e9union Teams.',
+      errorCreateSession: '\u00c9chec de la cr\u00e9ation de la session de transcription',
+      errorStopSession: '\u00c9chec de l\u2019arr\u00eat de la session',
+      errorConnectFailed: '\u00c9chec de la connexion'
+    },
+
+    de: {
+      appTitle: 'Live-Transkription',
+      loading: 'Laden...',
+      initializing: 'Initialisierung...',
+
+      statusConnecting: 'Verbindung wird hergestellt...',
+      statusConnected: 'Verbunden',
+      statusDisconnected: 'Getrennt',
+      statusError: 'Fehler',
+      statusStopped: 'Gestoppt',
+      statusTimeout: 'Zeit\u00fcberschreitung',
+      statusBrokerOffline: 'Broker offline',
+      statusConnectionFailed: 'Verbindung fehlgeschlagen',
+      statusLookingUp: 'Besprechung wird gesucht...',
+      statusNoActive: 'Keine aktive Transkription',
+      statusGettingInfo: 'Besprechungsinfos werden abgerufen...',
+      statusCreatingSession: 'Sitzung wird erstellt...',
+
+      btnStartTranscription: 'Transkription starten',
+      btnStop: 'Stopp',
+      btnStopTranscription: 'Transkription stoppen',
+      btnLinkAccount: 'Konto verkn\u00fcpfen',
+      btnCancel: 'Abbrechen',
+      btnStarting: 'Wird gestartet...',
+      btnStopping: 'Wird gestoppt...',
+      btnLinking: 'Wird verkn\u00fcpft...',
+
+      startTitle: 'Keine aktive Transkription',
+      startDescription: 'Starten Sie eine Live-Transkription f\u00fcr diese Besprechung.',
+      profileLabel: 'Transkriptionsprofil',
+      profileFallbackName: 'Profil',
+      optDiarization: 'Sprechererkennung',
+      optKeepAudio: 'Audioaufnahme beibehalten',
+      optTranslations: '\u00dcbersetzungen',
+
+      pairingText: 'Um eine Transkription zu starten, verkn\u00fcpfen Sie zuerst Ihr Konto.',
+      pairingKeyLabel: 'Kopplungsschl\u00fcssel',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      languageOriginal: 'Original',
+      fontDecrease: 'Schriftgr\u00f6\u00dfe verkleinern',
+      fontIncrease: 'Schriftgr\u00f6\u00dfe vergr\u00f6\u00dfern',
+      settingsTitle: 'Einstellungen',
+      settingsLanguage: 'Sprache',
+      settingsFontSize: 'Schriftgr\u00f6\u00dfe',
+
+      defaultSpeaker: 'Sprecher',
+      emptyStateTitle: 'Noch keine Transkriptionen',
+      emptyStateText: 'Transkriptionen erscheinen hier, wenn die Besprechung beginnt',
+      connecting: 'Verbindung wird hergestellt...',
+      connectionError: 'Verbindungsfehler',
+
+      errorNoMeetingContext: 'Besprechungskontext konnte nicht ermittelt werden',
+      errorInitFailed: 'Initialisierung fehlgeschlagen',
+      errorSignInRequired: 'Anmeldung ist erforderlich, um eine Transkription zu starten. Bitte \u00f6ffnen Sie diese App in Microsoft Teams.',
+      errorSignInConsent: 'Anmeldung ist erforderlich, um eine Transkription zu starten. Bitte stellen Sie sicher, dass die App von Ihrem Teams-Administrator genehmigt wurde.',
+      errorPairingKeyRequired: 'Bitte geben Sie einen Kopplungsschl\u00fcssel ein',
+      errorLinkFailed: 'Kontoverknüpfung fehlgeschlagen',
+      errorTooManyAttempts: 'Zu viele Versuche. Bitte warten Sie einen Moment und versuchen Sie es erneut.',
+      errorNetwork: 'Netzwerkfehler. Bitte versuchen Sie es erneut.',
+      errorServerError: 'Serverfehler',
+      errorLookupTimeout: 'Zeitüberschreitung bei der Besprechungssuche. Bitte versuchen Sie es erneut.',
+      errorLookupFailed: 'Besprechungssuche fehlgeschlagen',
+      errorLoadProfiles: 'Transkriptionsprofile konnten nicht geladen werden',
+      errorNoProfiles: 'Keine Transkriptionsprofile verfügbar',
+      errorSelectProfile: 'Bitte wählen Sie ein Transkriptionsprofil',
+      errorNoJoinUrl: 'Besprechungs-URL konnte nicht abgerufen werden. Stellen Sie sicher, dass Sie sich in einer Teams-Besprechung befinden.',
+      errorCreateSession: 'Transkriptionssitzung konnte nicht erstellt werden',
+      errorStopSession: 'Sitzung konnte nicht gestoppt werden',
+      errorConnectFailed: 'Verbindung fehlgeschlagen'
+    },
+
+    es: {
+      appTitle: 'Transcripción en vivo',
+      loading: 'Cargando...',
+      initializing: 'Inicializando...',
+
+      statusConnecting: 'Conectando...',
+      statusConnected: 'Conectado',
+      statusDisconnected: 'Desconectado',
+      statusError: 'Error',
+      statusStopped: 'Detenido',
+      statusTimeout: 'Tiempo agotado',
+      statusBrokerOffline: 'Broker fuera de línea',
+      statusConnectionFailed: 'Conexión fallida',
+      statusLookingUp: 'Buscando reunión...',
+      statusNoActive: 'Sin transcripción activa',
+      statusGettingInfo: 'Obteniendo información...',
+      statusCreatingSession: 'Creando sesión...',
+
+      btnStartTranscription: 'Iniciar transcripción',
+      btnStop: 'Detener',
+      btnStopTranscription: 'Detener transcripción',
+      btnLinkAccount: 'Vincular cuenta',
+      btnCancel: 'Cancelar',
+      btnStarting: 'Iniciando...',
+      btnStopping: 'Deteniendo...',
+      btnLinking: 'Vinculando...',
+
+      startTitle: 'Sin transcripción activa',
+      startDescription: 'Inicie una transcripción en vivo para esta reunión.',
+      profileLabel: 'Perfil de transcripción',
+      profileFallbackName: 'Perfil',
+      optDiarization: 'Diarización de hablantes',
+      optKeepAudio: 'Conservar grabación de audio',
+      optTranslations: 'Traducciones',
+
+      pairingText: 'Para iniciar una transcripción, vincule primero su cuenta.',
+      pairingKeyLabel: 'Clave de emparejamiento',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      languageOriginal: 'Original',
+      fontDecrease: 'Reducir tamaño de fuente',
+      fontIncrease: 'Aumentar tamaño de fuente',
+      settingsTitle: 'Configuración',
+      settingsLanguage: 'Idioma',
+      settingsFontSize: 'Tamaño de fuente',
+
+      defaultSpeaker: 'Hablante',
+      emptyStateTitle: 'Sin transcripciones aún',
+      emptyStateText: 'Las transcripciones aparecerán aquí cuando comience la reunión',
+      connecting: 'Conectando...',
+      connectionError: 'Error de conexión',
+
+      errorNoMeetingContext: 'No se pudo determinar el contexto de la reunión',
+      errorInitFailed: 'Error de inicialización',
+      errorSignInRequired: 'Se requiere iniciar sesión para comenzar una transcripción. Abra esta aplicación en Microsoft Teams.',
+      errorSignInConsent: 'Se requiere iniciar sesión para comenzar una transcripción. Asegúrese de que la aplicación haya sido aprobada por su administrador de Teams.',
+      errorPairingKeyRequired: 'Introduzca una clave de emparejamiento',
+      errorLinkFailed: 'Error al vincular la cuenta',
+      errorTooManyAttempts: 'Demasiados intentos. Espere un momento e inténtelo de nuevo.',
+      errorNetwork: 'Error de red. Inténtelo de nuevo.',
+      errorServerError: 'Error del servidor',
+      errorLookupTimeout: 'La búsqueda de la reunión ha expirado. Inténtelo de nuevo.',
+      errorLookupFailed: 'Error al buscar la reunión',
+      errorLoadProfiles: 'Error al cargar los perfiles de transcripción',
+      errorNoProfiles: 'No hay perfiles de transcripción disponibles',
+      errorSelectProfile: 'Seleccione un perfil de transcripción',
+      errorNoJoinUrl: 'No se pudo obtener la URL de la reunión. Asegúrese de estar en una reunión de Teams.',
+      errorCreateSession: 'Error al crear la sesión de transcripción',
+      errorStopSession: 'Error al detener la sesión',
+      errorConnectFailed: 'Error de conexión'
+    },
+
+    it: {
+      appTitle: 'Trascrizione in diretta',
+      loading: 'Caricamento...',
+      initializing: 'Inizializzazione...',
+
+      statusConnecting: 'Connessione...',
+      statusConnected: 'Connesso',
+      statusDisconnected: 'Disconnesso',
+      statusError: 'Errore',
+      statusStopped: 'Interrotto',
+      statusTimeout: 'Tempo scaduto',
+      statusBrokerOffline: 'Broker offline',
+      statusConnectionFailed: 'Connessione fallita',
+      statusLookingUp: 'Ricerca riunione...',
+      statusNoActive: 'Nessuna trascrizione attiva',
+      statusGettingInfo: 'Recupero informazioni...',
+      statusCreatingSession: 'Creazione sessione...',
+
+      btnStartTranscription: 'Avvia trascrizione',
+      btnStop: 'Ferma',
+      btnStopTranscription: 'Ferma trascrizione',
+      btnLinkAccount: 'Collega account',
+      btnCancel: 'Annulla',
+      btnStarting: 'Avvio...',
+      btnStopping: 'Arresto...',
+      btnLinking: 'Collegamento...',
+
+      startTitle: 'Nessuna trascrizione attiva',
+      startDescription: 'Avvia una trascrizione in diretta per questa riunione.',
+      profileLabel: 'Profilo di trascrizione',
+      profileFallbackName: 'Profilo',
+      optDiarization: 'Diarizzazione dei parlanti',
+      optKeepAudio: 'Conserva registrazione audio',
+      optTranslations: 'Traduzioni',
+
+      pairingText: 'Per avviare una trascrizione, collega prima il tuo account.',
+      pairingKeyLabel: 'Chiave di accoppiamento',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      languageOriginal: 'Originale',
+      fontDecrease: 'Riduci dimensione carattere',
+      fontIncrease: 'Aumenta dimensione carattere',
+      settingsTitle: 'Impostazioni',
+      settingsLanguage: 'Lingua',
+      settingsFontSize: 'Dimensione carattere',
+
+      defaultSpeaker: 'Parlante',
+      emptyStateTitle: 'Nessuna trascrizione',
+      emptyStateText: 'Le trascrizioni appariranno qui quando la riunione inizierà',
+      connecting: 'Connessione...',
+      connectionError: 'Errore di connessione',
+
+      errorNoMeetingContext: 'Impossibile determinare il contesto della riunione',
+      errorInitFailed: 'Inizializzazione fallita',
+      errorSignInRequired: 'È necessario accedere per avviare una trascrizione. Apri questa app in Microsoft Teams.',
+      errorSignInConsent: 'È necessario accedere per avviare una trascrizione. Assicurati che l\'app sia stata approvata dal tuo amministratore Teams.',
+      errorPairingKeyRequired: 'Inserisci una chiave di accoppiamento',
+      errorLinkFailed: 'Collegamento account fallito',
+      errorTooManyAttempts: 'Troppi tentativi. Attendi un momento e riprova.',
+      errorNetwork: 'Errore di rete. Riprova.',
+      errorServerError: 'Errore del server',
+      errorLookupTimeout: 'Ricerca riunione scaduta. Riprova.',
+      errorLookupFailed: 'Ricerca riunione fallita',
+      errorLoadProfiles: 'Impossibile caricare i profili di trascrizione',
+      errorNoProfiles: 'Nessun profilo di trascrizione disponibile',
+      errorSelectProfile: 'Seleziona un profilo di trascrizione',
+      errorNoJoinUrl: 'Impossibile ottenere l\'URL della riunione. Assicurati di essere in una riunione Teams.',
+      errorCreateSession: 'Impossibile creare la sessione di trascrizione',
+      errorStopSession: 'Impossibile interrompere la sessione',
+      errorConnectFailed: 'Connessione fallita'
+    },
+
+    pt: {
+      appTitle: 'Transcrição ao vivo',
+      loading: 'Carregando...',
+      initializing: 'Inicializando...',
+
+      statusConnecting: 'Conectando...',
+      statusConnected: 'Conectado',
+      statusDisconnected: 'Desconectado',
+      statusError: 'Erro',
+      statusStopped: 'Parado',
+      statusTimeout: 'Tempo esgotado',
+      statusBrokerOffline: 'Broker offline',
+      statusConnectionFailed: 'Falha na conexão',
+      statusLookingUp: 'Procurando reunião...',
+      statusNoActive: 'Nenhuma transcrição ativa',
+      statusGettingInfo: 'Obtendo informações...',
+      statusCreatingSession: 'Criando sessão...',
+
+      btnStartTranscription: 'Iniciar transcrição',
+      btnStop: 'Parar',
+      btnStopTranscription: 'Parar transcrição',
+      btnLinkAccount: 'Vincular conta',
+      btnCancel: 'Cancelar',
+      btnStarting: 'Iniciando...',
+      btnStopping: 'Parando...',
+      btnLinking: 'Vinculando...',
+
+      startTitle: 'Nenhuma transcrição ativa',
+      startDescription: 'Inicie uma transcrição ao vivo para esta reunião.',
+      profileLabel: 'Perfil de transcrição',
+      profileFallbackName: 'Perfil',
+      optDiarization: 'Diarização de falantes',
+      optKeepAudio: 'Manter gravação de áudio',
+      optTranslations: 'Traduções',
+
+      pairingText: 'Para iniciar uma transcrição, vincule sua conta primeiro.',
+      pairingKeyLabel: 'Chave de emparelhamento',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      languageOriginal: 'Original',
+      fontDecrease: 'Diminuir tamanho da fonte',
+      fontIncrease: 'Aumentar tamanho da fonte',
+      settingsTitle: 'Configurações',
+      settingsLanguage: 'Idioma',
+      settingsFontSize: 'Tamanho da fonte',
+
+      defaultSpeaker: 'Falante',
+      emptyStateTitle: 'Nenhuma transcrição ainda',
+      emptyStateText: 'As transcrições aparecerão aqui quando a reunião começar',
+      connecting: 'Conectando...',
+      connectionError: 'Erro de conexão',
+
+      errorNoMeetingContext: 'Não foi possível determinar o contexto da reunião',
+      errorInitFailed: 'Falha na inicialização',
+      errorSignInRequired: 'É necessário fazer login para iniciar uma transcrição. Abra este aplicativo no Microsoft Teams.',
+      errorSignInConsent: 'É necessário fazer login para iniciar uma transcrição. Certifique-se de que o aplicativo foi aprovado pelo administrador do Teams.',
+      errorPairingKeyRequired: 'Insira uma chave de emparelhamento',
+      errorLinkFailed: 'Falha ao vincular conta',
+      errorTooManyAttempts: 'Muitas tentativas. Aguarde um momento e tente novamente.',
+      errorNetwork: 'Erro de rede. Tente novamente.',
+      errorServerError: 'Erro do servidor',
+      errorLookupTimeout: 'A pesquisa da reunião expirou. Tente novamente.',
+      errorLookupFailed: 'Falha na pesquisa da reunião',
+      errorLoadProfiles: 'Falha ao carregar perfis de transcrição',
+      errorNoProfiles: 'Nenhum perfil de transcrição disponível',
+      errorSelectProfile: 'Selecione um perfil de transcrição',
+      errorNoJoinUrl: 'Não foi possível obter a URL da reunião. Certifique-se de estar em uma reunião do Teams.',
+      errorCreateSession: 'Falha ao criar sessão de transcrição',
+      errorStopSession: 'Falha ao parar a sessão',
+      errorConnectFailed: 'Falha na conexão'
+    },
+
+    nl: {
+      appTitle: 'Live transcriptie',
+      loading: 'Laden...',
+      initializing: 'Initialiseren...',
+
+      statusConnecting: 'Verbinden...',
+      statusConnected: 'Verbonden',
+      statusDisconnected: 'Verbroken',
+      statusError: 'Fout',
+      statusStopped: 'Gestopt',
+      statusTimeout: 'Time-out',
+      statusBrokerOffline: 'Broker offline',
+      statusConnectionFailed: 'Verbinding mislukt',
+      statusLookingUp: 'Vergadering zoeken...',
+      statusNoActive: 'Geen actieve transcriptie',
+      statusGettingInfo: 'Vergaderingsinfo ophalen...',
+      statusCreatingSession: 'Sessie aanmaken...',
+
+      btnStartTranscription: 'Transcriptie starten',
+      btnStop: 'Stoppen',
+      btnStopTranscription: 'Transcriptie stoppen',
+      btnLinkAccount: 'Account koppelen',
+      btnCancel: 'Annuleren',
+      btnStarting: 'Starten...',
+      btnStopping: 'Stoppen...',
+      btnLinking: 'Koppelen...',
+
+      startTitle: 'Geen actieve transcriptie',
+      startDescription: 'Start een live transcriptie voor deze vergadering.',
+      profileLabel: 'Transcriptieprofiel',
+      profileFallbackName: 'Profiel',
+      optDiarization: 'Sprekersherkenning',
+      optKeepAudio: 'Audio-opname bewaren',
+      optTranslations: 'Vertalingen',
+
+      pairingText: 'Koppel eerst uw account om een transcriptie te starten.',
+      pairingKeyLabel: 'Koppelingssleutel',
+      pairingKeyPlaceholder: 'EMT-XXXX-XXXX-XXXX-XXXX',
+
+      languageOriginal: 'Origineel',
+      fontDecrease: 'Lettergrootte verkleinen',
+      fontIncrease: 'Lettergrootte vergroten',
+      settingsTitle: 'Instellingen',
+      settingsLanguage: 'Taal',
+      settingsFontSize: 'Lettergrootte',
+
+      defaultSpeaker: 'Spreker',
+      emptyStateTitle: 'Nog geen transcripties',
+      emptyStateText: 'Transcripties verschijnen hier wanneer de vergadering begint',
+      connecting: 'Verbinden...',
+      connectionError: 'Verbindingsfout',
+
+      errorNoMeetingContext: 'Kan de vergaderingscontext niet bepalen',
+      errorInitFailed: 'Initialisatie mislukt',
+      errorSignInRequired: 'Aanmelden is vereist om een transcriptie te starten. Open deze app in Microsoft Teams.',
+      errorSignInConsent: 'Aanmelden is vereist om een transcriptie te starten. Zorg ervoor dat de app is goedgekeurd door uw Teams-beheerder.',
+      errorPairingKeyRequired: 'Voer een koppelingssleutel in',
+      errorLinkFailed: 'Account koppelen mislukt',
+      errorTooManyAttempts: 'Te veel pogingen. Wacht even en probeer het opnieuw.',
+      errorNetwork: 'Netwerkfout. Probeer het opnieuw.',
+      errorServerError: 'Serverfout',
+      errorLookupTimeout: 'Vergadering zoeken verlopen. Probeer het opnieuw.',
+      errorLookupFailed: 'Vergadering zoeken mislukt',
+      errorLoadProfiles: 'Kan transcriptieprofielen niet laden',
+      errorNoProfiles: 'Geen transcriptieprofielen beschikbaar',
+      errorSelectProfile: 'Selecteer een transcriptieprofiel',
+      errorNoJoinUrl: 'Kan vergaderings-URL niet ophalen. Zorg ervoor dat u in een Teams-vergadering bent.',
+      errorCreateSession: 'Kan transcriptiesessie niet aanmaken',
+      errorStopSession: 'Kan sessie niet stoppen',
+      errorConnectFailed: 'Verbinding mislukt'
+    }
+  },
+
+  /**
+   * Initialize with a locale string (e.g. 'fr-fr', 'en-us').
+   * @param {string} locale
+   */
+  init(locale) {
+    const short = (locale || 'en').split('-')[0].toLowerCase()
+    this.locale = this.supportedLocales.includes(short) ? short : 'en'
+  },
+
+  /**
+   * Get a translated string by key.
+   * Falls back to English, then to the key itself.
+   * @param {string} key
+   * @returns {string}
+   */
+  t(key) {
+    return this.translations[this.locale]?.[key]
+      || this.translations['en']?.[key]
+      || key
+  },
+
+  /**
+   * Apply translations to all elements with data-i18n attributes.
+   */
+  apply() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = this.t(el.getAttribute('data-i18n'))
+    })
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+      el.title = this.t(el.getAttribute('data-i18n-title'))
+    })
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      el.placeholder = this.t(el.getAttribute('data-i18n-placeholder'))
+    })
+    document.title = this.t('appTitle')
+  }
+}

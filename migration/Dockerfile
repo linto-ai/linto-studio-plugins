@@ -1,14 +1,14 @@
-ARG default_image=node:22-bookworm
-#non code.europe.eu
+ARG default_image=node:22-alpine
 FROM $default_image
-#end non code.europe.eu
 
-RUN apt-get update && apt-get install -y \
-        gosu \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache && apk add --no-cache \
+  bash \
+  su-exec \
+  shadow \
+  && ln -s /sbin/su-exec /usr/local/bin/gosu
 
 COPY migration/ /usr/src/app/migration
-RUN cd /usr/src/app/migration && npm install &&  npm cache clean --force
+RUN cd /usr/src/app/migration && npm install && npm cache clean --force
 
 COPY wait-for-it.sh /
 COPY migration/docker-entrypoint.sh /

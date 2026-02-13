@@ -151,6 +151,7 @@ services:
         required: false
     environment:
       - DEBUG=msteams-scheduler:*
+      - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api:8080/cm-api}
     depends_on:
       broker:
         condition: service_started

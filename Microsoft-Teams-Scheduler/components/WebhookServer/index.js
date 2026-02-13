@@ -1,6 +1,5 @@
 const { Component, MqttClient, Model, logger } = require('live-srt-lib');
 const express = require('express');
-const util = require('util');
 require('dotenv/config');
 require('isomorphic-fetch');
 const { Client } = require('@microsoft/microsoft-graph-client');
@@ -33,8 +32,11 @@ class WebhookServer extends Component {
     });
     this.graph = Client.initWithMiddleware({ authProvider });
 
-    this.client = new MqttClient({ uniqueId: 'teams-scheduler', pub: 'teams-scheduler', subs: [] });
+    this.client = new MqttClient({ uniqueId: 'teams-scheduler', pub: 'teams-scheduler', subs: ['msteams-scheduler/in/#'] });
     this.client.on('ready', () => this.client.publishStatus());
+    this.client.on('message', (topic, message) => this.handleMqttMessage(topic, message));
+
+    this.subscriptions = new Map();
 
     this.express = express();
     this.express.use(express.json({ limit: '1mb' }));
@@ -46,30 +48,19 @@ class WebhookServer extends Component {
     this.httpServer = this.express.listen(port, async () => {
       logger.info(`Teams webhook listening on :${port}`);
       try {
-        const envUserId = process.env.MSTEAMS_SCHEDULER_USER_ID;
-        if (envUserId) {
-          // remove any previous default user not matching env value
-          await Model.MsTeamsUser.destroy({
-            where: { defaultUser: true, userId: { [Model.Op.ne]: envUserId } }
-          });
-          // ensure current default user exists
-          const [user] = await Model.MsTeamsUser.findOrCreate({
-            where: { userId: envUserId },
-            defaults: { userId: envUserId, defaultUser: true }
-          });
-          if (!user.defaultUser) {
-            user.defaultUser = true;
-            await user.save();
-          }
-        }
-
-        const users = await Model.MsTeamsUser.findAll();
-        for (const u of users) {
+        const subs = await Model.CalendarSubscription.findAll({ where: { status: 'active' } });
+        for (const sub of subs) {
           try {
-            const sub = await this.ensureSubscription(u.userId);
-            logger.info(`Subscription created for ${u.userId}: ${sub.id} valid until ${sub.expirationDateTime}`);
+            const graphSub = await this.createGraphSubscription(sub.graphUserId);
+            await Model.CalendarSubscription.update(
+              { graphSubscriptionId: graphSub.id, graphSubscriptionExpiry: graphSub.expirationDateTime, status: 'active' },
+              { where: { id: sub.id } }
+            );
+            this.subscriptions.set(sub.id, { ...sub.toJSON(), graphSubscriptionId: graphSub.id });
+            logger.info(`Graph subscription restored for user ${sub.graphUserId}: ${graphSub.id}`);
           } catch (err) {
-            logger.error(`Failed to create subscription for ${u.userId}:`, err.message);
+            await Model.CalendarSubscription.update({ status: 'error' }, { where: { id: sub.id } });
+            logger.error(`Failed to restore subscription for ${sub.graphUserId}: ${err.message}`);
           }
         }
       } catch (err) {
@@ -87,59 +78,202 @@ class WebhookServer extends Component {
     });
 
     setInterval(() => this.checkEvents(), 60 * 1000);
+    setInterval(() => this.renewSubscriptions(), 12 * 60 * 60 * 1000);
     return this.init();
   }
 
-  async ensureSubscription(userId = process.env.MSTEAMS_SCHEDULER_USER_ID) {
+  async createGraphSubscription(graphUserId) {
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
     return this.graph.api('/subscriptions').post({
       changeType: 'created,updated,deleted',
       notificationUrl: `${process.env.MSTEAMS_SCHEDULER_PUBLIC_BASE}/notifications`,
-      resource: `/users/${userId}/events`,
+      resource: `/users/${graphUserId}/events`,
       expirationDateTime: expires,
       clientState: 'linagora-webhook'
     });
   }
 
-  async handleNotification(req, res) {
-    console.log(util.inspect({ method: req.method, url: req.originalUrl, headers: req.headers, query: req.query, body: req.body }, { depth: null, colors: true }));
+  async deleteGraphSubscription(graphSubscriptionId) {
+    try {
+      await this.graph.api(`/subscriptions/${graphSubscriptionId}`).delete();
+    } catch (err) {
+      logger.warn(`Failed to delete Graph subscription ${graphSubscriptionId}: ${err.message}`);
+    }
+  }
 
-    if (req.query.validationToken)
+  async handleMqttMessage(topic, message) {
+    const data = JSON.parse(message.toString());
+    if (topic === 'msteams-scheduler/in/subscription/create') {
+      await this.handleCreateSubscription(data);
+    } else if (topic === 'msteams-scheduler/in/subscription/delete') {
+      await this.handleDeleteSubscription(data);
+    }
+  }
+
+  async handleCreateSubscription({ subscriptionId, graphUserId, studioToken, organizationId,
+    transcriberProfileId, translations, diarization, keepAudio, enableDisplaySub }) {
+    try {
+      const graphSub = await this.createGraphSubscription(graphUserId);
+      await Model.CalendarSubscription.update(
+        { graphSubscriptionId: graphSub.id, graphSubscriptionExpiry: graphSub.expirationDateTime, status: 'active' },
+        { where: { id: subscriptionId } }
+      );
+      this.subscriptions.set(subscriptionId, {
+        id: subscriptionId, graphUserId, graphSubscriptionId: graphSub.id,
+        studioToken, organizationId, transcriberProfileId,
+        translations, diarization, keepAudio, enableDisplaySub
+      });
+      logger.info(`Calendar subscription created: ${subscriptionId} for user ${graphUserId}`);
+    } catch (err) {
+      await Model.CalendarSubscription.update({ status: 'error' }, { where: { id: subscriptionId } });
+      logger.error(`Failed to create Graph subscription for ${graphUserId}: ${err.message}`);
+    }
+  }
+
+  async handleDeleteSubscription({ subscriptionId, graphSubscriptionId }) {
+    if (graphSubscriptionId) {
+      await this.deleteGraphSubscription(graphSubscriptionId);
+    }
+    this.subscriptions.delete(subscriptionId);
+    logger.info(`Calendar subscription deleted: ${subscriptionId}`);
+  }
+
+  async renewSubscriptions() {
+    for (const [subId, sub] of this.subscriptions) {
+      if (!sub.graphSubscriptionId) continue;
+      try {
+        const expires = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+        await this.graph.api(`/subscriptions/${sub.graphSubscriptionId}`).patch({
+          expirationDateTime: expires
+        });
+        await Model.CalendarSubscription.update(
+          { graphSubscriptionExpiry: expires },
+          { where: { id: subId } }
+        );
+        logger.debug(`Renewed Graph subscription ${sub.graphSubscriptionId}`);
+      } catch (err) {
+        logger.error(`Failed to renew subscription ${sub.graphSubscriptionId}: ${err.message}`);
+        try {
+          const graphSub = await this.createGraphSubscription(sub.graphUserId);
+          sub.graphSubscriptionId = graphSub.id;
+          await Model.CalendarSubscription.update(
+            { graphSubscriptionId: graphSub.id, graphSubscriptionExpiry: graphSub.expirationDateTime },
+            { where: { id: subId } }
+          );
+        } catch (retryErr) {
+          await Model.CalendarSubscription.update({ status: 'error' }, { where: { id: subId } });
+          logger.error(`Failed to recreate subscription for ${sub.graphUserId}: ${retryErr.message}`);
+        }
+      }
+    }
+  }
+
+  async handleNotification(req, res) {
+    if (req.query.validationToken) {
       return res.status(200).send(req.query.validationToken);
+    }
 
     for (const n of req.body.value ?? []) {
-      logger.debug(`[${n.changeType}] event ${n.resourceData.id}`);
-      if (n.changeType !== 'deleted') {
+      try {
+        const resourceParts = n.resource.split('/');
+        const graphUserId = resourceParts[1];
+
+        const subscription = Array.from(this.subscriptions.values())
+          .find(s => s.graphUserId === graphUserId);
+
+        if (!subscription) {
+          logger.debug(`No calendar subscription found for userId ${graphUserId}, ignoring`);
+          continue;
+        }
+
+        if (n.changeType === 'deleted') {
+          await Model.MsTeamsEvent.destroy({ where: { eventId: n.resourceData.id } });
+          continue;
+        }
+
         const ev = await this.graph
-          .api(`/users/${process.env.MSTEAMS_SCHEDULER_USER_ID}/events/${n.resourceData.id}`)
-          .select('subject,start,end')
+          .api(`/users/${graphUserId}/events/${n.resourceData.id}`)
+          .select('subject,start,end,onlineMeeting,isOnlineMeeting')
           .get();
+
+        const joinUrl = ev.onlineMeeting?.joinUrl || null;
+
         await Model.MsTeamsEvent.upsert({
           eventId: n.resourceData.id,
           subject: ev.subject,
           startDateTime: ev.start.dateTime,
           endDateTime: ev.end.dateTime,
+          meetingJoinUrl: joinUrl,
+          calendarSubscriptionId: subscription.id,
           processed: false
         }, { where: { eventId: n.resourceData.id } });
-      } else {
-        await Model.MsTeamsEvent.destroy({ where: { eventId: n.resourceData.id } });
+
+        logger.debug(`[${n.changeType}] event ${n.resourceData.id} for user ${graphUserId} (joinUrl: ${joinUrl ? 'yes' : 'no'})`);
+      } catch (err) {
+        logger.error(`Error processing notification: ${err.message}`);
       }
     }
     res.sendStatus(202);
   }
 
   async checkEvents() {
+    const { createLinTOClient } = require('../../utils/lintoSdk');
     const now = new Date();
+
     const events = await Model.MsTeamsEvent.findAll({
       where: {
         processed: false,
-        startDateTime: { [Model.Op.lte]: now }
-      }
+        startDateTime: { [Model.Op.lte]: now },
+        meetingJoinUrl: { [Model.Op.not]: null }
+      },
+      include: [{
+        model: Model.CalendarSubscription,
+        as: 'calendarSubscription',
+        where: { status: 'active' }
+      }]
     });
+
     for (const ev of events) {
-      this.client.publish('scheduler/in/schedule/startbot', { eventId: ev.eventId, subject: ev.subject }, 1, false, true);
-      ev.processed = true;
-      await ev.save();
+      try {
+        const sub = ev.calendarSubscription;
+        logger.info(`Processing scheduled event: ${ev.subject} (joinUrl: ${ev.meetingJoinUrl})`);
+
+        const client = await createLinTOClient(sub.studioToken);
+
+        const channelConfig = {
+          transcriberProfileId: sub.transcriberProfileId,
+          diarization: sub.diarization,
+          enableLiveTranscripts: true,
+          keepAudio: sub.keepAudio
+        };
+        if (Array.isArray(sub.translations) && sub.translations.length > 0) {
+          channelConfig.translations = sub.translations;
+        }
+
+        const session = await client.createSession({ channels: [channelConfig] });
+        const sessionId = session.id;
+        const channelId = session.channels?.[0]?.id;
+
+        if (!channelId) {
+          logger.error(`Session ${sessionId} created but no channel returned for event ${ev.eventId}`);
+          continue;
+        }
+
+        await client.createBot({
+          url: ev.meetingJoinUrl,
+          channelId,
+          provider: 'teams',
+          enableDisplaySub: sub.enableDisplaySub
+        });
+
+        ev.processed = true;
+        ev.sessionId = sessionId;
+        await ev.save();
+
+        logger.info(`Session ${sessionId} created for event "${ev.subject}"`);
+      } catch (err) {
+        logger.error(`Failed to process event ${ev.eventId}: ${err.message}`);
+      }
     }
   }
 }

@@ -74,7 +74,6 @@ SESSION_API_WEBSERVER_HTTP_PORT=8005
 MSTEAMS_SCHEDULER_AZURE_TENANT_ID= # Azure AD tenant ID
 MSTEAMS_SCHEDULER_AZURE_CLIENT_ID= # Azure AD app registration client ID
 MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET= # Azure AD app registration client secret
-MSTEAMS_SCHEDULER_USER_ID= # Microsoft 365 user ID to monitor calendar events
 MSTEAMS_SCHEDULER_PUBLIC_BASE=http://msteams-scheduler:8081 # Public URL for Graph API webhook callbacks
 MSTEAMS_SCHEDULER_BASE_URL=http://msteams-scheduler:8081 # Internal service URL
 MSTEAMS_SCHEDULER_PORT=8081

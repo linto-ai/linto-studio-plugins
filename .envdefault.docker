@@ -85,6 +85,9 @@ TEAMSAPPSERVICE_APP_ID=40ce8848-ebe0-42d1-aab8-e992443977bc # Azure Bot registra
 TEAMSAPPSERVICE_BASE_URL=https://teams.devops-expert.com # Public HTTPS URL for the Teams app
 TEAMSAPPSERVICE_AZURE_TENANT_ID= # Azure AD tenant ID for token validation
 
+# LinTO Studio SDK
+LINTO_STUDIO_BASE_URL=http://studio-api:8080/cm-api
+
 # LiveKit Bot Configuration
 LIVEKITBOT_COMPONENTS=BrokerClient
 LIVEKIT_MEET_URL= # LiveKit Meet frontend URL (e.g. https://meet.example.com)

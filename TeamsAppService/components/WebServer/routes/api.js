@@ -1,46 +1,10 @@
-const crypto = require('crypto')
 const express = require('express')
 const { logger, Model } = require('live-srt-lib')
 const { normalizeThreadId } = require('../../../utils/threadId')
+const { validateStudioToken, createLinTOClient } = require('../../../utils/lintoSdk')
 const { requireAuth, requireEmeetingAuth, optionalAuth } = require('../middlewares/auth')
 
 const SESSION_API_HOST = process.env.SESSION_API_HOST || 'http://localhost:8005'
-
-// Rate limiting state for POST /v1/pair (per IP)
-const pairAttempts = new Map()
-const PAIR_RATE_LIMIT = 5 // max attempts
-const PAIR_RATE_WINDOW_MS = 60000 // per minute
-
-/**
- * Check rate limit for pairing attempts.
- * @param {string} key - Rate limit key (IP address)
- * @returns {boolean} true if allowed, false if rate limited
- */
-function checkPairRateLimit(key) {
-  const now = Date.now()
-  const entry = pairAttempts.get(key)
-
-  if (!entry || now - entry.windowStart > PAIR_RATE_WINDOW_MS) {
-    pairAttempts.set(key, { windowStart: now, count: 1 })
-    return true
-  }
-
-  if (entry.count >= PAIR_RATE_LIMIT) {
-    return false
-  }
-
-  entry.count++
-  return true
-}
-
-/**
- * Hash a pairing key using SHA-256.
- * @param {string} plaintext
- * @returns {string}
- */
-function hashKey(plaintext) {
-  return crypto.createHash('sha256').update(plaintext).digest('hex')
-}
 
 /**
  * API routes for TeamsAppService.
@@ -72,7 +36,9 @@ module.exports = function (app) {
         linked: true,
         organizationId: link.organizationId,
         displayName: link.displayName,
-        email: link.email
+        email: link.email,
+        orgRole: link.orgRole || 0,
+        orgPermissions: link.orgPermissions || 0
       })
     } catch (err) {
       logger.error(`[TeamsAppService] Error checking account status: ${err.message}`)
@@ -84,30 +50,21 @@ module.exports = function (app) {
   })
 
   /**
-   * POST /v1/pair
-   * Pair the authenticated Azure AD user to an emeeting organization using a pairing key.
-   * The key is validated (hash match, not expired, not revoked, within maxUses),
-   * then a teamsAccountLink is created and the key's usedCount is incremented.
-   * Rate limited to 5 attempts per minute per IP.
+   * POST /v1/link-studio
+   * Link the authenticated Azure AD user to an emeeting organization using a LinTO Studio token.
+   * The token is validated via the LinTO SDK, then a teamsAccountLink is created
+   * with the user's organization, role, and permissions.
    * Requires Azure AD authentication.
    *
-   * Body: { key: "EMT-XXXX-XXXX-XXXX-XXXX" }
+   * Body: { studioToken: "..." }
    */
-  router.post('/pair', requireAuth, async (req, res) => {
-    const rateLimitKey = req.ip
-    if (!checkPairRateLimit(rateLimitKey)) {
-      return res.status(429).json({
-        error: 'Too Many Requests',
-        message: 'Too many pairing attempts. Please try again later.'
-      })
-    }
+  router.post('/link-studio', requireAuth, async (req, res) => {
+    const { studioToken } = req.body
 
-    const { key } = req.body
-
-    if (!key || typeof key !== 'string') {
+    if (!studioToken || typeof studioToken !== 'string') {
       return res.status(400).json({
         error: 'Bad Request',
-        message: 'A pairing key is required'
+        message: 'A LinTO Studio API token is required'
       })
     }
 
@@ -128,41 +85,14 @@ module.exports = function (app) {
         })
       }
 
-      // Hash the provided key and look it up
-      const keyHash = hashKey(key.trim())
-      const pairingKey = await Model.PairingKey.findOne({
-        where: { keyHash }
-      })
+      // Validate token via LinTO SDK
+      const { user: studioUser, organizationId, orgRole, orgPermissions } = await validateStudioToken(studioToken)
 
-      if (!pairingKey) {
-        return res.status(400).json({
-          error: 'Invalid Key',
-          message: 'The pairing key is invalid'
-        })
-      }
-
-      // Check status
-      if (pairingKey.status === 'revoked') {
-        return res.status(400).json({
-          error: 'Key Revoked',
-          message: 'This pairing key has been revoked'
-        })
-      }
-
-      // Check expiration
-      if (pairingKey.expiresAt && new Date(pairingKey.expiresAt) <= new Date()) {
-        await pairingKey.update({ status: 'expired' })
-        return res.status(400).json({
-          error: 'Key Expired',
-          message: 'This pairing key has expired'
-        })
-      }
-
-      // Check max uses
-      if (pairingKey.maxUses !== null && pairingKey.usedCount >= pairingKey.maxUses) {
-        return res.status(400).json({
-          error: 'Key Exhausted',
-          message: 'This pairing key has reached its maximum number of uses'
+      // Verify minimum role: orgRole >= 3 required (meeting creation permission)
+      if (orgRole < 3) {
+        return res.status(403).json({
+          error: 'Insufficient Permissions',
+          message: 'Your LinTO Studio account does not have permission to create meetings in this organization'
         })
       }
 
@@ -170,21 +100,24 @@ module.exports = function (app) {
       const link = await Model.TeamsAccountLink.create({
         azureOid: req.user.oid,
         azureTenantId: req.user.tenantId,
-        organizationId: pairingKey.organizationId,
+        organizationId,
+        lintoUserId: studioUser._id,
+        orgRole,
+        orgPermissions,
+        studioToken,
         displayName: req.user.name || null,
         email: req.user.email || null
       })
 
-      // Increment usage count
-      await pairingKey.increment('usedCount')
-
-      logger.info(`[TeamsAppService] Account paired: oid=${req.user.oid}, org=${pairingKey.organizationId}`)
+      logger.info(`[TeamsAppService] Account linked: oid=${req.user.oid}, org=${organizationId}, role=${orgRole}`)
 
       res.status(201).json({
         linked: true,
         organizationId: link.organizationId,
         displayName: link.displayName,
-        email: link.email
+        email: link.email,
+        orgRole: link.orgRole,
+        orgPermissions: link.orgPermissions
       })
     } catch (err) {
       // Handle unique constraint violation (race condition: user linked between check and create)
@@ -195,20 +128,29 @@ module.exports = function (app) {
         })
       }
 
-      logger.error(`[TeamsAppService] Error pairing account: ${err.message}`)
+      // SDK validation errors (invalid token, no org) -> 400
+      if (err.message.includes('Invalid studio token') || err.message.includes('no organizations') || err.message.includes('not configured')) {
+        logger.warn(`[TeamsAppService] Studio token validation failed: ${err.message}`)
+        return res.status(400).json({
+          error: 'Invalid Token',
+          message: err.message
+        })
+      }
+
+      logger.error(`[TeamsAppService] Error linking account: ${err.message}`)
       return res.status(500).json({
         error: 'Internal Server Error',
-        message: 'Failed to pair account'
+        message: 'Failed to link account'
       })
     }
   })
 
   /**
-   * DELETE /v1/unpair
+   * DELETE /v1/unlink
    * Remove the authenticated user's account link.
    * Requires emeeting authentication (must be currently linked).
    */
-  router.delete('/unpair', requireEmeetingAuth, async (req, res) => {
+  router.delete('/unlink', requireEmeetingAuth, async (req, res) => {
     try {
       const link = await Model.TeamsAccountLink.findOne({
         where: {
@@ -387,23 +329,16 @@ module.exports = function (app) {
    */
   router.get('/transcriber-profiles', requireEmeetingAuth, async (req, res) => {
     try {
-      const orgId = req.emeetingOrg.organizationId
-      const url = `${SESSION_API_HOST}/v1/transcriber_profiles?quickMeeting=true&organizationId=${encodeURIComponent(orgId)}`
-      logger.debug(`[TeamsAppService] Fetching transcriber profiles from ${url}`)
-
-      const response = await fetch(url)
-
-      if (!response.ok) {
-        logger.error(`[TeamsAppService] Session-API returned ${response.status} for transcriber profiles`)
-        return res.status(502).json({
-          error: 'Bad Gateway',
-          message: 'Failed to fetch transcriber profiles from Session-API'
-        })
-      }
-
-      const data = await response.json()
+      const client = await createLinTOClient(req.emeetingOrg.studioToken)
+      const data = await client.listTranscriberProfiles({ quickMeeting: true })
       res.json(data)
     } catch (err) {
+      if (err.status) {
+        return res.status(err.status >= 500 ? 502 : err.status).json({
+          error: err.statusText || 'Error',
+          message: err.body?.message || err.message
+        })
+      }
       logger.error(`[TeamsAppService] Error fetching transcriber profiles: ${err.message}`)
       return res.status(500).json({
         error: 'Internal Server Error',
@@ -421,6 +356,14 @@ module.exports = function (app) {
    * Body: { transcriberProfileId, meetingJoinUrl, threadId }
    */
   router.post('/sessions', requireEmeetingAuth, async (req, res) => {
+    // Check role: orgRole >= 3 required for quick meeting creation
+    if ((req.emeetingOrg.orgRole || 0) < 3) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Insufficient role to create sessions'
+      })
+    }
+
     const { transcriberProfileId, meetingJoinUrl, threadId, translations, diarization, keepAudio } = req.body
 
     if (!transcriberProfileId || !meetingJoinUrl || !threadId) {
@@ -431,7 +374,7 @@ module.exports = function (app) {
     }
 
     try {
-      // 1. Create session via Session-API
+      // 1. Create session via SDK (studio-api injects owner and organizationId)
       const channelConfig = {
         transcriberProfileId,
         diarization: diarization !== undefined ? diarization : false,
@@ -443,30 +386,10 @@ module.exports = function (app) {
         channelConfig.translations = translations
       }
 
-      const sessionPayload = {
-        owner: req.user.oid,
-        organizationId: req.emeetingOrg.organizationId,
-        channels: [channelConfig]
-      }
-
       logger.info(`[TeamsAppService] Creating session for user=${req.user.oid}, org=${req.emeetingOrg.organizationId}, profile=${transcriberProfileId}`)
 
-      const sessionResponse = await fetch(`${SESSION_API_HOST}/v1/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sessionPayload)
-      })
-
-      if (!sessionResponse.ok) {
-        const errBody = await sessionResponse.text()
-        logger.error(`[TeamsAppService] Session-API returned ${sessionResponse.status}: ${errBody}`)
-        return res.status(502).json({
-          error: 'Bad Gateway',
-          message: 'Failed to create session in Session-API'
-        })
-      }
-
-      const session = await sessionResponse.json()
+      const client = await createLinTOClient(req.emeetingOrg.studioToken)
+      const session = await client.createSession({ channels: [channelConfig] })
       const sessionId = session.id
       const channelId = session.channels?.[0]?.id
 
@@ -478,27 +401,11 @@ module.exports = function (app) {
         })
       }
 
-      // 2. Create bot via Session-API
-      const botPayload = {
-        url: meetingJoinUrl,
-        channelId,
-        provider: 'teams',
-        enableDisplaySub: true
-      }
-
-      logger.info(`[TeamsAppService] Creating bot for session=${sessionId}, channel=${channelId}`)
-
-      const botResponse = await fetch(`${SESSION_API_HOST}/v1/bots`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(botPayload)
-      })
-
-      if (!botResponse.ok) {
-        const errBody = await botResponse.text()
-        logger.error(`[TeamsAppService] Session-API bot creation returned ${botResponse.status}: ${errBody}`)
-        // Session was created but bot failed - still return session info
-        logger.warn(`[TeamsAppService] Session ${sessionId} created but bot creation failed`)
+      // 2. Create bot via SDK
+      try {
+        await client.createBot({ url: meetingJoinUrl, channelId, provider: 'teams', enableDisplaySub: true })
+      } catch (botErr) {
+        logger.warn(`[TeamsAppService] Session ${sessionId} created but bot creation failed: ${botErr.message}`)
       }
 
       // 3. Register in MeetingRegistry
@@ -537,23 +444,16 @@ module.exports = function (app) {
     try {
       logger.info(`[TeamsAppService] Stopping session ${sessionId} requested by user=${req.user.oid}`)
 
-      const response = await fetch(`${SESSION_API_HOST}/v1/sessions/${sessionId}/stop?force=true`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' }
-      })
-
-      if (!response.ok) {
-        const errBody = await response.text()
-        logger.error(`[TeamsAppService] Session-API stop returned ${response.status}: ${errBody}`)
-        return res.status(response.status >= 500 ? 502 : response.status).json({
-          error: response.status >= 500 ? 'Bad Gateway' : 'Error',
-          message: 'Failed to stop session'
-        })
-      }
-
-      const data = await response.json()
+      const client = await createLinTOClient(req.emeetingOrg.studioToken)
+      const data = await client.stopSession(sessionId, { force: true })
       res.json(data)
     } catch (err) {
+      if (err.status) {
+        return res.status(err.status >= 500 ? 502 : err.status).json({
+          error: err.status >= 500 ? 'Bad Gateway' : 'Error',
+          message: err.body?.message || 'Failed to stop session'
+        })
+      }
       logger.error(`[TeamsAppService] Error stopping session: ${err.message}`)
       return res.status(500).json({
         error: 'Internal Server Error',

@@ -172,6 +172,7 @@ services:
       - TEAMSAPPSERVICE_HTTPS_PORT=443
       - TEAMSAPPSERVICE_CERTS_DIR=/usr/src/app/teamsappservice/certs
       - SESSION_API_HOST=http://sessionapi:${SESSION_API_WEBSERVER_HTTP_PORT}
+      - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api:8080/cm-api}
     expose:
       - "443"
     depends_on:

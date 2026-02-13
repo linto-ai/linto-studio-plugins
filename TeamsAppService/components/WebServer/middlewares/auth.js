@@ -184,12 +184,16 @@ async function requireEmeetingAuth(req, res, next) {
     if (!link) {
       return res.status(403).json({
         error: 'ACCOUNT_NOT_LINKED',
-        message: 'Your Teams account is not linked to an emeeting organization. Please enter a pairing key.'
+        message: 'Your Teams account is not linked to an emeeting organization. Please enter your LinTO Studio API token.'
       })
     }
 
     req.emeetingOrg = {
-      organizationId: link.organizationId
+      organizationId: link.organizationId,
+      lintoUserId: link.lintoUserId,
+      orgRole: link.orgRole || 0,
+      orgPermissions: link.orgPermissions || 0,
+      studioToken: link.studioToken
     }
 
     next()

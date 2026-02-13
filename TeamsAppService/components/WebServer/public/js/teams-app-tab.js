@@ -197,11 +197,11 @@
 
     // Re-translate inline pairing UI if visible
     const pairingText = document.querySelector('.inline-pairing-text')
-    if (pairingText) pairingText.textContent = window.i18n.t('pairingText')
+    if (pairingText) pairingText.textContent = window.i18n.t('linkStudioText')
     const pairingLabel = document.querySelector('.pairing-label')
-    if (pairingLabel) pairingLabel.textContent = window.i18n.t('pairingKeyLabel')
-    const pairingInput = document.getElementById('pairing-key-input')
-    if (pairingInput) pairingInput.placeholder = window.i18n.t('pairingKeyPlaceholder')
+    if (pairingLabel) pairingLabel.textContent = window.i18n.t('studioTokenLabel')
+    const tokenInput = document.getElementById('studio-token-input')
+    if (tokenInput) tokenInput.placeholder = window.i18n.t('studioTokenPlaceholder')
     const pairBtn = document.getElementById('pair-btn')
     if (pairBtn && !pairBtn.disabled) pairBtn.textContent = window.i18n.t('btnLinkAccount')
     const cancelBtn = document.getElementById('pair-cancel-btn')
@@ -374,14 +374,14 @@
       pairingEl.id = 'inline-pairing'
       pairingEl.className = 'inline-pairing'
       pairingEl.innerHTML = `
-        <p class="inline-pairing-text">${window.i18n.t('pairingText')}</p>
+        <p class="inline-pairing-text">${window.i18n.t('linkStudioText')}</p>
         <div class="pairing-form">
-          <label class="pairing-label" for="pairing-key-input">${window.i18n.t('pairingKeyLabel')}</label>
+          <label class="pairing-label" for="studio-token-input">${window.i18n.t('studioTokenLabel')}</label>
           <input
-            type="text"
-            id="pairing-key-input"
+            type="password"
+            id="studio-token-input"
             class="pairing-input"
-            placeholder="${window.i18n.t('pairingKeyPlaceholder')}"
+            placeholder="${window.i18n.t('studioTokenPlaceholder')}"
             autocomplete="off"
             spellcheck="false"
           />
@@ -392,12 +392,12 @@
       `
       container.appendChild(pairingEl)
 
-      const keyInput = document.getElementById('pairing-key-input')
+      const tokenInput = document.getElementById('studio-token-input')
       const pairBtn = document.getElementById('pair-btn')
       const cancelBtn = document.getElementById('pair-cancel-btn')
       const errorEl = document.getElementById('pair-error')
 
-      keyInput.focus()
+      tokenInput.focus()
 
       function cleanup() {
         pairingEl.remove()
@@ -415,9 +415,9 @@
       })
 
       async function onSubmit() {
-        const key = keyInput.value.trim()
-        if (!key) {
-          errorEl.textContent = window.i18n.t('errorPairingKeyRequired')
+        const studioToken = tokenInput.value.trim()
+        if (!studioToken) {
+          errorEl.textContent = window.i18n.t('errorStudioTokenRequired')
           errorEl.style.display = 'block'
           return
         }
@@ -425,52 +425,51 @@
         pairBtn.disabled = true
         pairBtn.textContent = window.i18n.t('btnLinking')
         pairBtn.classList.add('btn-loading')
-        keyInput.disabled = true
+        tokenInput.disabled = true
         cancelBtn.disabled = true
         errorEl.style.display = 'none'
 
         try {
-          const response = await authFetch('/v1/pair', {
+          const response = await authFetch('/v1/link-studio', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key })
+            body: JSON.stringify({ studioToken })
           })
 
           const data = await response.json()
 
           if (!response.ok) {
-            let message = data.message || window.i18n.t('errorLinkFailed')
-            if (response.status === 429) {
-              message = window.i18n.t('errorTooManyAttempts')
-            }
+            const message = response.status === 403
+              ? window.i18n.t('errorInsufficientPermissions')
+              : (data.message || window.i18n.t('errorLinkFailed'))
             errorEl.textContent = message
             errorEl.style.display = 'block'
             pairBtn.disabled = false
             pairBtn.textContent = window.i18n.t('btnLinkAccount')
             pairBtn.classList.remove('btn-loading')
-            keyInput.disabled = false
+            tokenInput.disabled = false
             cancelBtn.disabled = false
-            keyInput.focus()
+            tokenInput.focus()
             return
           }
 
-          console.log('[TeamsApp] Account paired successfully:', data.organizationId)
+          console.log('[TeamsApp] Account linked successfully:', data.organizationId)
           cleanup()
           resolve()
         } catch (err) {
-          console.error('[TeamsApp] Pairing error:', err)
+          console.error('[TeamsApp] Linking error:', err)
           errorEl.textContent = window.i18n.t('errorNetwork')
           errorEl.style.display = 'block'
           pairBtn.disabled = false
           pairBtn.textContent = window.i18n.t('btnLinkAccount')
           pairBtn.classList.remove('btn-loading')
-          keyInput.disabled = false
+          tokenInput.disabled = false
           cancelBtn.disabled = false
         }
       }
 
       pairBtn.addEventListener('click', onSubmit)
-      keyInput.addEventListener('keydown', (e) => {
+      tokenInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') onSubmit()
       })
     })

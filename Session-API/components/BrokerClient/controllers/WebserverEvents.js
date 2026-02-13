@@ -11,4 +11,12 @@ module.exports = function () {
         await this.scheduleStopBot(botId);
     });
 
+    this.app.components['WebServer'].on('createCalendarSubscription', async (subscriptionId) => {
+        await this.createCalendarSubscription(subscriptionId);
+    });
+
+    this.app.components['WebServer'].on('deleteCalendarSubscription', async (subscriptionId) => {
+        await this.deleteCalendarSubscription(subscriptionId);
+    });
+
 }

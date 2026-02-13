@@ -7,5 +7,6 @@ module.exports = (webserver) => {
         ...require('./bots.js')(webserver),
         ...require('./msteams_users.js')(webserver),
         ...require('./pairing.js')(webserver),
+        ...require('./calendar_subscriptions.js')(webserver),
     ];
 }

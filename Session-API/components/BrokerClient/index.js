@@ -78,6 +78,31 @@ class BrokerClient extends Component {
   async scheduleStopBot(botId) {
     this.client.publish('scheduler/in/schedule/stopbot', { botId }, 1, false, true);
   }
+
+  async createCalendarSubscription(subscriptionId) {
+    const subscription = await Model.CalendarSubscription.findByPk(subscriptionId);
+    if (!subscription) return;
+    this.client.publish('msteams-scheduler/in/subscription/create', {
+      subscriptionId: subscription.id,
+      graphUserId: subscription.graphUserId,
+      transcriberProfileId: subscription.transcriberProfileId,
+      studioToken: subscription.studioToken,
+      organizationId: subscription.organizationId,
+      translations: subscription.translations,
+      diarization: subscription.diarization,
+      keepAudio: subscription.keepAudio,
+      enableDisplaySub: subscription.enableDisplaySub
+    }, 1, false, true);
+  }
+
+  async deleteCalendarSubscription(subscriptionId) {
+    const subscription = await Model.CalendarSubscription.findByPk(subscriptionId);
+    if (!subscription) return;
+    this.client.publish('msteams-scheduler/in/subscription/delete', {
+      subscriptionId: subscription.id,
+      graphSubscriptionId: subscription.graphSubscriptionId
+    }, 1, false, true);
+  }
 }
 
 module.exports = app => new BrokerClient(app);

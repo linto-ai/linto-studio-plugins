@@ -29,6 +29,9 @@ class WebSocketServer extends Component {
     // Track clients per room
     this._roomClients = new Map() // room -> Set of socket IDs
 
+    // Pending bot errors per room (for clients that join after the error)
+    this._pendingBotErrors = new Map() // room -> { sessionId, channelId, error, timerId }
+
     // Initialize Socket.IO when WebServer is ready
     const initSocketIO = () => {
       const server = webServer.getServer()
@@ -127,6 +130,15 @@ class WebSocketServer extends Component {
 
           logger.info(`[TeamsAppService] Client ${socket.id} joined room ${room}`)
           socket.emit('joined', { room, sessionId, channelId })
+
+          // Send pending bot error if any
+          const pendingError = this._pendingBotErrors.get(room)
+          if (pendingError) {
+            socket.emit('bot_error', pendingError.data)
+            clearTimeout(pendingError.timerId)
+            this._pendingBotErrors.delete(room)
+            logger.info(`[TeamsAppService] Sent pending bot_error to client ${socket.id} in room ${room}`)
+          }
         } catch (err) {
           logger.error(`[TeamsAppService] Error joining room:`, err)
           socket.emit('error', { message: 'Failed to join room' })
@@ -197,6 +209,30 @@ class WebSocketServer extends Component {
   broadcastTranscription(sessionId, channelId, type, data) {
     const room = `${sessionId}/${channelId}`
     this.io.to(room).emit(type, data)
+  }
+
+  /**
+   * Broadcast a bot error to a room, storing it for late-joining clients.
+   * @param {string} sessionId
+   * @param {string} channelId
+   * @param {Object} data - { sessionId, channelId, error }
+   */
+  broadcastBotError(sessionId, channelId, data) {
+    const room = `${sessionId}/${channelId}`
+
+    // Broadcast to clients already in the room
+    this.io.to(room).emit('bot_error', data)
+
+    // Store for clients that join later (auto-expire after 60s)
+    const existing = this._pendingBotErrors.get(room)
+    if (existing) clearTimeout(existing.timerId)
+
+    const timerId = setTimeout(() => {
+      this._pendingBotErrors.delete(room)
+    }, 60000)
+
+    this._pendingBotErrors.set(room, { data, timerId })
+    logger.info(`[TeamsAppService] Broadcasted bot_error to room ${room} (stored as pending)`)
   }
 
   /**

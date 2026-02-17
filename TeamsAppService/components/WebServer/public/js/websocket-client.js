@@ -16,7 +16,8 @@ class WebSocketClient {
       error: [],
       partial: [],
       final: [],
-      brokerStatus: []
+      brokerStatus: [],
+      botError: []
     }
   }
 
@@ -103,6 +104,11 @@ class WebSocketClient {
 
         this.socket.on('final', (data) => {
           this._emit('final', data)
+        })
+
+        this.socket.on('bot_error', (data) => {
+          console.warn('[WebSocketClient] Bot error:', data)
+          this._emit('botError', data)
         })
 
         this.socket.on('error', (data) => {

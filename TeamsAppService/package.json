@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "live-srt-lib": "file:../lib",
-    "@linto-ai/linto": "file:../../linto-studio/studio-sdk/javascript",
+    "@linto-ai/linto": "git+https://github.com/jslinagora/sdk-linto-temp.git#main",
     "archiver": "^6.0.1",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",

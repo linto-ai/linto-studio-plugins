@@ -130,6 +130,14 @@ class BrokerClient extends Component {
 
       if (!selectedBotService) {
         logger.error(`No BotService available with capability '${bot.provider}' to start bot.`);
+        const channel = await Model.Channel.findByPk(bot.channelId);
+        if (channel) {
+          this.client.publish('teamsappservice/in/bot-error', {
+            sessionId: channel.sessionId,
+            channelId: channel.id,
+            error: `No BotService available with capability '${bot.provider}'`
+          }, 2, false, true);
+        }
         return;
       }
 
@@ -141,6 +149,18 @@ class BrokerClient extends Component {
       logger.debug(`Bot scheduled via BotService ${selectedBotService.uniqueId} (capability: ${bot.provider}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
       logger.error('Failed to start bot:', error);
+      try {
+        const failedBot = await Model.Bot.findByPk(botId, { include: Model.Channel });
+        if (failedBot && failedBot.channel) {
+          this.client.publish('teamsappservice/in/bot-error', {
+            sessionId: failedBot.channel.sessionId,
+            channelId: failedBot.channel.id,
+            error: error.message
+          }, 2, false, true);
+        }
+      } catch (publishError) {
+        logger.error('Failed to publish bot error:', publishError);
+      }
     }
   }
 

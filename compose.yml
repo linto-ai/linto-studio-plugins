@@ -19,6 +19,11 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_DB: ${DB_NAME}
     command: -p ${DB_PORT}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME} -p ${DB_PORT}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
     networks:
       - internal
   #----------
@@ -34,7 +39,8 @@ services:
     environment:
       - NODE_ENV=production
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     networks:
       - internal
 
@@ -151,7 +157,7 @@ services:
         required: false
     environment:
       - DEBUG=msteams-scheduler:*
-      - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api:8080/cm-api}
+      - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api}
     depends_on:
       broker:
         condition: service_started
@@ -173,7 +179,7 @@ services:
       - TEAMSAPPSERVICE_HTTPS_PORT=443
       - TEAMSAPPSERVICE_CERTS_DIR=/usr/src/app/teamsappservice/certs
       - SESSION_API_HOST=http://sessionapi:${SESSION_API_WEBSERVER_HTTP_PORT}
-      - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api:8080/cm-api}
+      - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api}
     expose:
       - "443"
     depends_on:

@@ -23,7 +23,8 @@ class BrokerClient extends Component {
     // Static subscriptions for meeting events
     this.subs = [
       'teamsappservice/in/meeting-joined',
-      'teamsappservice/in/meeting-left'
+      'teamsappservice/in/meeting-left',
+      'teamsappservice/in/bot-error'
     ]
 
     // Track dynamic subscriptions for transcriptions per session/channel

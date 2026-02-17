@@ -525,7 +525,8 @@ module.exports = (webserver) => {
                     return res.status(404).send('Session not found');
                 }
                 // Check if session is active and "force" parameter is not true
-                if (session.status === 'active' && req.query.force !== 'true') {
+                const force = req.query.force === 'true' || req.body?.force === true || req.body?.force === 'true';
+                if (session.status === 'active' && !force) {
                     throw new ApiError(400, "Active sessions cannot be deleted without force parameter");
                 }
                 await session.destroy();
@@ -547,7 +548,8 @@ module.exports = (webserver) => {
                 if (!session) {
                     throw new ApiError(404, 'Session not found');
                 }
-                if (session.status === 'active' && req.query.force !== 'true') {
+                const force = req.query.force === 'true' || req.body?.force === true || req.body?.force === 'true';
+                if (session.status === 'active' && !force) {
                     throw new ApiError(400, "Active sessions cannot be stopped without force parameter");
                 }
 
@@ -579,7 +581,7 @@ module.exports = (webserver) => {
         path: '/sessions/purge',
         method: 'post',
         controller: async (req, res, next) => {
-            const force = req.query.force === 'true';
+            const force = req.query.force === 'true' || req.body?.force === true || req.body?.force === 'true';
             const where = force ? {} : {status: 'terminated'};
             const msg = force ? 'All sessions purged' : 'Terminated sessions purged'
 

@@ -955,6 +955,12 @@
         transcriptionManager.addFinal(data)
       })
 
+      wsClient.on('botError', (data) => {
+        console.error('[TeamsApp] Bot error:', data)
+        transcriptionManager.showError(window.i18n.t('errorBotFailed') + ': ' + data.error)
+        updateStatus('disconnected', window.i18n.t('statusBotError'))
+      })
+
       await wsClient.connect(authToken)
 
     } catch (err) {

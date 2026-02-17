@@ -85,7 +85,7 @@ TEAMSAPPSERVICE_BASE_URL=https://teams.devops-expert.com # Public HTTPS URL for 
 TEAMSAPPSERVICE_AZURE_TENANT_ID= # Azure AD tenant ID for token validation
 
 # LinTO Studio SDK
-LINTO_STUDIO_BASE_URL=http://studio-api:8080/cm-api
+LINTO_STUDIO_BASE_URL=http://studio-api
 
 # LiveKit Bot Configuration
 LIVEKITBOT_COMPONENTS=BrokerClient

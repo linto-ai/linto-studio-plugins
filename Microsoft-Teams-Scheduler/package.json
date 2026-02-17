@@ -29,7 +29,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "isomorphic-fetch": "^3.0.0",
-    "@linto-ai/linto": "file:../../linto-studio/studio-sdk/javascript",
+    "@linto-ai/linto": "git+https://github.com/jslinagora/sdk-linto-temp.git#main",
     "live-srt-lib": "file:../lib",
     "util": "^0.12.5"
   }

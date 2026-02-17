@@ -25,6 +25,13 @@ module.exports = function () {
         return
       }
 
+      // Handle bot-error event
+      if (topic === 'teamsappservice/in/bot-error') {
+        logger.warn(`[TeamsAppService] Received bot-error: sessionId=${payload.sessionId}, channelId=${payload.channelId}, error=${payload.error}`)
+        self.emit('bot-error', payload)
+        return
+      }
+
       // Handle transcription messages
       if (topic.startsWith('transcriber/out/')) {
         const parts = topic.split('/')

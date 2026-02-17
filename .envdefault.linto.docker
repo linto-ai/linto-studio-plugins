@@ -14,7 +14,7 @@ BROKER_KEY_FILEPATH=
 BROKER_REJECT_UNAUTHORIZED=true
 
 # LinTO Studio SDK
-LINTO_STUDIO_BASE_URL=http://studio-api:8080/cm-api
+LINTO_STUDIO_BASE_URL=http://studio-api
 
 ##### studio-frontend #####
 VUE_APP_ENABLE_SESSION=true

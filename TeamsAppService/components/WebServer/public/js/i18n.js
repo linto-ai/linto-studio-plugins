@@ -93,7 +93,9 @@ window.i18n = {
       errorNoJoinUrl: 'Unable to get meeting join URL. Make sure you are in a Teams meeting.',
       errorCreateSession: 'Failed to create transcription session',
       errorStopSession: 'Failed to stop session',
-      errorConnectFailed: 'Failed to connect'
+      errorConnectFailed: 'Failed to connect',
+      errorBotFailed: 'The bot could not join the meeting',
+      statusBotError: 'Bot error'
     },
 
     fr: {
@@ -173,7 +175,9 @@ window.i18n = {
       errorNoJoinUrl: 'Impossible d\u2019obtenir l\u2019URL de la r\u00e9union. V\u00e9rifiez que vous \u00eates dans une r\u00e9union Teams.',
       errorCreateSession: '\u00c9chec de la cr\u00e9ation de la session de transcription',
       errorStopSession: '\u00c9chec de l\u2019arr\u00eat de la session',
-      errorConnectFailed: '\u00c9chec de la connexion'
+      errorConnectFailed: '\u00c9chec de la connexion',
+      errorBotFailed: 'Le bot n\u2019a pas pu rejoindre la r\u00e9union',
+      statusBotError: 'Erreur du bot'
     },
 
     de: {
@@ -253,7 +257,9 @@ window.i18n = {
       errorNoJoinUrl: 'Besprechungs-URL konnte nicht abgerufen werden. Stellen Sie sicher, dass Sie sich in einer Teams-Besprechung befinden.',
       errorCreateSession: 'Transkriptionssitzung konnte nicht erstellt werden',
       errorStopSession: 'Sitzung konnte nicht gestoppt werden',
-      errorConnectFailed: 'Verbindung fehlgeschlagen'
+      errorConnectFailed: 'Verbindung fehlgeschlagen',
+      errorBotFailed: 'Der Bot konnte der Besprechung nicht beitreten',
+      statusBotError: 'Bot-Fehler'
     },
 
     es: {
@@ -333,7 +339,9 @@ window.i18n = {
       errorNoJoinUrl: 'No se pudo obtener la URL de la reunión. Asegúrese de estar en una reunión de Teams.',
       errorCreateSession: 'Error al crear la sesión de transcripción',
       errorStopSession: 'Error al detener la sesión',
-      errorConnectFailed: 'Error de conexión'
+      errorConnectFailed: 'Error de conexión',
+      errorBotFailed: 'El bot no pudo unirse a la reunión',
+      statusBotError: 'Error del bot'
     },
 
     it: {
@@ -413,7 +421,9 @@ window.i18n = {
       errorNoJoinUrl: 'Impossibile ottenere l\'URL della riunione. Assicurati di essere in una riunione Teams.',
       errorCreateSession: 'Impossibile creare la sessione di trascrizione',
       errorStopSession: 'Impossibile interrompere la sessione',
-      errorConnectFailed: 'Connessione fallita'
+      errorConnectFailed: 'Connessione fallita',
+      errorBotFailed: 'Il bot non è riuscito a unirsi alla riunione',
+      statusBotError: 'Errore del bot'
     },
 
     pt: {
@@ -493,7 +503,9 @@ window.i18n = {
       errorNoJoinUrl: 'Não foi possível obter a URL da reunião. Certifique-se de estar em uma reunião do Teams.',
       errorCreateSession: 'Falha ao criar sessão de transcrição',
       errorStopSession: 'Falha ao parar a sessão',
-      errorConnectFailed: 'Falha na conexão'
+      errorConnectFailed: 'Falha na conexão',
+      errorBotFailed: 'O bot não conseguiu entrar na reunião',
+      statusBotError: 'Erro do bot'
     },
 
     nl: {
@@ -573,7 +585,9 @@ window.i18n = {
       errorNoJoinUrl: 'Kan vergaderings-URL niet ophalen. Zorg ervoor dat u in een Teams-vergadering bent.',
       errorCreateSession: 'Kan transcriptiesessie niet aanmaken',
       errorStopSession: 'Kan sessie niet stoppen',
-      errorConnectFailed: 'Verbinding mislukt'
+      errorConnectFailed: 'Verbinding mislukt',
+      errorBotFailed: 'De bot kon niet deelnemen aan de vergadering',
+      statusBotError: 'Botfout'
     }
   },
 

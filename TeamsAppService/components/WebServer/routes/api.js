@@ -15,6 +15,8 @@ module.exports = function (app) {
   /**
    * GET /v1/account-status
    * Check if the authenticated Azure AD user is linked to an emeeting organization.
+   * Validates the stored studio token — if invalid/expired, revokes the link
+   * so the frontend will prompt for a new token.
    * Requires Azure AD authentication.
    */
   router.get('/account-status', requireAuth, async (req, res) => {
@@ -27,6 +29,17 @@ module.exports = function (app) {
       })
 
       if (!link) {
+        return res.json({
+          linked: false
+        })
+      }
+
+      // Validate the stored studio token
+      try {
+        await validateStudioToken(link.studioToken)
+      } catch (tokenErr) {
+        logger.warn(`[TeamsAppService] Stored studio token invalid for oid=${req.user.oid}: ${tokenErr.message}. Revoking link.`)
+        await link.update({ status: 'revoked' })
         return res.json({
           linked: false
         })
@@ -69,15 +82,14 @@ module.exports = function (app) {
     }
 
     try {
-      // Check if user is already linked
+      // Check if user already has a link (active or revoked)
       const existingLink = await Model.TeamsAccountLink.findOne({
         where: {
-          azureOid: req.user.oid,
-          status: 'active'
+          azureOid: req.user.oid
         }
       })
 
-      if (existingLink) {
+      if (existingLink && existingLink.status === 'active') {
         return res.status(409).json({
           error: 'Already Linked',
           message: 'Your account is already linked to an organization',
@@ -96,18 +108,35 @@ module.exports = function (app) {
         })
       }
 
-      // Create account link
-      const link = await Model.TeamsAccountLink.create({
-        azureOid: req.user.oid,
-        azureTenantId: req.user.tenantId,
-        organizationId,
-        lintoUserId: studioUser._id,
-        orgRole,
-        orgPermissions,
-        studioToken,
-        displayName: req.user.name || null,
-        email: req.user.email || null
-      })
+      let link
+      if (existingLink) {
+        // Reactivate revoked link with new token
+        await existingLink.update({
+          azureTenantId: req.user.tenantId,
+          organizationId,
+          lintoUserId: studioUser._id,
+          orgRole,
+          orgPermissions,
+          studioToken,
+          displayName: req.user.name || null,
+          email: req.user.email || null,
+          status: 'active'
+        })
+        link = existingLink
+      } else {
+        // Create new link
+        link = await Model.TeamsAccountLink.create({
+          azureOid: req.user.oid,
+          azureTenantId: req.user.tenantId,
+          organizationId,
+          lintoUserId: studioUser._id,
+          orgRole,
+          orgPermissions,
+          studioToken,
+          displayName: req.user.name || null,
+          email: req.user.email || null
+        })
+      }
 
       logger.info(`[TeamsAppService] Account linked: oid=${req.user.oid}, org=${organizationId}, role=${orgRole}`)
 

@@ -22,6 +22,12 @@ module.exports = function () {
     self.broadcastTranscription(sessionId, channelId, type, data)
   })
 
+  // Forward bot errors to Socket.IO clients (stored for late-joining clients)
+  brokerClient.on('bot-error', (payload) => {
+    const { sessionId, channelId, error } = payload
+    self.broadcastBotError(sessionId, channelId, { sessionId, channelId, error })
+  })
+
   // Notify clients of broker status changes
   brokerClient.on('ready', () => {
     if (self.io) {

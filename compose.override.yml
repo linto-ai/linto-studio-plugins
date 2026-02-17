@@ -54,6 +54,7 @@ services:
       - ./TeamsAppService:/usr/src/app/teamsappservice
       - /usr/src/app/teamsappservice/node_modules
       - ./certs/teamsappservice:/certs:ro
+      - ../linto-studio/studio-sdk/javascript:/linto-studio/studio-sdk/javascript:ro
     # Expose port 443 for local HTTPS testing (comment out when not needed)
     ports:
       - "443:443"

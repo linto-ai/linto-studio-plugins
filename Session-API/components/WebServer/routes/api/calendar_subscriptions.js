@@ -1,4 +1,7 @@
-const { Model } = require("live-srt-lib")
+const { Model, logger } = require("live-srt-lib")
+const axios = require("axios")
+
+const MSTEAMS_SCHEDULER_BASE_URL = process.env.MSTEAMS_SCHEDULER_BASE_URL
 
 module.exports = (webserver) => {
     return [{
@@ -48,6 +51,21 @@ module.exports = (webserver) => {
                 const { graphUserId, studioToken, organizationId, transcriberProfileId } = req.body;
                 if (!graphUserId || !studioToken || !organizationId || !transcriberProfileId) {
                     return res.status(400).json({ error: 'graphUserId, studioToken, organizationId, and transcriberProfileId are required' });
+                }
+
+                // Validate studio token via MS-Teams-Scheduler
+                try {
+                    const response = await axios.post(`${MSTEAMS_SCHEDULER_BASE_URL}/validate-token`, { studioToken });
+                    if (response.data.orgRole < 3) {
+                        return res.status(403).json({ error: 'Insufficient permissions: studio token does not have meeting creation rights (role >= 3 required)' });
+                    }
+                } catch (err) {
+                    if (err.response) {
+                        logger.warn(`[Session-API] Studio token validation failed: ${err.response.data?.error}`);
+                        return res.status(err.response.status).json({ error: err.response.data?.error || 'Token validation failed' });
+                    }
+                    logger.error(`[Session-API] MS-Teams-Scheduler unreachable: ${err.message}`);
+                    return res.status(502).json({ error: 'Token validation service unavailable' });
                 }
 
                 const profile = await Model.TranscriberProfile.findByPk(transcriberProfileId);

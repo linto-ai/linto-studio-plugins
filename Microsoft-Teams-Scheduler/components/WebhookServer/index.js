@@ -124,9 +124,42 @@ class WebhookServer extends Component {
         translations, diarization, keepAudio, enableDisplaySub
       });
       logger.info(`Calendar subscription created: ${subscriptionId} for user ${graphUserId}`);
+
+      await this.fetchExistingEvents(subscriptionId, graphUserId);
     } catch (err) {
       await Model.CalendarSubscription.update({ status: 'error' }, { where: { id: subscriptionId } });
       logger.error(`Failed to create Graph subscription for ${graphUserId}: ${err.message}`);
+    }
+  }
+
+  async fetchExistingEvents(subscriptionId, graphUserId) {
+    try {
+      const now = new Date().toISOString();
+      const events = await this.graph
+        .api(`/users/${graphUserId}/events`)
+        .filter(`start/dateTime ge '${now}'`)
+        .select('id,subject,start,end,onlineMeeting,isOnlineMeeting')
+        .top(50)
+        .get();
+
+      let count = 0;
+      for (const ev of events.value ?? []) {
+        const joinUrl = ev.onlineMeeting?.joinUrl || null;
+        await Model.MsTeamsEvent.upsert({
+          eventId: ev.id,
+          subject: ev.subject,
+          startDateTime: ev.start.dateTime,
+          endDateTime: ev.end.dateTime,
+          meetingJoinUrl: joinUrl,
+          calendarSubscriptionId: subscriptionId,
+          processed: false
+        }, { where: { eventId: ev.id } });
+        count++;
+      }
+
+      logger.info(`Fetched ${count} existing events for user ${graphUserId}`);
+    } catch (err) {
+      logger.error(`Failed to fetch existing events for user ${graphUserId}: ${err.message}`);
     }
   }
 

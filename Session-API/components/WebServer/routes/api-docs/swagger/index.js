@@ -4,5 +4,5 @@ module.exports = {
     ...require('./api/sessions.json'),
     ...require('./api/templates.json'),
     ...require('./api/bots.json'),
-    ...require('./api/msteams_users.json'),
+    ...require('./api/calendar_subscriptions.json'),
   }

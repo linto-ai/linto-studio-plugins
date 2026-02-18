@@ -1,0 +1,159 @@
+{
+  "/calendar-subscriptions": {
+    "get": {
+      "tags": ["calendar-subscriptions"],
+      "summary": "List calendar subscriptions",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "limit",
+          "description": "Maximum number of subscriptions to return",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "default": 10
+          }
+        },
+        {
+          "in": "query",
+          "name": "offset",
+          "description": "Offset for pagination",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "default": 0
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "List of calendar subscriptions",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "subscriptions": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/CalendarSubscription" }
+                  },
+                  "totalItems": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "post": {
+      "tags": ["calendar-subscriptions"],
+      "summary": "Create a calendar subscription for a Microsoft Teams user",
+      "description": "Creates a new calendar subscription that monitors a Microsoft Graph user's calendar events. This triggers a webhook registration and fetches existing upcoming events.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/CalendarSubscriptionRequest" }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "description": "Subscription created",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CalendarSubscription" }
+            }
+          }
+        },
+        "400": {
+          "description": "Missing required fields"
+        },
+        "404": {
+          "description": "Transcriber profile not found"
+        }
+      }
+    }
+  },
+  "/calendar-subscriptions/{id}": {
+    "get": {
+      "tags": ["calendar-subscriptions"],
+      "summary": "Get a calendar subscription by ID",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The calendar subscription",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CalendarSubscription" }
+            }
+          }
+        },
+        "404": {
+          "description": "Calendar subscription not found"
+        }
+      }
+    },
+    "put": {
+      "tags": ["calendar-subscriptions"],
+      "summary": "Update a calendar subscription",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/CalendarSubscriptionUpdate" }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated subscription",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CalendarSubscription" }
+            }
+          }
+        },
+        "404": {
+          "description": "Calendar subscription or transcriber profile not found"
+        }
+      }
+    },
+    "delete": {
+      "tags": ["calendar-subscriptions"],
+      "summary": "Disable a calendar subscription",
+      "description": "Disables the subscription and removes the Microsoft Graph webhook.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Subscription disabled"
+        },
+        "404": {
+          "description": "Calendar subscription not found"
+        }
+      }
+    }
+  }
+}

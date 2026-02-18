@@ -1,0 +1,134 @@
+{
+  "CalendarSubscription": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "graphUserId": {
+        "type": "string",
+        "description": "Microsoft Graph user ID"
+      },
+      "graphSubscriptionId": {
+        "type": "string",
+        "description": "Microsoft Graph webhook subscription ID (set automatically)"
+      },
+      "graphSubscriptionExpiry": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Expiry date of the Graph webhook subscription"
+      },
+      "organizationId": {
+        "type": "string"
+      },
+      "transcriberProfileId": {
+        "type": "integer"
+      },
+      "translations": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of translation target languages"
+      },
+      "diarization": {
+        "type": "boolean",
+        "default": false
+      },
+      "keepAudio": {
+        "type": "boolean",
+        "default": true
+      },
+      "enableDisplaySub": {
+        "type": "boolean",
+        "default": true
+      },
+      "status": {
+        "type": "string",
+        "enum": ["pending", "active", "error", "disabled"],
+        "description": "Subscription status"
+      },
+      "createdBy": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "updatedAt": {
+        "type": "string",
+        "format": "date-time"
+      }
+    }
+  },
+  "CalendarSubscriptionRequest": {
+    "type": "object",
+    "properties": {
+      "graphUserId": {
+        "type": "string",
+        "description": "Microsoft Graph user ID to monitor"
+      },
+      "studioToken": {
+        "type": "string",
+        "description": "LinTO Studio authentication token"
+      },
+      "organizationId": {
+        "type": "string"
+      },
+      "transcriberProfileId": {
+        "type": "integer",
+        "description": "ID of the transcriber profile to use"
+      },
+      "translations": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of translation target languages"
+      },
+      "diarization": {
+        "type": "boolean",
+        "default": false
+      },
+      "keepAudio": {
+        "type": "boolean",
+        "default": true
+      },
+      "enableDisplaySub": {
+        "type": "boolean",
+        "default": true
+      },
+      "createdBy": {
+        "type": "string"
+      }
+    },
+    "required": ["graphUserId", "studioToken", "organizationId", "transcriberProfileId"]
+  },
+  "CalendarSubscriptionUpdate": {
+    "type": "object",
+    "properties": {
+      "graphUserId": {
+        "type": "string"
+      },
+      "organizationId": {
+        "type": "string"
+      },
+      "transcriberProfileId": {
+        "type": "integer"
+      },
+      "translations": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "diarization": {
+        "type": "boolean"
+      },
+      "keepAudio": {
+        "type": "boolean"
+      },
+      "enableDisplaySub": {
+        "type": "boolean"
+      },
+      "createdBy": {
+        "type": "string"
+      }
+    }
+  }
+}

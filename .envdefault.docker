@@ -69,6 +69,7 @@ BROKER_REJECT_UNAUTHORIZED=true # Reject connections to brokers with untrusted c
 ##### Session API #####
 SESSION_API_HOST=http://localhost:8005 # Internal URL used by other services to reach Session-API
 SESSION_API_WEBSERVER_HTTP_PORT=8005
+TEAMS_APP_SERVICE_URL=http://teamsappservice:8082 # Internal URL of the TeamsAppService for proxying Teams app downloads and info
 
 # Microsoft Teams Scheduler (Graph API calendar webhooks)
 MSTEAMS_SCHEDULER_AZURE_TENANT_ID= # Azure AD tenant ID

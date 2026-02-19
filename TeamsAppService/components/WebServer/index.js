@@ -1,4 +1,5 @@
 const express = require('express')
+const http = require('http')
 const https = require('https')
 const fs = require('fs')
 const path = require('path')
@@ -72,16 +73,28 @@ class WebServer extends Component {
       })
     })
 
-    // Start HTTPS server
+    // Start HTTPS server (external: Teams clients)
     this.server = https.createServer(this.sslOptions, this.express).listen(this.port, () => {
-      this.state = WebServer.states.READY
       logger.info(`[TeamsAppService] WebServer (HTTPS) listening on port ${this.port}`)
-      this.emit('ready')
     })
 
     this.server.on('error', (err) => {
       this.state = WebServer.states.ERROR
-      logger.error(`[TeamsAppService] WebServer error:`, err)
+      logger.error(`[TeamsAppService] WebServer HTTPS error:`, err)
+      this.emit('error', err)
+    })
+
+    // Start HTTP server (internal: service-to-service communication)
+    this.httpPort = parseInt(process.env.TEAMSAPPSERVICE_HTTP_PORT || '8082')
+    this.httpServer = http.createServer(this.express).listen(this.httpPort, () => {
+      this.state = WebServer.states.READY
+      logger.info(`[TeamsAppService] WebServer (HTTP) listening on port ${this.httpPort}`)
+      this.emit('ready')
+    })
+
+    this.httpServer.on('error', (err) => {
+      this.state = WebServer.states.ERROR
+      logger.error(`[TeamsAppService] WebServer HTTP error:`, err)
       this.emit('error', err)
     })
 

@@ -89,6 +89,7 @@ BROKER_REJECT_UNAUTHORIZED=true # Reject connections to brokers with untrusted c
 ##### Session API #####
 SESSION_API_HOST=http://localhost:8000 # Host used by the Swagger doc to request the Session API
 SESSION_API_WEBSERVER_HTTP_PORT=8000
+TEAMS_APP_SERVICE_URL= # Internal URL of the TeamsAppService for proxying Teams app downloads and info (e.g. http://localhost:8082)
 
 # Microsoft Teams Scheduler
 MSTEAMS_SCHEDULER_AZURE_TENANT_ID=

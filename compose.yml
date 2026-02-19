@@ -177,11 +177,13 @@ services:
     environment:
       - DEBUG=teamsappservice:*
       - TEAMSAPPSERVICE_HTTPS_PORT=443
+      - TEAMSAPPSERVICE_HTTP_PORT=8082
       - TEAMSAPPSERVICE_CERTS_DIR=/usr/src/app/teamsappservice/certs
       - SESSION_API_HOST=http://sessionapi:${SESSION_API_WEBSERVER_HTTP_PORT}
       - LINTO_STUDIO_BASE_URL=${LINTO_STUDIO_BASE_URL:-http://studio-api}
     expose:
       - "443"
+      - "8082"
     depends_on:
       broker:
         condition: service_started

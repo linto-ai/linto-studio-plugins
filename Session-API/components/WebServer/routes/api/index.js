@@ -8,5 +8,6 @@ module.exports = (webserver) => {
 
         ...require('./pairing.js')(webserver),
         ...require('./calendar_subscriptions.js')(webserver),
+        ...require('./teams_app.js')(webserver),
     ];
 }

@@ -65,6 +65,13 @@ module.exports = async function () {
           }
         }
         break;
+      case 'mediahost':
+        if (action === 'status') {
+          const healthPayload = JSON.parse(message.toString());
+          // uniqueId is the integrationConfigId from topic: mediahost/out/{integrationConfigId}/status
+          await this.updateMediaHostHealth(uniqueId, healthPayload);
+        }
+        break;
       case 'scheduler':
         if (direction === 'in') {
           const { botId } = JSON.parse(message.toString());

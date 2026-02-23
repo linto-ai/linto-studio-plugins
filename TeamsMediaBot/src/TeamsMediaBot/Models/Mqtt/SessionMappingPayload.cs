@@ -4,8 +4,8 @@ namespace TeamsMediaBot.Models.Mqtt;
 
 /// <summary>
 /// Payload for publishing session mapping to MQTT.
-/// This allows other services (like LiveCaptionsServer) to know which
-/// sessionId/channelId corresponds to a Teams meeting threadId.
+/// This allows other services to know which sessionId/channelId
+/// corresponds to a Teams meeting threadId.
 /// </summary>
 public class SessionMappingPayload
 {

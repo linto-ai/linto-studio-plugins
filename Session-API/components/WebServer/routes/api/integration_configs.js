@@ -1,6 +1,10 @@
 const { Model, logger, Security } = require("live-srt-lib");
 const crypto = require("crypto");
 const axios = require("axios");
+const dns = require("dns");
+const net = require("net");
+const fs = require("fs");
+const path = require("path");
 
 function maskConfig(config) {
     if (!config) return config;
@@ -13,6 +17,18 @@ function maskConfig(config) {
     } catch {
         return config;
     }
+}
+
+const setupScriptTemplate = fs.readFileSync(path.join(__dirname, 'setup-manual.ps1.template'), 'utf8');
+
+function generateSetupScript(fqdn, sslMode, provisioningToken, sessionApiCallbackUrl, pfxPath) {
+    const sslParam = sslMode === 'pfx' ? 'pfx' : 'letsencrypt';
+    return setupScriptTemplate
+        .replace(/\{\{FQDN\}\}/g, fqdn)
+        .replace(/\{\{PROVISIONING_TOKEN\}\}/g, provisioningToken)
+        .replace(/\{\{SESSION_API_CALLBACK_URL\}\}/g, sessionApiCallbackUrl)
+        .replace(/\{\{SSL_MODE\}\}/g, sslParam)
+        .replace(/\{\{PFX_PATH\}\}/g, pfxPath || '');
 }
 
 module.exports = (webserver) => {
@@ -109,12 +125,19 @@ module.exports = (webserver) => {
                     return res.status(404).json({ error: 'Integration config not found' });
                 }
 
-                const allowedFields = ['status', 'config', 'setupProgress', 'mediaHostDns'];
+                const allowedFields = ['status', 'config', 'setupProgress', 'mediaHostDns', 'deploymentMode', 'manualConfig'];
                 const updates = {};
                 for (const field of allowedFields) {
                     if (req.body[field] !== undefined) {
                         updates[field] = req.body[field];
                     }
+                }
+
+                if (updates.deploymentMode !== undefined && !['azure', 'manual'].includes(updates.deploymentMode)) {
+                    return res.status(400).json({ error: 'deploymentMode must be azure or manual' });
+                }
+                if (updates.manualConfig && (!updates.manualConfig.fqdn || typeof updates.manualConfig.fqdn !== 'string' || !updates.manualConfig.fqdn.trim())) {
+                    return res.status(400).json({ error: 'manualConfig.fqdn is required and must be a non-empty string' });
                 }
 
                 if (updates.config) {
@@ -285,6 +308,45 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        // GET /integration-configs/:id/setup-script
+        path: '/integration-configs/:id/setup-script',
+        method: 'get',
+        controller: async (req, res, next) => {
+            const { id } = req.params;
+            try {
+                const { token } = req.query;
+                if (!token) {
+                    return res.status(403).json({ error: 'Provisioning token is required' });
+                }
+
+                const integrationConfig = await Model.IntegrationConfig.findByPk(id);
+                if (!integrationConfig) {
+                    return res.status(404).json({ error: 'Integration config not found' });
+                }
+
+                if (integrationConfig.provisioningToken !== token) {
+                    return res.status(403).json({ error: 'Invalid provisioning token' });
+                }
+
+                const manualConfig = integrationConfig.manualConfig || {};
+                const sessionApiCallbackUrl = process.env.SESSION_API_HOST || `http://localhost:${process.env.SESSION_API_WEBSERVER_HTTP_PORT || 8000}`;
+
+                const script = generateSetupScript(
+                    manualConfig.fqdn || '',
+                    manualConfig.sslMode || 'letsencrypt',
+                    token,
+                    sessionApiCallbackUrl,
+                    manualConfig.pfxPath || ''
+                );
+
+                res.setHeader('Content-Type', 'text/plain');
+                res.setHeader('Content-Disposition', 'attachment; filename="setup-manual.ps1"');
+                res.send(script);
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
         // POST /integration-configs/:id/health-report
         path: '/integration-configs/:id/health-report',
         method: 'post',
@@ -302,6 +364,61 @@ module.exports = (webserver) => {
                 });
 
                 res.json({ success: true });
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
+        // POST /integration-configs/:id/check-connectivity
+        path: '/integration-configs/:id/check-connectivity',
+        method: 'post',
+        controller: async (req, res, next) => {
+            const { id } = req.params;
+            try {
+                const integrationConfig = await Model.IntegrationConfig.findByPk(id);
+                if (!integrationConfig) {
+                    return res.status(404).json({ error: 'Integration config not found' });
+                }
+
+                const { fqdn } = req.body;
+                if (!fqdn || typeof fqdn !== 'string') {
+                    return res.status(400).json({ error: 'fqdn is required' });
+                }
+
+                const results = { dns: false, resolvedIp: null, mqtt: false };
+
+                // Check DNS resolution
+                try {
+                    const { address } = await dns.promises.lookup(fqdn);
+                    results.dns = true;
+                    results.resolvedIp = address;
+                } catch {
+                    // DNS resolution failed
+                }
+
+                // Check MQTT broker connectivity
+                const brokerHost = process.env.BROKER_HOST;
+                const brokerPort = parseInt(process.env.BROKER_PORT || '1883', 10);
+                if (brokerHost) {
+                    try {
+                        await new Promise((resolve, reject) => {
+                            const socket = net.createConnection({ host: brokerHost, port: brokerPort, timeout: 5000 }, () => {
+                                socket.destroy();
+                                resolve();
+                            });
+                            socket.on('error', reject);
+                            socket.on('timeout', () => {
+                                socket.destroy();
+                                reject(new Error('timeout'));
+                            });
+                        });
+                        results.mqtt = true;
+                    } catch {
+                        // MQTT broker unreachable
+                    }
+                }
+
+                res.json({ results });
             } catch (err) {
                 next(err);
             }

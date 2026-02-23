@@ -1,0 +1,54 @@
+# LinTO Media Host Manual Setup Script
+# Generated for: {{FQDN}}
+# Run this script as Administrator on your Windows Server VM
+
+param(
+    [string]$Fqdn = "{{FQDN}}",
+    [string]$ProvisioningToken = "{{PROVISIONING_TOKEN}}",
+    [string]$SessionApiCallbackUrl = "{{SESSION_API_CALLBACK_URL}}",
+    [string]$SslMode = "{{SSL_MODE}}",
+    [string]$PfxPath = "{{PFX_PATH}}"
+)
+
+$ErrorActionPreference = "Stop"
+$logFile = "C:\linto-studio-plugins\logs\setup-manual.log"
+New-Item -Path (Split-Path $logFile) -ItemType Directory -Force | Out-Null
+Start-Transcript -Path $logFile -Append
+
+try {
+    $scriptsPath = "C:\linto-studio-plugins\scripts"
+
+    Write-Host "FQDN: $Fqdn"
+
+    if ($SslMode -eq "pfx") {
+        Write-Host "Importing PFX certificate..."
+        if (-not $PfxPath -or -not (Test-Path $PfxPath)) {
+            throw "PFX file not found at: $PfxPath"
+        }
+        $pfxPassword = Read-Host -Prompt "Enter PFX password" -AsSecureString
+        Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation Cert:\LocalMachine\My -Password $pfxPassword
+    } else {
+        Write-Host "Requesting SSL certificate via Let''s Encrypt (win-acme)..."
+        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --installation iis --accepttos --emailaddress "admin@$Fqdn"
+    }
+
+    $cert = Get-ChildItem -Path Cert:\LocalMachine\My | Where-Object { $_.Subject -match $Fqdn } | Select-Object -First 1
+    if (-not $cert) {
+        Write-Warning "SSL certificate not found in store, continuing anyway..."
+    } else {
+        Write-Host "SSL certificate installed: $($cert.Thumbprint)"
+    }
+
+    Write-Host "Configuring services..."
+    & "$scriptsPath\configure-services.ps1"
+
+    Write-Host "Performing phone home..."
+    & "$scriptsPath\phone-home.ps1" -ProvisioningToken $ProvisioningToken -SessionApiUrl $SessionApiCallbackUrl -Fqdn $Fqdn
+
+    Write-Host "Setup completed successfully for $Fqdn"
+} catch {
+    Write-Error "Setup failed: $($_.Exception.Message)"
+    throw
+} finally {
+    Stop-Transcript
+}

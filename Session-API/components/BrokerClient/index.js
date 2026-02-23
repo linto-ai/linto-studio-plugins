@@ -95,6 +95,17 @@ class BrokerClient extends Component {
     }, 1, false, true);
   }
 
+  async publishMediaHostRegistered(integrationConfigId) {
+    const integrationConfig = await Model.IntegrationConfig.findByPk(integrationConfigId);
+    if (!integrationConfig) return;
+    this.client.publish('mediahost/in/registered', {
+      integrationConfigId: integrationConfig.id,
+      organizationId: integrationConfig.organizationId,
+      provider: integrationConfig.provider,
+      mediaHostDns: integrationConfig.mediaHostDns
+    }, 1, false, true);
+  }
+
   async deleteCalendarSubscription(subscriptionId) {
     const subscription = await Model.CalendarSubscription.findByPk(subscriptionId);
     if (!subscription) return;

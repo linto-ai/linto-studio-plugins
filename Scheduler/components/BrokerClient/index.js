@@ -17,7 +17,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `botservice/out/+/status`, `scheduler/in/#`, `translator/out/+/status`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `botservice/out/+/status`, `scheduler/in/#`, `translator/out/+/status`, `mediahost/out/+/status`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
@@ -536,6 +536,21 @@ class BrokerClient extends Component {
         where: { status: 'active' }
       }
     );
+  }
+
+  async updateMediaHostHealth(integrationConfigId, healthStatus) {
+    try {
+      await Model.IntegrationConfig.update(
+        {
+          lastHealthCheck: new Date(),
+          healthStatus: healthStatus
+        },
+        { where: { id: integrationConfigId } }
+      );
+      logger.debug(`Updated health status for integration config ${integrationConfigId}`);
+    } catch (err) {
+      logger.error(`Failed to update media host health for ${integrationConfigId}: ${err.message}`);
+    }
   }
 
   async publishSessions() {

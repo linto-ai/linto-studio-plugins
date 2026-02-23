@@ -19,4 +19,8 @@ module.exports = function () {
         await this.deleteCalendarSubscription(subscriptionId);
     });
 
+    this.app.components['WebServer'].on('mediaHostRegistered', async (integrationConfigId) => {
+        await this.publishMediaHostRegistered(integrationConfigId);
+    });
+
 }

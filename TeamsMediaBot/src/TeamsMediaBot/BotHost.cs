@@ -23,7 +23,7 @@ using Microsoft.Graph.Communications.Common.Telemetry;
 namespace TeamsMediaBot
 {
     /// <summary>
-    /// Bot Web Application with integrated SignalR hub for live captions.
+    /// Bot Web Application.
     /// </summary>
     public class BotHost : IBotHost
     {
@@ -66,26 +66,6 @@ namespace TeamsMediaBot
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
-
-            // Add SignalR for real-time captions
-            builder.Services.AddSignalR(options =>
-            {
-                options.EnableDetailedErrors = builder.Environment.IsDevelopment();
-                options.KeepAliveInterval = TimeSpan.FromSeconds(15);
-                options.ClientTimeoutInterval = TimeSpan.FromSeconds(30);
-            });
-
-            // Add CORS for Teams app
-            builder.Services.AddCors(options =>
-            {
-                options.AddPolicy("TeamsCorsPolicy", policy =>
-                {
-                    policy.AllowAnyHeader()
-                          .AllowAnyMethod()
-                          .AllowCredentials()
-                          .SetIsOriginAllowed(_ => true);
-                });
-            });
 
             var section = builder.Configuration.GetSection("AppSettings");
             var appSettings = section.Get<AppSettings>();
@@ -181,13 +161,6 @@ namespace TeamsMediaBot
             }
 
             _app.UseAuthorization();
-
-            // Enable CORS for Teams app
-            _app.UseCors("TeamsCorsPolicy");
-
-            // Serve static files (React app in wwwroot)
-            _app.UseDefaultFiles();
-            _app.UseStaticFiles();
 
             _app.MapControllers();
 

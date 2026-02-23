@@ -23,12 +23,16 @@ const setupScriptTemplate = fs.readFileSync(path.join(__dirname, 'setup-manual.p
 
 function generateSetupScript(fqdn, sslMode, provisioningToken, sessionApiCallbackUrl, pfxPath) {
     const sslParam = sslMode === 'pfx' ? 'pfx' : 'letsencrypt';
+    const packageUrl = process.env.TEAMS_MEDIA_BOT_PACKAGE_URL || '';
+    const packageSha256 = process.env.TEAMS_MEDIA_BOT_PACKAGE_SHA256 || '';
     return setupScriptTemplate
         .replace(/\{\{FQDN\}\}/g, fqdn)
         .replace(/\{\{PROVISIONING_TOKEN\}\}/g, provisioningToken)
         .replace(/\{\{SESSION_API_CALLBACK_URL\}\}/g, sessionApiCallbackUrl)
         .replace(/\{\{SSL_MODE\}\}/g, sslParam)
-        .replace(/\{\{PFX_PATH\}\}/g, pfxPath || '');
+        .replace(/\{\{PFX_PATH\}\}/g, pfxPath || '')
+        .replace(/\{\{PACKAGE_URL\}\}/g, packageUrl)
+        .replace(/\{\{PACKAGE_SHA256\}\}/g, packageSha256);
 }
 
 module.exports = (webserver) => {
@@ -342,6 +346,54 @@ module.exports = (webserver) => {
                 res.setHeader('Content-Type', 'text/plain');
                 res.setHeader('Content-Disposition', 'attachment; filename="setup-manual.ps1"');
                 res.send(script);
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
+        // GET /integration-configs/:id/media-host-package — Serve or redirect to TeamsMediaBot package
+        path: '/integration-configs/:id/media-host-package',
+        method: 'get',
+        controller: async (req, res, next) => {
+            const { id } = req.params;
+            try {
+                const { token } = req.query;
+                if (!token) {
+                    return res.status(403).json({ error: 'Provisioning token is required' });
+                }
+
+                const integrationConfig = await Model.IntegrationConfig.findByPk(id);
+                if (!integrationConfig) {
+                    return res.status(404).json({ error: 'Integration config not found' });
+                }
+
+                if (integrationConfig.provisioningToken !== token) {
+                    return res.status(403).json({ error: 'Invalid provisioning token' });
+                }
+
+                const packageUrl = process.env.TEAMS_MEDIA_BOT_PACKAGE_URL;
+                if (!packageUrl) {
+                    return res.status(404).json({ error: 'Package not configured (TEAMS_MEDIA_BOT_PACKAGE_URL not set)' });
+                }
+
+                const packageSha256 = process.env.TEAMS_MEDIA_BOT_PACKAGE_SHA256 || '';
+                if (packageSha256) {
+                    res.setHeader('X-Package-SHA256', packageSha256);
+                }
+
+                // If it looks like a local file path, serve it directly
+                if (packageUrl.startsWith('/') || packageUrl.match(/^[a-zA-Z]:\\/)) {
+                    if (!fs.existsSync(packageUrl)) {
+                        return res.status(404).json({ error: 'Package file not found on server' });
+                    }
+                    res.setHeader('Content-Type', 'application/zip');
+                    res.setHeader('Content-Disposition', 'attachment; filename="TeamsMediaBot.zip"');
+                    const stream = fs.createReadStream(packageUrl);
+                    stream.pipe(res);
+                } else {
+                    // Remote URL — redirect
+                    res.redirect(302, packageUrl);
+                }
             } catch (err) {
                 next(err);
             }

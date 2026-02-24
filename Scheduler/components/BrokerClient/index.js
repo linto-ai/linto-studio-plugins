@@ -538,18 +538,18 @@ class BrokerClient extends Component {
     );
   }
 
-  async updateMediaHostHealth(integrationConfigId, healthStatus) {
+  async updateMediaHostHealth(mediaHostId, healthStatus) {
     try {
-      await Model.IntegrationConfig.update(
+      await Model.MediaHost.update(
         {
           lastHealthCheck: new Date(),
           healthStatus: healthStatus
         },
-        { where: { id: integrationConfigId } }
+        { where: { id: mediaHostId } }
       );
-      logger.debug(`Updated health status for integration config ${integrationConfigId}`);
+      logger.debug(`Updated health status for media host ${mediaHostId}`);
     } catch (err) {
-      logger.error(`Failed to update media host health for ${integrationConfigId}: ${err.message}`);
+      logger.error(`Failed to update media host health for ${mediaHostId}: ${err.message}`);
     }
   }
 

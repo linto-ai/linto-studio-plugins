@@ -1,4 +1,5 @@
 const { Component, MqttClient, Model, logger } = require('live-srt-lib');
+const { resolveIntegrationConfig, getDecryptedCredentials } = require('live-srt-lib');
 const express = require('express');
 require('dotenv/config');
 require('isomorphic-fetch');
@@ -11,28 +12,27 @@ class WebhookServer extends Component {
     super(app);
     this.id = this.constructor.name;
 
-    // Azure credentials are required for this service
+    // Graph client pool: integrationConfigId -> Graph Client
+    this.graphClients = new Map();
+
+    // Fallback: if env vars present, create a fallback client (backward compat)
     const tenantId = process.env.MSTEAMS_SCHEDULER_AZURE_TENANT_ID;
     const clientId = process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_ID;
     const clientSecret = process.env.MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET;
 
-    if (!tenantId || !clientId || !clientSecret) {
-      const missing = [];
-      if (!tenantId) missing.push('MSTEAMS_SCHEDULER_AZURE_TENANT_ID');
-      if (!clientId) missing.push('MSTEAMS_SCHEDULER_AZURE_CLIENT_ID');
-      if (!clientSecret) missing.push('MSTEAMS_SCHEDULER_AZURE_CLIENT_SECRET');
-      logger.error(`MS Teams Scheduler requires Azure credentials. Missing: ${missing.join(', ')}`);
-      logger.error('Please configure these environment variables to use the MS Teams Scheduler service.');
-      process.exit(1);
+    if (tenantId && clientId && clientSecret) {
+      this.fallbackGraph = this._createGraphClient(tenantId, clientId, clientSecret);
+      logger.info('MS Teams Scheduler: fallback Graph client created from environment variables');
+    } else {
+      this.fallbackGraph = null;
+      logger.warn('MS Teams Scheduler: no Azure env vars found, will use DB-based credentials only');
     }
 
-    const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
-    const authProvider = new TokenCredentialAuthenticationProvider(credential, {
-      scopes: ['https://graph.microsoft.com/.default']
+    this.client = new MqttClient({
+      uniqueId: 'teams-scheduler',
+      pub: 'teams-scheduler',
+      subs: ['msteams-scheduler/in/#', 'integration-config/updated/+']
     });
-    this.graph = Client.initWithMiddleware({ authProvider });
-
-    this.client = new MqttClient({ uniqueId: 'teams-scheduler', pub: 'teams-scheduler', subs: ['msteams-scheduler/in/#'] });
     this.client.on('ready', () => this.client.publishStatus());
     this.client.on('message', (topic, message) => this.handleMqttMessage(topic, message));
 
@@ -51,7 +51,13 @@ class WebhookServer extends Component {
         const subs = await Model.CalendarSubscription.findAll({ where: { status: 'active' } });
         for (const sub of subs) {
           try {
-            const graphSub = await this.createGraphSubscription(sub.graphUserId);
+            const graphClient = await this.getGraphClientForSubscription(sub);
+            if (!graphClient) {
+              await Model.CalendarSubscription.update({ status: 'error' }, { where: { id: sub.id } });
+              logger.error(`No Graph client available for subscription ${sub.id} (org: ${sub.organizationId})`);
+              continue;
+            }
+            const graphSub = await this.createGraphSubscription(sub.graphUserId, graphClient);
             await Model.CalendarSubscription.update(
               { graphSubscriptionId: graphSub.id, graphSubscriptionExpiry: graphSub.expirationDateTime, status: 'active' },
               { where: { id: sub.id } }
@@ -82,9 +88,66 @@ class WebhookServer extends Component {
     return this.init();
   }
 
-  async createGraphSubscription(graphUserId) {
+  _createGraphClient(tenantId, clientId, clientSecret) {
+    const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+    const authProvider = new TokenCredentialAuthenticationProvider(credential, {
+      scopes: ['https://graph.microsoft.com/.default']
+    });
+    return Client.initWithMiddleware({ authProvider });
+  }
+
+  async getGraphClient(integrationConfigId) {
+    if (this.graphClients.has(integrationConfigId)) {
+      return this.graphClients.get(integrationConfigId);
+    }
+
+    try {
+      const config = await Model.IntegrationConfig.findByPk(integrationConfigId);
+      if (!config || !config.config) {
+        logger.warn(`No integration config found for ${integrationConfigId}, using fallback`);
+        return this.fallbackGraph;
+      }
+
+      const credentials = JSON.parse(getDecryptedCredentials(config));
+      const { tenantId, clientId, clientSecret } = credentials;
+      if (!tenantId || !clientId || !clientSecret) {
+        logger.warn(`Incomplete credentials for config ${integrationConfigId}, using fallback`);
+        return this.fallbackGraph;
+      }
+
+      const graphClient = this._createGraphClient(tenantId, clientId, clientSecret);
+      this.graphClients.set(integrationConfigId, graphClient);
+      return graphClient;
+    } catch (err) {
+      logger.error(`Failed to create Graph client for config ${integrationConfigId}: ${err.message}`);
+      return this.fallbackGraph;
+    }
+  }
+
+  async getGraphClientForSubscription(subscription) {
+    try {
+      const result = await resolveIntegrationConfig(subscription.organizationId, 'teams');
+      if (result && result.config) {
+        return this.getGraphClient(result.config.id);
+      }
+    } catch (err) {
+      logger.warn(`Failed to resolve integration config for org ${subscription.organizationId}: ${err.message}`);
+    }
+    return this.fallbackGraph;
+  }
+
+  invalidateGraphClient(integrationConfigId) {
+    if (this.graphClients.has(integrationConfigId)) {
+      this.graphClients.delete(integrationConfigId);
+      logger.debug(`Invalidated Graph client cache for config ${integrationConfigId}`);
+    }
+  }
+
+  async createGraphSubscription(graphUserId, graphClient) {
+    const client = graphClient || this.fallbackGraph;
+    if (!client) throw new Error('No Graph client available');
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
-    return this.graph.api('/subscriptions').post({
+    return client.api('/subscriptions').post({
       changeType: 'created,updated,deleted',
       notificationUrl: `${process.env.MSTEAMS_SCHEDULER_PUBLIC_BASE}/notifications`,
       resource: `/users/${graphUserId}/events`,
@@ -93,15 +156,27 @@ class WebhookServer extends Component {
     });
   }
 
-  async deleteGraphSubscription(graphSubscriptionId) {
+  async deleteGraphSubscription(graphSubscriptionId, graphClient) {
+    const client = graphClient || this.fallbackGraph;
+    if (!client) {
+      logger.warn(`No Graph client available to delete subscription ${graphSubscriptionId}`);
+      return;
+    }
     try {
-      await this.graph.api(`/subscriptions/${graphSubscriptionId}`).delete();
+      await client.api(`/subscriptions/${graphSubscriptionId}`).delete();
     } catch (err) {
       logger.warn(`Failed to delete Graph subscription ${graphSubscriptionId}: ${err.message}`);
     }
   }
 
   async handleMqttMessage(topic, message) {
+    // Handle integration config cache invalidation
+    if (topic.startsWith('integration-config/updated/')) {
+      const configId = topic.split('/')[2];
+      this.invalidateGraphClient(configId);
+      return;
+    }
+
     const data = JSON.parse(message.toString());
     if (topic === 'msteams-scheduler/in/subscription/create') {
       await this.handleCreateSubscription(data);
@@ -113,7 +188,11 @@ class WebhookServer extends Component {
   async handleCreateSubscription({ subscriptionId, graphUserId, studioToken, organizationId,
     transcriberProfileId, translations, diarization, keepAudio, enableDisplaySub }) {
     try {
-      const graphSub = await this.createGraphSubscription(graphUserId);
+      const sub = { organizationId };
+      const graphClient = await this.getGraphClientForSubscription(sub);
+      if (!graphClient) throw new Error('No Graph client available');
+
+      const graphSub = await this.createGraphSubscription(graphUserId, graphClient);
       await Model.CalendarSubscription.update(
         { graphSubscriptionId: graphSub.id, graphSubscriptionExpiry: graphSub.expirationDateTime, status: 'active' },
         { where: { id: subscriptionId } }
@@ -134,8 +213,15 @@ class WebhookServer extends Component {
 
   async fetchExistingEvents(subscriptionId, graphUserId) {
     try {
+      const sub = this.subscriptions.get(subscriptionId);
+      const graphClient = sub ? await this.getGraphClientForSubscription(sub) : this.fallbackGraph;
+      if (!graphClient) {
+        logger.error(`No Graph client available to fetch events for subscription ${subscriptionId}`);
+        return;
+      }
+
       const now = new Date().toISOString();
-      const events = await this.graph
+      const events = await graphClient
         .api(`/users/${graphUserId}/events`)
         .filter(`start/dateTime ge '${now}'`)
         .select('id,subject,start,end,onlineMeeting,isOnlineMeeting')
@@ -165,7 +251,9 @@ class WebhookServer extends Component {
 
   async handleDeleteSubscription({ subscriptionId, graphSubscriptionId }) {
     if (graphSubscriptionId) {
-      await this.deleteGraphSubscription(graphSubscriptionId);
+      const sub = this.subscriptions.get(subscriptionId);
+      const graphClient = sub ? await this.getGraphClientForSubscription(sub) : this.fallbackGraph;
+      await this.deleteGraphSubscription(graphSubscriptionId, graphClient);
     }
     this.subscriptions.delete(subscriptionId);
     logger.info(`Calendar subscription deleted: ${subscriptionId}`);
@@ -175,8 +263,13 @@ class WebhookServer extends Component {
     for (const [subId, sub] of this.subscriptions) {
       if (!sub.graphSubscriptionId) continue;
       try {
+        const graphClient = await this.getGraphClientForSubscription(sub);
+        if (!graphClient) {
+          logger.warn(`No Graph client available to renew subscription ${sub.graphSubscriptionId}`);
+          continue;
+        }
         const expires = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
-        await this.graph.api(`/subscriptions/${sub.graphSubscriptionId}`).patch({
+        await graphClient.api(`/subscriptions/${sub.graphSubscriptionId}`).patch({
           expirationDateTime: expires
         });
         await Model.CalendarSubscription.update(
@@ -187,7 +280,9 @@ class WebhookServer extends Component {
       } catch (err) {
         logger.error(`Failed to renew subscription ${sub.graphSubscriptionId}: ${err.message}`);
         try {
-          const graphSub = await this.createGraphSubscription(sub.graphUserId);
+          const graphClient = await this.getGraphClientForSubscription(sub);
+          if (!graphClient) continue;
+          const graphSub = await this.createGraphSubscription(sub.graphUserId, graphClient);
           sub.graphSubscriptionId = graphSub.id;
           await Model.CalendarSubscription.update(
             { graphSubscriptionId: graphSub.id, graphSubscriptionExpiry: graphSub.expirationDateTime },
@@ -219,12 +314,18 @@ class WebhookServer extends Component {
           continue;
         }
 
+        const graphClient = await this.getGraphClientForSubscription(subscription);
+        if (!graphClient) {
+          logger.error(`No Graph client available for notification from user ${graphUserId}`);
+          continue;
+        }
+
         if (n.changeType === 'deleted') {
           await Model.MsTeamsEvent.destroy({ where: { eventId: n.resourceData.id } });
           continue;
         }
 
-        const ev = await this.graph
+        const ev = await graphClient
           .api(`/users/${graphUserId}/events/${n.resourceData.id}`)
           .select('subject,start,end,onlineMeeting,isOnlineMeeting')
           .get();

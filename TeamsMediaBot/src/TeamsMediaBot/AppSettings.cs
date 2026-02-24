@@ -164,6 +164,12 @@ namespace TeamsMediaBot
         /// If set, replaces the host in websocketUrl from MQTT payloads.
         /// </summary>
         public string? TranscriberHost { get; set; }
+
+        /// <summary>
+        /// Gets or sets the media host identifier.
+        /// Published in MQTT status so the Scheduler can route bot commands to the correct host.
+        /// </summary>
+        public string? MediaHostId { get; set; }
     }
 }
 

@@ -55,7 +55,7 @@ class BrokerClient extends Component {
           status: 'on_schedule',
           autoStart: true,
           scheduleOn: {
-            [Model.Op.gt]: new Date()
+            [Model.Op.lte]: new Date()
           }
         },
         returning: true
@@ -354,6 +354,8 @@ class BrokerClient extends Component {
         { where: { id: channelId }, transaction }
       );
 
+      const escapedSessionId = Model.sequelize.escape(sessionId);
+
       // Subquery to detect hasActiveStream
       await Model.Session.update(
         {
@@ -362,7 +364,7 @@ class BrokerClient extends Component {
               WHEN "status" = 'terminated' THEN "status"
               WHEN (SELECT COUNT(*)
                     FROM "channels"
-                    WHERE "sessionId" = '${sessionId}'
+                    WHERE "sessionId" = ${escapedSessionId}
                       AND "streamStatus" = 'active') > 0
                 THEN 'active'::enum_sessions_status
               ELSE 'ready'::enum_sessions_status
@@ -372,7 +374,7 @@ class BrokerClient extends Component {
             CASE
               WHEN (SELECT COUNT(*)
                     FROM "channels"
-                    WHERE "sessionId" = '${sessionId}'
+                    WHERE "sessionId" = ${escapedSessionId}
                       AND "streamStatus" = 'active') > 0
                 AND "startTime" IS NULL
                 THEN NOW()

@@ -292,7 +292,9 @@ module.exports = (webserver) => {
                 for (const [index, channel] of channels.entries()) {
                     const validatedTranslations = validateTranslations(channel.translations);
 
-                    if (!channel.compressAudio && !channel.keepAudio) {
+                    const keepAudio = channel.keepAudio ?? true;
+                    const compressAudio = channel.compressAudio ?? true;
+                    if (!compressAudio && !keepAudio) {
                         throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
@@ -388,7 +390,7 @@ module.exports = (webserver) => {
                             updatedAttrs.translations = profile ? await enrichTranslations(validated, profile) : validated;
                         }
 
-                        if (!updatedChannel.compressAudio && !updatedChannel.keepAudio) {
+                        if (updatedChannel.compressAudio === false && updatedChannel.keepAudio === false) {
                             throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                         }
 
@@ -436,8 +438,10 @@ module.exports = (webserver) => {
 
                     const validatedTranslations = validateTranslations(channel.translations);
 
-                    if (!channel.compressAudio && !channel.keepAudio) {
-                        throw new ApiError(400, "Compress audio is enabled and keep audio is not enabled on channel");
+                    const keepAudio = channel.keepAudio ?? true;
+                    const compressAudio = channel.compressAudio ?? true;
+                    if (!compressAudio && !keepAudio) {
+                        throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
@@ -614,8 +618,8 @@ module.exports = (webserver) => {
 
             // Build removal conditions: abs_start >= startSecs AND abs_end <= endSecs
             const removalConditions = [];
-            if (startSecs !== null) removalConditions.push(`abs_start >= ${startSecs}`);
-            if (endSecs   !== null) removalConditions.push(`abs_end   <= ${endSecs}`);
+            if (startSecs !== null) removalConditions.push(`abs_start >= ${Model.sequelize.escape(startSecs)}`);
+            if (endSecs   !== null) removalConditions.push(`abs_end   <= ${Model.sequelize.escape(endSecs)}`);
             const whereRemove = removalConditions.length
               ? removalConditions.join(' AND ')
               : 'FALSE';
@@ -633,7 +637,7 @@ module.exports = (webserver) => {
                       WITH base AS (
                         SELECT ("closedCaptions"->0->>'astart')::timestamptz AS base
                         FROM channels
-                        WHERE "sessionId" = '${sessionId}'
+                        WHERE "sessionId" = ${Model.sequelize.escape(sessionId)}
                       ), elems AS (
                         SELECT elem,
                           -- compute absolute start in seconds from base + relative start

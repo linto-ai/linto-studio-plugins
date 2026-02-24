@@ -7,7 +7,9 @@ const ASR_ERROR = {
   SERVICE_TIMEOUT: 'Automatic transcription has been stopped due to a timeout error',
   SERVICE_ERROR: 'Automatic transcription has been stopped due to service error',
   RUNTIME_ERROR: 'Automatic transcription has been stopped due to an unexpected runtime error',
-  FORBIDDEN: 'Automatic transcription has been stopped due to a forbidden error'
+  FORBIDDEN: 'Automatic transcription has been stopped due to a forbidden error',
+  STARTUP_TIMEOUT: 'Automatic transcription has been stopped because the ASR service did not respond during startup',
+  STARTUP_ERROR: 'Automatic transcription has been stopped due to an error during ASR startup'
 }
 
 module.exports = ASR_ERROR

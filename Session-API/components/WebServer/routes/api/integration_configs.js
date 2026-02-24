@@ -1,16 +1,19 @@
 const { Model, logger, Security, canOrganizationOverride } = require("live-srt-lib");
 const { validateAzureCredentials } = require("./helpers/validateAzureCredentials");
 
-function maskConfig(config) {
+function decryptAndMaskConfig(config) {
     if (!config) return config;
     try {
-        const parsed = typeof config === 'string' ? JSON.parse(config) : config;
+        // Decrypt the AES-256-CBC encrypted config first
+        const security = new Security();
+        const decrypted = security.safeDecrypt(config);
+        const parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
         if (parsed.clientSecret) {
             parsed.clientSecret = '***';
         }
         return parsed;
     } catch {
-        return config;
+        return null;
     }
 }
 
@@ -38,14 +41,13 @@ module.exports = (webserver) => {
                         scope: where.scope || 'organization'
                     },
                     include: [
-                        { model: Model.MediaHost, as: 'mediaHosts' },
-                        { model: Model.MediaHost, as: 'sharedMediaHost' }
+                        { model: Model.MediaHost, as: 'mediaHosts' }
                     ]
                 });
 
                 const configs = results.rows.map(row => {
                     const json = row.toJSON();
-                    json.config = maskConfig(json.config);
+                    json.config = decryptAndMaskConfig(json.config);
                     return json;
                 });
 
@@ -87,8 +89,7 @@ module.exports = (webserver) => {
             try {
                 const config = await Model.IntegrationConfig.findByPk(id, {
                     include: [
-                        { model: Model.MediaHost, as: 'mediaHosts' },
-                        { model: Model.MediaHost, as: 'sharedMediaHost' }
+                        { model: Model.MediaHost, as: 'mediaHosts' }
                     ]
                 });
                 if (!config) {
@@ -100,7 +101,7 @@ module.exports = (webserver) => {
                 if (json.scope === 'platform') {
                     json.config = null;
                 } else {
-                    json.config = maskConfig(json.config);
+                    json.config = decryptAndMaskConfig(json.config);
                 }
                 res.json(json);
             } catch (err) {
@@ -113,7 +114,7 @@ module.exports = (webserver) => {
         method: 'post',
         controller: async (req, res, next) => {
             try {
-                const { organizationId, provider, config, setupProgress, scope, sharedMediaHostId } = req.body;
+                const { organizationId, provider, config, setupProgress, scope } = req.body;
                 const effectiveScope = scope || 'organization';
 
                 if (effectiveScope === 'organization') {
@@ -150,14 +151,10 @@ module.exports = (webserver) => {
                     setupProgress: setupProgress || {}
                 };
 
-                if (sharedMediaHostId) {
-                    createData.sharedMediaHostId = sharedMediaHostId;
-                }
-
                 const integrationConfig = await Model.IntegrationConfig.create(createData);
 
                 const json = integrationConfig.toJSON();
-                json.config = maskConfig(json.config);
+                json.config = decryptAndMaskConfig(json.config);
                 res.status(201).json(json);
             } catch (err) {
                 next(err);
@@ -175,7 +172,7 @@ module.exports = (webserver) => {
                     return res.status(404).json({ error: 'Integration config not found' });
                 }
 
-                const allowedFields = ['status', 'config', 'setupProgress', 'allowOrganizationOverride', 'sharedMediaHostId'];
+                const allowedFields = ['status', 'config', 'setupProgress', 'allowOrganizationOverride'];
                 const updates = {};
                 for (const field of allowedFields) {
                     if (req.body[field] !== undefined) {
@@ -195,7 +192,7 @@ module.exports = (webserver) => {
                 }
 
                 const json = integrationConfig.toJSON();
-                json.config = maskConfig(json.config);
+                json.config = decryptAndMaskConfig(json.config);
                 res.json(json);
             } catch (err) {
                 next(err);

@@ -10,5 +10,6 @@ module.exports = (webserver) => {
         ...require('./calendar_subscriptions.js')(webserver),
         ...require('./teams_app.js')(webserver),
         ...require('./integration_configs.js')(webserver),
+        ...require('./media_hosts.js')(webserver),
     ];
 }

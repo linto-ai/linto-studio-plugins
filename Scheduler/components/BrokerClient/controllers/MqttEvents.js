@@ -68,7 +68,7 @@ module.exports = async function () {
       case 'mediahost':
         if (action === 'status') {
           const healthPayload = JSON.parse(message.toString());
-          // uniqueId is the integrationConfigId from topic: mediahost/out/{integrationConfigId}/status
+          // uniqueId is the mediaHostId from topic: mediahost/out/{mediaHostId}/status
           await this.updateMediaHostHealth(uniqueId, healthPayload);
         }
         break;

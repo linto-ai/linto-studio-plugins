@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmName": {
+      "value": "linto-media-host-01"
+    },
+    "adminUsername": {
+      "value": "lintoadmin"
+    },
+    "adminPassword": {
+      "value": ""
+    },
+    "vmSize": {
+      "value": "Standard_D2s_v3"
+    },
+    "dnsLabelPrefix": {
+      "value": "linto-media-01"
+    },
+    "provisioningToken": {
+      "value": ""
+    },
+    "sessionApiCallbackUrl": {
+      "value": "https://session-api.example.com"
+    },
+    "galleryImageId": {
+      "value": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Compute/galleries/<gallery-name>/images/<image-name>/versions/<version>"
+    },
+    "location": {
+      "value": "westeurope"
+    }
+  }
+}

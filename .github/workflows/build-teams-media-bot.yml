@@ -1,0 +1,101 @@
+name: Build TeamsMediaBot
+
+on:
+  push:
+    paths:
+      - 'TeamsMediaBot/**'
+      - 'infra/media-host/scripts/configure-services.ps1'
+      - 'infra/media-host/scripts/phone-home.ps1'
+      - '.github/workflows/build-teams-media-bot.yml'
+    branches:
+      - teams
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 6.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore TeamsMediaBot/src/TeamsMediaBot.sln
+
+      - name: Publish self-contained binary
+        run: |
+          dotnet publish TeamsMediaBot/src/TeamsMediaBot/TeamsMediaBot.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -o ./publish
+
+      - name: Create distribution package
+        shell: pwsh
+        run: |
+          # Determine version from tag or commit SHA
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}"
+          } else {
+            $version = "dev-$("${{ github.sha }}".Substring(0, 8))"
+          }
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+          echo "Building package version: $version"
+
+          # Create staging directory structure
+          New-Item -ItemType Directory -Force -Path staging/TeamsMediaBot | Out-Null
+          New-Item -ItemType Directory -Force -Path staging/scripts | Out-Null
+
+          # Copy published binaries
+          Copy-Item -Recurse -Force ./publish/* staging/TeamsMediaBot/
+
+          # Copy runtime scripts
+          Copy-Item infra/media-host/scripts/configure-services.ps1 staging/scripts/
+          Copy-Item infra/media-host/scripts/phone-home.ps1 staging/scripts/
+
+          # Create ZIP
+          $zipName = "TeamsMediaBot-$version-win-x64.zip"
+          Compress-Archive -Path staging/* -DestinationPath $zipName -Force
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+          # Compute SHA256
+          $hash = (Get-FileHash -Path $zipName -Algorithm SHA256).Hash
+          echo "SHA256: $hash"
+          echo "PACKAGE_SHA256=$hash" >> $env:GITHUB_ENV
+
+          # Write SHA256 to file for artifact upload
+          "$hash" | Out-File -FilePath "$zipName.sha256" -NoNewline
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeamsMediaBot-${{ env.VERSION }}-win-x64
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+          body: |
+            ## TeamsMediaBot ${{ env.VERSION }}
+
+            **SHA256**: `${{ env.PACKAGE_SHA256 }}`
+
+            ### Configuration Session-API
+            ```
+            TEAMS_MEDIA_BOT_PACKAGE_SHA256=${{ env.PACKAGE_SHA256 }}
+            ```

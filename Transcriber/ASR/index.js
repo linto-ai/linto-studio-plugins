@@ -34,6 +34,7 @@ class ASR extends eventEmitter {
     this.logger = logger.getChannelLogger(this.session.id, this.channel.id);
     this.provider = null;
     this.state = ASR.states.CLOSED;
+    this.segmentId = 1;
     this.init();
   }
 
@@ -104,12 +105,15 @@ class ASR extends eventEmitter {
     this.provider.on('transcribing', (transcription) => {
       this.state = ASR.states.TRANSCRIBING;
       if (transcription.text.trim().length > 0) {
+        transcription.segmentId = this.segmentId;
         this.emit('partial', transcription);
       }
     });
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
+        transcription.segmentId = this.segmentId;
         this.emit('final', transcription);
+        this.segmentId++;
       }
     });
   }

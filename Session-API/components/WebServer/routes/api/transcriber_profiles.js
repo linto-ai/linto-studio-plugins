@@ -25,6 +25,17 @@ const validateTranscriberProfile = (body, update=false) => {
         // certificate and privateKey will be validated in the route handler after file upload
         return;
     }
+    if (config.type === 'openai_streaming') {
+        if (!config.endpoint || !config.model) {
+            return { error: 'OpenAI Streaming profiles require endpoint and model', status: 400 };
+        }
+        if (config.protocol && !['vllm', 'openai'].includes(config.protocol)) {
+            return { error: 'Invalid protocol. Must be "vllm" or "openai"', status: 400 };
+        }
+    }
+    if (config.type === 'voxstral' && !config.endpoint) {
+        return { error: 'Voxstral profiles require an endpoint', status: 400 };
+    }
     if (config.languages.some(lang => typeof lang !== 'object')) {
         return { error: 'Invalid TranscriberProfile languages', status: 400 };
     }
@@ -50,6 +61,9 @@ const cryptTranscriberProfileKey = (body) => {
     if (body.config.credentials) {
         body.config.credentials = new Security().encrypt(body.config.credentials);
     }
+    if (body.config.apiKey) {
+        body.config.apiKey = new Security().encrypt(body.config.apiKey);
+    }
 
     return body;
 }
@@ -61,17 +75,47 @@ const obfuscateTranscriberProfileKey = (transcriberProfile) => {
     if (transcriberProfile.config.credentials) {
         transcriberProfile.config.credentials = "Secret credentials are hidden";
     }
+    if (transcriberProfile.config.apiKey) {
+        transcriberProfile.config.apiKey = "Secret key is hidden";
+    }
     return transcriberProfile;
 }
+
+const injectExternalTranslations = (profile, onlineTranslators) => {
+    const config = profile.config;
+
+    // discrete: from stored profile config (legacy string array, object array, or already-expanded object)
+    const stored = config.availableTranslations || [];
+    let discreteLangs;
+    if (Array.isArray(stored)) {
+        discreteLangs = stored.map(entry => typeof entry === 'string' ? entry : entry.target);
+    } else {
+        // Already in {discrete, external} format (saved back from frontend)
+        discreteLangs = stored.discrete || [];
+    }
+    config.availableTranslations = {
+        discrete: discreteLangs,
+        external: onlineTranslators.map(t => ({ translator: t.name, languages: t.languages }))
+    };
+
+    return profile;
+};
 
 const extendTranscriberProfile = (body) => {
     const config = body.config;
     const translationEnv = process.env[`ASR_AVAILABLE_TRANSLATIONS_${config.type.toUpperCase()}`];
     if ('availableTranslations' in config) {
-        // keep the custom availableTranslations
+        if (!Array.isArray(config.availableTranslations) && config.availableTranslations.discrete) {
+            // Frontend sent back expanded {discrete, external} format — convert to internal array
+            body.config.availableTranslations = config.availableTranslations.discrete.map(lang => ({ target: lang.trim(), mode: 'discrete' }));
+        } else if (Array.isArray(config.availableTranslations) && config.availableTranslations.length > 0 && typeof config.availableTranslations[0] === 'string') {
+            // Legacy string array
+            body.config.availableTranslations = config.availableTranslations.map(lang => ({ target: lang.trim(), mode: 'discrete' }));
+        }
+        // else keep as-is (already object format or empty)
     }
     else if (translationEnv) {
-        body.config.availableTranslations = translationEnv.split(',');
+        body.config.availableTranslations = translationEnv.split(',').map(lang => ({ target: lang.trim(), mode: 'discrete' }));
     }
     else {
         body.config.availableTranslations = [];
@@ -112,7 +156,9 @@ module.exports = (webserver) => {
                 const obfuscatedConfigs = configs.map(cfg =>
                   obfuscateTranscriberProfileKey(cfg.toJSON())
                 );
-                res.json(obfuscatedConfigs);
+                const onlineTranslators = await Model.Translator.findAll({ where: { online: true } });
+                const result = obfuscatedConfigs.map(cfg => injectExternalTranslations(cfg, onlineTranslators));
+                res.json(result);
             } catch (err) {
                 next(err);
             }
@@ -126,7 +172,9 @@ module.exports = (webserver) => {
                 if (!config) {
                     return res.status(404).send('Transcriber config not found');
                 }
-                res.json(obfuscateTranscriberProfileKey(config));
+                const obfuscated = obfuscateTranscriberProfileKey(config.toJSON());
+                const onlineTranslators = await Model.Translator.findAll({ where: { online: true } });
+                res.json(injectExternalTranslations(obfuscated, onlineTranslators));
             } catch (err) {
                 next(err);
             }
@@ -238,6 +286,10 @@ module.exports = (webserver) => {
                 // Handle credentials encryption if new credentials are provided
                 if (req.body.config.credentials) {
                     mergedConfig.credentials = new Security().encrypt(req.body.config.credentials);
+                }
+                // Handle apiKey encryption if a new apiKey is provided
+                if (req.body.config.apiKey) {
+                    mergedConfig.apiKey = new Security().encrypt(req.body.config.apiKey);
                 }
 
                 // Prepare the body with merged config and all other fields from request

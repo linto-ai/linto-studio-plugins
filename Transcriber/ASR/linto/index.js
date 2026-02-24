@@ -2,6 +2,8 @@ const WebSocket = require('ws');
 const logger = require('../../logger')
 const EventEmitter = require('eventemitter3');
 
+const RECONNECT_DELAY_MS = 2000;
+
 class LintoTranscriber extends EventEmitter {
     static ERROR_MAP = {
         0: 'NO_ERROR',
@@ -24,6 +26,8 @@ class LintoTranscriber extends EventEmitter {
         this.channel = channel;
         this.logger = logger.getChannelLogger(session.id, channel.id);
         this.ws = null;
+        this._connGeneration = 0;
+        this._reconnectTimer = null;
         this.emit('closed');
     }
 
@@ -53,6 +57,8 @@ class LintoTranscriber extends EventEmitter {
 
         const endpoint = transcriberProfile.config.languages[0].endpoint;
         this.ws = new WebSocket(endpoint);
+        this._connGeneration++;
+        const gen = this._connGeneration;
 
         this.ws.on('open', () => {
             this.logger.debug("WebSocket connection established");
@@ -78,6 +84,7 @@ class LintoTranscriber extends EventEmitter {
         });
 
         this.ws.on('error', (error) => {
+            if (gen !== this._connGeneration) return;
             this.logger.warn(`WebSocket error: ${error}`);
             this.emit('error', LintoTranscriber.ERROR_MAP[4]);
             this.stop();
@@ -86,25 +93,33 @@ class LintoTranscriber extends EventEmitter {
             if (error.code && LintoTranscriber.CRITICAL_FAILURES.has(error.code)) {
                 return;
             }
-            this.start();
+            this.logger.info(`Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
+            this._reconnectTimer = setTimeout(() => this.start(), RECONNECT_DELAY_MS);
         });
 
         this.ws.on('close', (code, reason) => {
-            const error = LintoTranscriber.ERROR_MAP[code] || 'UNKNOWN_ERROR';
+            if (gen !== this._connGeneration) return;
             this.logger.debug(`WebSocket closed: ${code} ${reason}`);
-            this.emit('closed', { code, reason, error });
+            this.emit('closed', { code, reason, error: LintoTranscriber.ERROR_MAP[code] || 'UNKNOWN_ERROR' });
         });
     }
 
     transcribe(buffer) {
-        if (this.ws) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(buffer);
-        } else {
-            this.logger.warn("Linto ASR transcriber can't decode buffer");
+        } else if (!this._transcribeWarnThrottled) {
+            this._transcribeWarnThrottled = true;
+            this.logger.warn("LinTO ASR: WebSocket not ready, dropping audio");
+            setTimeout(() => { this._transcribeWarnThrottled = false; }, 5000);
         }
     }
 
     stop() {
+        this._connGeneration++;
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
         if (this.ws) {
             this.ws.close();
             this.ws = null;

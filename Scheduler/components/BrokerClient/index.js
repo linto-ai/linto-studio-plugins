@@ -17,7 +17,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/session`, `scheduler/in/#`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `scheduler/in/#`, `translator/out/+/status`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
@@ -29,6 +29,7 @@ class BrokerClient extends Component {
       this.state = READY
       this.client.publishStatus(); // scheduler status (online)
       await this.resetSessions(); // reset all active sessions / channels (streamStatus) to ready/inactive state
+      await Model.Translator.update({ online: false }, { where: {} }); // mark all translators offline on startup
     });
     this.client.on("error", (err) => {
       this.state = ERROR;
@@ -54,7 +55,7 @@ class BrokerClient extends Component {
           status: 'on_schedule',
           autoStart: true,
           scheduleOn: {
-            [Model.Op.gt]: new Date()
+            [Model.Op.lte]: new Date()
           }
         },
         returning: true
@@ -241,6 +242,32 @@ class BrokerClient extends Component {
     }
   }
 
+  // ###### TRANSLATIONS ######
+
+  async saveTranslation(translation, sessionId, channelId) {
+    try {
+      const newTranslation = JSON.stringify([translation]);
+      await Model.Channel.update(
+        {
+          translatedCaptions: Model.sequelize.literal(
+            `COALESCE("translatedCaptions"::jsonb, '[]'::jsonb) || ${Model.sequelize.escape(newTranslation)}::jsonb`
+          )
+        },
+        {
+          where: {
+            sessionId: sessionId,
+            id: channelId
+          }
+        }
+      );
+    } catch (err) {
+      logger.error(
+        `${new Date().toISOString()} [TRANSLATION_SAVE_ERROR]: ${err.message}`,
+        JSON.stringify(translation)
+      );
+    }
+  }
+
   // ###### SYSTEM STATUS ######
 
   // A transcriber has connected.
@@ -293,6 +320,25 @@ class BrokerClient extends Component {
     }
   }
 
+  // ###### TRANSLATOR STATUS ######
+
+  async registerTranslator(translator) {
+    await Model.Translator.upsert({
+      name: translator.name,
+      languages: translator.languages,
+      online: true
+    });
+    logger.debug(`Translator ${translator.name} registered (${translator.languages.length} languages)`);
+  }
+
+  async unregisterTranslator(translator) {
+    await Model.Translator.update(
+      { online: false, languages: [] },
+      { where: { name: translator.name } }
+    );
+    logger.debug(`Translator ${translator.name} offline`);
+  }
+
   async updateSession(transcriberId, sessionId, channelId, newStreamStatus) {
     logger.debug(`Updating session activity: ${sessionId} --> channel id: ${channelId} streamStatus ${newStreamStatus}`);
     const transaction = await Model.sequelize.transaction();
@@ -308,6 +354,8 @@ class BrokerClient extends Component {
         { where: { id: channelId }, transaction }
       );
 
+      const escapedSessionId = Model.sequelize.escape(sessionId);
+
       // Subquery to detect hasActiveStream
       await Model.Session.update(
         {
@@ -316,7 +364,7 @@ class BrokerClient extends Component {
               WHEN "status" = 'terminated' THEN "status"
               WHEN (SELECT COUNT(*)
                     FROM "channels"
-                    WHERE "sessionId" = '${sessionId}'
+                    WHERE "sessionId" = ${escapedSessionId}
                       AND "streamStatus" = 'active') > 0
                 THEN 'active'::enum_sessions_status
               ELSE 'ready'::enum_sessions_status
@@ -326,7 +374,7 @@ class BrokerClient extends Component {
             CASE
               WHEN (SELECT COUNT(*)
                     FROM "channels"
-                    WHERE "sessionId" = '${sessionId}'
+                    WHERE "sessionId" = ${escapedSessionId}
                       AND "streamStatus" = 'active') > 0
                 AND "startTime" IS NULL
                 THEN NOW()

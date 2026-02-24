@@ -157,6 +157,7 @@ The project structure includes the following modules:
 - `Session-API`: an API to manage transcription sessions, also serves a front-end using Swagger client (Open API spec)
 - `Transcriber`: a transcription service (streaming endpoint & relay to ASR services)
 - `Scheduler`: a scheduling service that bridges the transcribers & subtitle-delivery with session manager, database, and message broker
+- `Translator`: (stub/PoC) an external translation microservice that subscribes to transcription finals via MQTT, translates text using pluggable providers (echo, TranslateGemma), and publishes results back to the broker. Not yet production-ready.
 - The `lib` folder contains generic tooling for the project as a whole and is treated as another Node.js package. It is required from the modules using the package.json local file API. This allows the modules to access the tools provided by the `lib` package and use them in their implementation.
 
 See `doc` folder (developer informations) or specific READMEs within modules folders for more infos.
@@ -321,8 +322,8 @@ After creating the `.envtest` file (as documented at the beginning of integratio
 
 ## Custom ASR
 
-There are currently three ASRs available: Microsoft, LinTO, and Amazon.
-They are located in Transcriber/ASR/linto, Transcriber/ASR/microsoft, and Transcriber/ASR/amazon.
+There are currently five ASR providers available: Microsoft, LinTO, Amazon, OpenAI Streaming and Voxstral.
+They are located in `Transcriber/ASR/microsoft`, `Transcriber/ASR/linto`, `Transcriber/ASR/amazon`, `Transcriber/ASR/openai_streaming` and `Transcriber/ASR/voxstral`.
 You can use them as inspiration to create your own ASR.
 
 Here are the rules to follow:
@@ -358,21 +359,188 @@ class MyASRTranscriber extends EventEmitter {
 - `this.emit('connecting')` -> Called in the `start` function when the ASR connection is not ready yet
 - `this.emit('ready')` -> Called in the `start` function when the ASR connexion is ready to work
 - `this.emit('closed')` -> Called in the `stop` function when the ASR connexion is really closed.
-- `this.emit('transcribing', text: string)` -> Called in the `transcribe` function for partial transcription. `text` is the partial transcription.
-- `this.emit('transcribed', data: object)` -> Called in the `transcriber` function for final transcription. The `data` argument is an object with the following attributes:
+- `this.emit('transcribing', data: object)` -> Partial (interim) transcription result. Same payload structure as `transcribed`.
+- `this.emit('transcribed', data: object)` -> Final (confirmed) transcription result. See MQTT Packet Reference below.
+- `this.emit('error', text: string)` -> Called when there is an error. `text` is the error message.
 
-```
-const data = {
-    "astart": ISO format datetime of the ASR session start,
-    "text": The final transcription,
-    "start": The number of seconds since the start of the transcription,
-    "end": Start plus the duration of this transcription in seconds,
-    "lang": The language,
-    "locutor": The locutor (may be null),
+### MQTT Topics
+
+| Topic | Publisher | Subscriber | Description |
+|-------|-----------|------------|-------------|
+| `transcriber/out/{sessionId}/{channelId}/partial` | Transcriber | Frontend, Translator | Interim transcription results (not stored in DB) |
+| `transcriber/out/{sessionId}/{channelId}/final` | Transcriber | Scheduler, Translator | Confirmed transcription results (stored in `closedCaptions`) |
+| `transcriber/out/{sessionId}/{channelId}/{partial\|final}/translations` | Transcriber (discrete), Translator (external) | Scheduler, Frontend | Translation results. Both discrete and external converge here. Stored in `translatedCaptions`. |
+| `transcriber/out/{uniqueId}/status` | Transcriber | Scheduler | Transcriber online/offline status |
+| `transcriber/out/{uniqueId}/session` | Transcriber | Scheduler | Stream status updates per session/channel |
+| `translator/out/{translatorName}/status` | Translator | Scheduler | Translator presence (retained + LWT for automatic deregistration) |
+
+### MQTT Packet Reference
+
+Both `partial` and `final` messages use the same JSON structure:
+
+```json
+{
+    "segmentId": 1,
+    "astart": "2025-01-15T10:30:45.123Z",
+    "text": "transcribed text content",
+    "translations": {
+        "fr": "contenu textuel transcrit",
+        "es": "contenido textual transcrito"
+    },
+    "start": 12.5,
+    "end": 18.7,
+    "lang": "en-US",
+    "locutor": "speaker-id",
+    "externalTranslations": [
+        { "targetLang": "en", "translator": "gemma" }
+    ]
 }
 ```
 
-- `this.emit('error', text: string)` -> Called when there is an error. `text` is the error message.
+| Field | Type | Description |
+|-------|------|-------------|
+| `segmentId` | number | Incremental counter per channel. Partials share the same ID; finals close it. |
+| `astart` | string | ISO 8601 timestamp of when the transcription session started |
+| `text` | string | Transcribed text in the source language |
+| `translations` | object | Discrete translations (Microsoft only). Map of language code to translated text. Empty `{}` otherwise. |
+| `start` | number | Segment start time in seconds relative to the audio stream |
+| `end` | number | Segment end time in seconds relative to the audio stream |
+| `lang` | string | Source language code (BCP 47 format, e.g. `en-US`, `fr-FR`) |
+| `locutor` | string \| null | Speaker identifier from diarization, or `null` if unavailable |
+| `externalTranslations` | array \| undefined | Routing info for external translators. Each entry: `{ targetLang, translator }`. Absent when no external translation is configured. |
+
+**Note on discrete translations (Microsoft):** The `translations` field is kept in the packet for backward compatibility with clients that read it directly. Additionally, the Transcriber re-publishes each discrete translation as an individual message on `.../final/translations` (see `publishDiscreteTranslations` in `ASREvents.js`), so that all translations (discrete + external) converge on the same topic for the Scheduler.
+
+A special minimal packet is emitted when the audio stream stops:
+
+```json
+{
+    "astart": "2025-01-15T10:30:45.123Z",
+    "aend": "2025-01-15T10:45:12.456Z",
+    "locutor": "TRANSCRIBER_BOT_NAME"
+}
+```
+
+### Provider Feature Matrix
+
+| Feature | Microsoft | LinTO | Amazon | OpenAI Streaming | Voxstral |
+|---------|-----------|-------|--------|-------------------|----------|
+| `translations` | Populated from Azure Translation | `{}` | `{}` | `{}` | `{}` |
+| `locutor` | Speaker ID (with diarization) | `null` | `spk_N` (with diarization) | `null` | `null` |
+| `lang` | Detected or configured (BCP 47) | From `ASR_LANGUAGE` env | Configured (BCP 47) | Detected via franc | Detected via franc |
+| Multi-language | Yes (auto-detect) | No | No | Yes (franc detection) | Yes (franc detection) |
+| Diarization | Yes | No | Yes | No | No |
+| External translation | Yes | Yes | Yes | Yes | Yes |
+
+## External Translation System
+
+External translation decouples translation from the ASR pipeline. Independent translator microservices subscribe to transcription finals via MQTT, translate text using pluggable backends (TranslateGemma, DeepL, etc.), and publish results back to the broker.
+
+Any ASR provider gains translation capability through this system. Providers with native translation (Microsoft Azure) retain their discrete path; both modes can coexist on the same channel.
+
+### Language Codes
+
+All translation target codes use **short format** (`en`, `fr`, `de`, `zh-Hans`). Source language codes (`lang` field) remain in BCP-47 format (`fr-FR`, `en-US`) as produced by the ASR recognizer.
+
+### Translator Registration (MQTT)
+
+Translators register via retained messages on `translator/out/{name}/status` with MQTT Last Will and Testament (LWT) for automatic deregistration on disconnect.
+
+**Online (retained, published on connect):**
+```json
+{ "name": "gemma", "languages": ["en", "fr", "de", "es", ...], "online": true }
+```
+
+**Offline (LWT, published by broker on disconnect):**
+```json
+{ "name": "gemma", "languages": [], "online": false }
+```
+
+The Scheduler subscribes to `translator/out/+/status` and maintains the `translators` DB table accordingly.
+
+### Translator Contract
+
+**Subscribes to:** `transcriber/out/+/+/final` and `transcriber/out/+/+/partial`
+
+The Translator reads the `externalTranslations` array from incoming packets, filters entries where `translator` matches its own `TRANSLATOR_NAME`, translates the `text` field, and publishes one result per target language.
+
+**Publishes to:** `transcriber/out/{sessionId}/{channelId}/{partial|final}/translations`
+
+Translation result packet (one message per target language):
+
+```json
+{
+  "segmentId": 1,
+  "astart": "2026-02-06T21:01:00.570Z",
+  "text": "Hello, welcome...",
+  "start": 0,
+  "end": 7.539,
+  "sourceLang": "fr-FR",
+  "targetLang": "en",
+  "locutor": null
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `segmentId` | number | Matches the source transcription segment |
+| `text` | string | Translated text |
+| `sourceLang` | string | Source language (BCP-47, copied from transcription `lang`) |
+| `targetLang` | string | Target language (short code) |
+| `start` / `end` | number | Segment times in seconds (copied from source) |
+| `locutor` | string \| null | Speaker identifier (copied from source) |
+| `astart` | string | Session start timestamp (copied from source) |
+
+This is the same packet format used by discrete translations (Microsoft). Both converge on the same `.../translations` topic.
+
+### Database Schema
+
+**`translators` table** (maintained by Scheduler via MQTT status messages):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `name` | STRING, PK | Translator identifier |
+| `languages` | JSONB | Supported target language codes (short format) |
+| `online` | BOOLEAN | Current online status |
+
+**`channels` table** (translation-related columns):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `translations` | JSONB | Per-channel config: `[{ target, mode, translator? }]` |
+| `translatedCaptions` | JSONB | Stored results, appended via `COALESCE` pattern |
+
+`translations` entries use `mode: "discrete"` (ASR-native, e.g. Microsoft) or `mode: "external"` (requires `translator` field).
+
+### Translation Availability in Profiles
+
+The Session-API dynamically injects online translators into profile responses at read time:
+
+```json
+{
+  "availableTranslations": {
+    "discrete": ["ar", "en", "fr", "de"],
+    "external": [{ "translator": "gemma", "languages": ["en", "fr", "de", "es"] }]
+  }
+}
+```
+
+`discrete` comes from the profile's stored config; `external` comes from the `translators` table (online only). Both may overlap for the same language -- the frontend lets the user choose.
+
+### Translator Module (stub/PoC)
+
+Located in `Translator/`. This is a proof-of-concept stub for development and testing. A production-ready translator service (containerized, with proper error handling and scaling) is yet to be developed. No Dockerfile is provided yet.
+
+Environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TRANSLATOR_NAME` | Yes | Name registered in `translators` table |
+| `TRANSLATION_PROVIDER` | No | Provider backend: `echo` (default) or `translategemma` |
+| `TRANSLATEGEMMA_ENDPOINT` | For translategemma | vLLM OpenAI-compatible endpoint |
+| `TRANSLATEGEMMA_MODEL` | No | Model name (default: `Infomaniak-AI/vllm-translategemma-4b-it`) |
+| `PARTIAL_DEBOUNCE_MS` | No | Debounce for partial translations in ms (default: 500) |
+| `BROKER_HOST` / `BROKER_PORT` | No | MQTT broker (default: `localhost:1883`) |
 
 ## Some useful documentation below
 

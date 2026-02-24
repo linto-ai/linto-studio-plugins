@@ -15,6 +15,7 @@ node_modules/
 # Ignore editor files
 .vscode/
 .idea/
+.claude/
 
 profiles.json
 

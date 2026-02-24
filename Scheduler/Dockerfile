@@ -1,8 +1,12 @@
-ARG default_image=node:22-bookworm
+ARG default_image=node:22-alpine
 FROM $default_image
 
-RUN apt-get update && apt-get install -y --no-install-recommends gosu mosquitto-clients \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache && apk add --no-cache \
+  bash \
+  su-exec \
+  shadow \
+  mosquitto-clients \
+  && ln -s /sbin/su-exec /usr/local/bin/gosu
 
 COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/

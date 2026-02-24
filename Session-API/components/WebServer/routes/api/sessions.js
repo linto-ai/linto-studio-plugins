@@ -7,6 +7,61 @@ class ApiError extends Error {
     }
 }
 
+function validateTranslations(translations) {
+    if (!translations) return null;
+    if (!Array.isArray(translations)) throw new ApiError(400, "translations must be an array");
+
+    return translations.map(entry => {
+        // Legacy format: plain BCP47 string -> convert to new format
+        if (typeof entry === 'string') {
+            if (!bcp47.check(entry)) throw new ApiError(400, `Invalid BCP47 tag: ${entry}`);
+            return { target: entry, mode: 'discrete' };
+        }
+
+        // New format: object with target, mode, translator
+        if (typeof entry !== 'object' || !entry.target || !entry.mode) {
+            throw new ApiError(400, "Each translation entry must have 'target' and 'mode'");
+        }
+        if (!bcp47.check(entry.target)) throw new ApiError(400, `Invalid BCP47 tag: ${entry.target}`);
+        if (!['discrete', 'external'].includes(entry.mode)) {
+            throw new ApiError(400, "Translation mode must be 'discrete' or 'external'");
+        }
+        if (entry.mode === 'external' && (!entry.translator || typeof entry.translator !== 'string')) {
+            throw new ApiError(400, "External translation must specify 'translator'");
+        }
+        return entry;
+    });
+}
+
+// Enrich translations with correct mode/translator based on profile capabilities and online translators
+async function enrichTranslations(validatedTranslations, transcriberProfile) {
+    if (!validatedTranslations || validatedTranslations.length === 0) return validatedTranslations;
+
+    const profileTranslations = transcriberProfile.config.availableTranslations || [];
+    const discreteLangs = new Set(
+        profileTranslations
+            .filter(t => !t.mode || t.mode === 'discrete')
+            .map(t => typeof t === 'string' ? t : t.target)
+    );
+
+    const onlineTranslators = await Model.Translator.findAll({ where: { online: true } });
+
+    return validatedTranslations.map(entry => {
+        // If already tagged as external, keep it
+        if (entry.mode === 'external') return entry;
+        // If the profile supports discrete for this language, keep as discrete
+        if (discreteLangs.has(entry.target)) return entry;
+        // Otherwise, find an external translator that supports it
+        for (const translator of onlineTranslators) {
+            if (translator.languages && translator.languages.includes(entry.target)) {
+                return { target: entry.target, mode: 'external', translator: translator.name };
+            }
+        }
+        // Fallback: keep as discrete (won't produce translations but won't error)
+        return entry;
+    });
+}
+
 function getEndpoints(sessionId, channelId) {
     const {
         STREAMING_PASSPHRASE,
@@ -91,6 +146,7 @@ async function getSessionResult(sessionId, withCaptions=false) {
     const exclude = ['sessionId'];
     if (!withCaptions) {
         exclude.push('closedCaptions');
+        exclude.push('translatedCaptions');
     }
 
     const session = await Model.Session.findByPk(sessionId, {
@@ -184,7 +240,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['sessionId', 'closedCaptions']
+                            exclude: ['sessionId', 'closedCaptions', 'translatedCaptions']
                         },
                         order: [['id', 'ASC']]
                     },
@@ -234,13 +290,11 @@ module.exports = (webserver) => {
                 }, { transaction });
                 // Create channels
                 for (const [index, channel] of channels.entries()) {
-                    if (channel.translations) {
-                        if (!Array.isArray(channel.translations) || !channel.translations.every(bcp47.check)) {
-                            throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
-                        }
-                    }
+                    const validatedTranslations = validateTranslations(channel.translations);
 
-                    if (!channel.compressAudio && !channel.keepAudio) {
+                    const keepAudio = channel.keepAudio ?? true;
+                    const compressAudio = channel.compressAudio ?? true;
+                    if (!compressAudio && !keepAudio) {
                         throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
@@ -249,14 +303,14 @@ module.exports = (webserver) => {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
                     }
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
-                    const translations = channel.translations
+                    const translations = await enrichTranslations(validatedTranslations, transcriberProfile);
                     await Model.Channel.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
                         compressAudio: channel.compressAudio ?? true,
                         enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
-                        translations: translations, //array of BCP47 language tags
+                        translations: translations,
                         streamStatus: 'inactive',
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
@@ -330,12 +384,13 @@ module.exports = (webserver) => {
                         const updatedAttrs = updatedChannel;
 
                         if (updatedChannel.translations) {
-                            if (!Array.isArray(updatedChannel.translations) || !updatedChannel.translations.every(bcp47.check)) {
-                                throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
-                            }
+                            const validated = validateTranslations(updatedChannel.translations);
+                            const profileId = updatedChannel.transcriberProfileId || currentChannel.transcriberProfileId;
+                            const profile = await Model.TranscriberProfile.findByPk(profileId, { transaction });
+                            updatedAttrs.translations = profile ? await enrichTranslations(validated, profile) : validated;
                         }
 
-                        if (!updatedChannel.compressAudio && !updatedChannel.keepAudio) {
+                        if (updatedChannel.compressAudio === false && updatedChannel.keepAudio === false) {
                             throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                         }
 
@@ -381,14 +436,12 @@ module.exports = (webserver) => {
                         continue;
                     }
 
-                    if (channel.translations) {
-                        if (!Array.isArray(channel.translations) || !channel.translations.every(bcp47.check)) {
-                            throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
-                        }
-                    }
+                    const validatedTranslations = validateTranslations(channel.translations);
 
-                    if (!channel.compressAudio && !channel.keepAudio) {
-                        throw new ApiError(400, "Compress audio is enabled and keep audio is not enabled on channel");
+                    const keepAudio = channel.keepAudio ?? true;
+                    const compressAudio = channel.compressAudio ?? true;
+                    if (!compressAudio && !keepAudio) {
+                        throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
@@ -396,7 +449,7 @@ module.exports = (webserver) => {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
                     }
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
-                    const translations = channel.translations
+                    const translations = await enrichTranslations(validatedTranslations, transcriberProfile);
 
                     await Model.Channel.create({
                         keepAudio: channel.keepAudio ?? true,
@@ -404,7 +457,7 @@ module.exports = (webserver) => {
                         compressAudio: channel.compressAudio ?? true,
                         enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
                         languages: languages, //array of BCP47 language tags from transcriber profile
-                        translations: translations, //array of BCP47 language tags
+                        translations: translations,
                         streamStatus: 'inactive',
                         sessionId: session.id,
                         transcriberProfileId: transcriberProfile.id,
@@ -565,8 +618,8 @@ module.exports = (webserver) => {
 
             // Build removal conditions: abs_start >= startSecs AND abs_end <= endSecs
             const removalConditions = [];
-            if (startSecs !== null) removalConditions.push(`abs_start >= ${startSecs}`);
-            if (endSecs   !== null) removalConditions.push(`abs_end   <= ${endSecs}`);
+            if (startSecs !== null) removalConditions.push(`abs_start >= ${Model.sequelize.escape(startSecs)}`);
+            if (endSecs   !== null) removalConditions.push(`abs_end   <= ${Model.sequelize.escape(endSecs)}`);
             const whereRemove = removalConditions.length
               ? removalConditions.join(' AND ')
               : 'FALSE';
@@ -584,7 +637,7 @@ module.exports = (webserver) => {
                       WITH base AS (
                         SELECT ("closedCaptions"->0->>'astart')::timestamptz AS base
                         FROM channels
-                        WHERE "sessionId" = '${sessionId}'
+                        WHERE "sessionId" = ${Model.sequelize.escape(sessionId)}
                       ), elems AS (
                         SELECT elem,
                           -- compute absolute start in seconds from base + relative start

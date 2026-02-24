@@ -42,8 +42,14 @@ class RecognizerListener {
     }
 
     async handleCanceled(s, e) {
-        // The ASR is cancelled until the end of the stream
-        // and can be restarted with a new stream
+        // Guard: ignore subsequent canceled events while already stopping
+        if (this.transcriber._stopping) return;
+        this.transcriber._stopping = true;
+
+        if (this._startupTimeout) {
+            clearTimeout(this._startupTimeout);
+            this._startupTimeout = null;
+        }
         this.transcriber.logger.info(`${this.formatErrorMsg(e)}`);
         const error = MicrosoftTranscriber.ERROR_MAP[e.errorCode];
         this.transcriber.emit('error', error);
@@ -56,12 +62,21 @@ class RecognizerListener {
     };
 
     handleStartContinuousRecognitionAsync() {
+        if (this._startupTimeout) {
+            clearTimeout(this._startupTimeout);
+            this._startupTimeout = null;
+        }
         this.transcriber.logger.info(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
     };
 
     handleStartContinuousRecognitionAsyncError(error) {
+        if (this._startupTimeout) {
+            clearTimeout(this._startupTimeout);
+            this._startupTimeout = null;
+        }
         this.transcriber.logger.error(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
+        this.transcriber.emit('error', 'STARTUP_ERROR');
     };
 
     listen(recognizer) {
@@ -93,6 +108,13 @@ class RecognizerListener {
             this.handleStartContinuousRecognitionAsync.bind(this),
             this.handleStartContinuousRecognitionAsyncError.bind(this)
         );
+
+        // Startup timeout: if Azure doesn't respond within 15s, emit error
+        this._startupTimeout = setTimeout(() => {
+            this._startupTimeout = null;
+            this.transcriber.logger.error(`${this.name}: Microsoft ASR startup timeout (15s)`);
+            this.transcriber.emit('error', 'STARTUP_TIMEOUT');
+        }, 15000);
     }
 }
 
@@ -143,6 +165,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.pushStreams = [];
         this.pushStream = AudioInputStream.createPushStream();
         this.pushStream2 = null;
+        this._stopping = false;
         this.emit('closed');
     }
 
@@ -152,13 +175,25 @@ class MicrosoftTranscriber extends EventEmitter {
             return;
         }
 
-        return translations.map(lang => lang.split('-')[0]);
+        // Filter for discrete translations only (external translations are handled by TranslationBus)
+        const discreteTranslations = translations.filter(entry =>
+            typeof entry === 'object' ? entry.mode === 'discrete' : true
+        );
+
+        if (!discreteTranslations.length) {
+            return;
+        }
+
+        return discreteTranslations.map(entry =>
+            typeof entry === 'object' ? entry.target.split('-')[0] : entry.split('-')[0]
+        );
     }
 
     getMqttPayload(result) {
         let translations = {};
-        if (result.translations) {
-            translations = Object.fromEntries(this.getTargetLanguages().map((key, i) => [key, result.translations.get(key)]));
+        const targetLanguages = this.getTargetLanguages();
+        if (result.translations && targetLanguages) {
+            translations = Object.fromEntries(targetLanguages.map((key, i) => [key, result.translations.get(key)]));
         }
         const lang = result.language ? result.language : this.channel.transcriberProfile.config.languages[0].candidate;
         return {
@@ -191,9 +226,10 @@ class MicrosoftTranscriber extends EventEmitter {
         this.logger.info(msg);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
+        this._stopping = false;
         this.startedAt = new Date().toISOString();
 
-        // If translation and diarization are enabled, we use the same listener
+        // If translation and diarization are enabled, we use two recognizers
         if (translations && translations.length && diarization) {
             this.pushStreams.push(AudioInputStream.createPushStream());
 
@@ -279,6 +315,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
         // mono without translations
         const speechConfig = SpeechConfig.fromSubscription(decryptedKey, config.region);
+        speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
         // Uses custom endpoint if provided, if not, uses default endpoint for region
         speechConfig.endpointId = config.languages[0]?.endpoint;
         usedEndpoint = config.languages[0]?.endpoint;
@@ -339,8 +376,10 @@ class MicrosoftTranscriber extends EventEmitter {
             for (const pushStream of this.pushStreams) {
                 pushStream.write(buffer);
             }
-        } else {
-            this.logger.warn("Microsoft ASR transcriber can't decode buffer");
+        } else if (!this._transcribeWarnThrottled) {
+            this._transcribeWarnThrottled = true;
+            this.logger.warn("Microsoft ASR: no active recognizer, dropping audio");
+            setTimeout(() => { this._transcribeWarnThrottled = false; }, 5000);
         }
     }
 

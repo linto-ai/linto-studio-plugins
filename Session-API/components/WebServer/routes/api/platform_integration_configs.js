@@ -1,16 +1,18 @@
 const { Model, Security, logger } = require("live-srt-lib");
 const { validateAzureCredentials } = require("./helpers/validateAzureCredentials");
 
-function maskConfig(config) {
+function decryptAndMaskConfig(config) {
     if (!config) return config;
     try {
-        const parsed = typeof config === 'string' ? JSON.parse(config) : config;
+        const security = new Security();
+        const decrypted = security.safeDecrypt(config);
+        const parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
         if (parsed.clientSecret) {
             parsed.clientSecret = '***';
         }
         return parsed;
     } catch {
-        return config;
+        return null;
     }
 }
 
@@ -30,7 +32,7 @@ module.exports = (webserver) => {
 
                 const results = configs.map(c => {
                     const json = c.toJSON();
-                    json.config = maskConfig(json.config);
+                    json.config = decryptAndMaskConfig(json.config);
                     return json;
                 });
 
@@ -64,7 +66,7 @@ module.exports = (webserver) => {
                 });
 
                 const json = integrationConfig.toJSON();
-                json.config = maskConfig(json.config);
+                json.config = decryptAndMaskConfig(json.config);
                 res.status(201).json(json);
             } catch (err) {
                 next(err);
@@ -89,7 +91,7 @@ module.exports = (webserver) => {
                 }
 
                 const json = config.toJSON();
-                json.config = maskConfig(json.config); // Masked but visible to super-admin
+                json.config = decryptAndMaskConfig(json.config); // Masked but visible to super-admin
                 res.json(json);
             } catch (err) {
                 next(err);
@@ -130,7 +132,7 @@ module.exports = (webserver) => {
                 }
 
                 const json = config.toJSON();
-                json.config = maskConfig(json.config);
+                json.config = decryptAndMaskConfig(json.config);
                 res.json(json);
             } catch (err) {
                 next(err);

@@ -38,5 +38,12 @@ namespace TeamsMediaBot.Models.Mqtt
         /// </summary>
         [JsonPropertyName("on")]
         public string On { get; set; } = null!;
+
+        /// <summary>
+        /// Optional identifier for the media host instance.
+        /// Used by the Scheduler to route bot commands to the correct host.
+        /// </summary>
+        [JsonPropertyName("mediaHostId")]
+        public string? MediaHostId { get; set; }
     }
 }

@@ -1,4 +1,4 @@
-const { MqttClient, Component, Model, logger, Utils } = require('live-srt-lib')
+const { MqttClient, Component, Model, logger, Utils, resolveIntegrationConfig } = require('live-srt-lib')
 
 class BrokerClient extends Component {
 
@@ -125,12 +125,20 @@ class BrokerClient extends Component {
         return;
       }
 
-      // Select the BotService with the least active bots that supports this provider
-      const selectedBotService = this.selectBotService(bot.provider);
+      // Resolve organizationId from the bot's channel → session
+      let organizationId = null;
+      const channel = await Model.Channel.findByPk(bot.channelId, {
+        include: [{ model: Model.Session, as: 'session' }]
+      });
+      if (channel && channel.session) {
+        organizationId = channel.session.organizationId;
+      }
+
+      // Select the BotService with multi-tenant routing for Teams
+      const selectedBotService = await this.selectBotService(bot.provider, organizationId);
 
       if (!selectedBotService) {
-        logger.error(`No BotService available with capability '${bot.provider}' to start bot.`);
-        const channel = await Model.Channel.findByPk(bot.channelId);
+        logger.error(`No BotService available with capability '${bot.provider}' for org ${organizationId || 'unknown'} to start bot.`);
         if (channel) {
           this.client.publish('teamsappservice/in/bot-error', {
             sessionId: channel.sessionId,
@@ -146,7 +154,7 @@ class BrokerClient extends Component {
 
       // Forward the start command to the selected BotService
       this.client.publish(`botservice-${selectedBotService.uniqueId}/in/startbot`, botData, 2, false, true);
-      logger.debug(`Bot scheduled via BotService ${selectedBotService.uniqueId} (capability: ${bot.provider}) for session ${botData.session.id}, channel ${botData.channel.id}`);
+      logger.debug(`Bot scheduled via BotService ${selectedBotService.uniqueId} (capability: ${bot.provider}, mediaHostId: ${selectedBotService.mediaHostId || 'none'}, org: ${organizationId || 'none'}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
       logger.error('Failed to start bot:', error);
       try {
@@ -355,7 +363,7 @@ class BrokerClient extends Component {
 
   // Handle BotService status updates
   async updateBotServiceStatus(botServiceStatus) {
-    const { uniqueId, activeBots, timestamp, capabilities = [] } = botServiceStatus;
+    const { uniqueId, activeBots, timestamp, capabilities = [], mediaHostId = null } = botServiceStatus;
 
     const previousService = this.botservices.get(uniqueId);
     const isNewService = !previousService;
@@ -367,6 +375,7 @@ class BrokerClient extends Component {
       activeBots,
       capabilities,
       timestamp,
+      mediaHostId,
       lastSeen: Date.now()
     });
 
@@ -381,14 +390,14 @@ class BrokerClient extends Component {
 
     // Log only meaningful changes
     if (isNewService) {
-      logger.info(`BotService ${uniqueId} connected with ${activeBots} active bots, capabilities: [${capabilities.join(', ')}]`);
+      logger.info(`BotService ${uniqueId} connected with ${activeBots} active bots, capabilities: [${capabilities.join(', ')}], mediaHostId: ${mediaHostId || 'none'}`);
     } else if (botCountChanged) {
       logger.info(`BotService ${uniqueId} now has ${activeBots} active bots`);
     }
   }
 
-  // Select the BotService with the least active bots that supports the given provider
-  selectBotService(provider) {
+  // Select the least-loaded BotService. For Teams + organizationId, route to the org's MediaHosts.
+  async selectBotService(provider, organizationId = null) {
     if (this.botservices.size === 0) {
       return null;
     }
@@ -402,11 +411,54 @@ class BrokerClient extends Component {
       return null;
     }
 
-    // Select the one with the least active bots
+    // For Teams with an organizationId, apply multi-tenant routing
+    if (provider === 'teams' && organizationId) {
+      try {
+        const result = await resolveIntegrationConfig(organizationId, 'teams');
+        if (result && result.config) {
+          const mediaHosts = result.config.mediaHosts || [];
+          const onlineHostIds = mediaHosts
+            .filter(mh => mh.status === 'online')
+            .map(mh => mh.id);
+
+          if (onlineHostIds.length > 0) {
+            // Filter bots that belong to this org's MediaHosts
+            const tenantServices = validServices.filter(
+              service => service.mediaHostId && onlineHostIds.includes(service.mediaHostId)
+            );
+
+            if (tenantServices.length > 0) {
+              logger.info(`Multi-tenant routing: found ${tenantServices.length} BotService(s) for org ${organizationId} (mediaHosts: [${onlineHostIds.join(', ')}])`);
+              return this._selectLeastLoaded(tenantServices);
+            }
+
+            // Fallback: try legacy bots without mediaHostId
+            const legacyServices = validServices.filter(service => !service.mediaHostId);
+            if (legacyServices.length > 0) {
+              logger.warn(`Multi-tenant routing: no tenant-specific BotService for org ${organizationId}, falling back to ${legacyServices.length} legacy bot(s)`);
+              return this._selectLeastLoaded(legacyServices);
+            }
+
+            logger.warn(`Multi-tenant routing: no BotService available for org ${organizationId} mediaHosts [${onlineHostIds.join(', ')}]`);
+            return null;
+          }
+        }
+      } catch (err) {
+        logger.error(`Multi-tenant routing error for org ${organizationId}:`, err);
+        // Fall through to classic selection
+      }
+    }
+
+    // Classic selection: least-loaded among all valid services
+    return this._selectLeastLoaded(validServices);
+  }
+
+  // Pick the least-loaded service from a list
+  _selectLeastLoaded(services) {
     let selectedService = null;
     let minActiveBots = Infinity;
 
-    for (const service of validServices) {
+    for (const service of services) {
       if (service.activeBots < minActiveBots) {
         minActiveBots = service.activeBots;
         selectedService = service;

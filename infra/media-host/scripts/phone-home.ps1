@@ -37,6 +37,7 @@ MQTT_PORT=$($response.mqtt.port)
 MQTT_USER=$($response.mqtt.user)
 MQTT_PASSWORD=$($response.mqtt.password)
 INTEGRATION_CONFIG_ID=$($response.integrationConfigId)
+MEDIA_HOST_ID=$($response.mediaHostId)
 "@
 Set-Content -Path "C:\linto-studio-plugins\.env" -Value $envContent -Encoding UTF8
 
@@ -51,6 +52,9 @@ $appSettings = @{
     Bot = @{
         Fqdn = $Fqdn
         PlaceCallEndpointUrl = "https://$Fqdn"
+    }
+    AppSettings = @{
+        MediaHostId = $response.mediaHostId
     }
 } | ConvertTo-Json -Depth 5
 Set-Content -Path "C:\linto-studio-plugins\TeamsMediaBot\appsettings.Production.json" -Value $appSettings -Encoding UTF8

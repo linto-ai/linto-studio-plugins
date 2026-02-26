@@ -1,4 +1,8 @@
 services:
+  transcriber:
+    volumes:
+      - ${LINTO_STUDIO_PATH:-../linto-studio}/storages/studio-api/session_audio:/audio-storage
+
   studio-api:
     env_file:
       - ${EMEETING_ROOT}/.envdefault.linto.docker

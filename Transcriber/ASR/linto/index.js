@@ -31,7 +31,7 @@ class LintoTranscriber extends EventEmitter {
         this.emit('closed');
     }
 
-    getMqttPayload(text) {
+    formatResult(text) {
         return {
             "astart": this.startedAt,
             "text": text,
@@ -69,7 +69,7 @@ class LintoTranscriber extends EventEmitter {
         this.ws.on('message', (message) => {
             const data = JSON.parse(message);
             if (data.text) {
-                const result = this.getMqttPayload(data.text);
+                const result = this.formatResult(data.text);
                 this.lastEndTime = result.end;
                 this.emit('transcribed', result);
                 this.logger.debug(`ASR transcription: ${data.text}`);
@@ -77,7 +77,7 @@ class LintoTranscriber extends EventEmitter {
                 if (!this.startTime) {
                     this.startTime = Date.now();
                 }
-                const result = this.getMqttPayload(data.partial);
+                const result = this.formatResult(data.partial);
                 this.emit('transcribing', result);
                 this.logger.debug(`ASR partial transcription: ${data.partial}`);
             }

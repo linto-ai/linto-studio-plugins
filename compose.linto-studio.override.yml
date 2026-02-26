@@ -1,8 +1,12 @@
 services:
   studio-api:
     env_file:
-      - ../.envdefault.linto.docker
+      - ${EMEETING_ROOT}/.envdefault.linto.docker
 
   studio-frontend:
     env_file:
-      - ../.envdefault.linto.docker
+      - ${EMEETING_ROOT}/.envdefault.linto.docker
+
+  studio-websocket:
+    ports:
+      - "8004:80"

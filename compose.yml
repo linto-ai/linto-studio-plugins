@@ -29,6 +29,8 @@ services:
       dockerfile: migration/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
     depends_on:
@@ -42,6 +44,8 @@ services:
       dockerfile: Transcriber/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=transcriber:*
     depends_on:
@@ -59,6 +63,8 @@ services:
       dockerfile: Session-API/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=session-api:*
     expose:
@@ -79,6 +85,8 @@ services:
       dockerfile: Scheduler/Dockerfile
     env_file:
       - .envdefault.docker
+      - path: .env
+        required: false
     environment:
       - DEBUG=scheduler:*
     depends_on:

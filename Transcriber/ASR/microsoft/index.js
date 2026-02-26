@@ -21,12 +21,12 @@ class RecognizerListener {
     }
 
     handleRecognizing(s, e) {
-        this.emitTranscribing(this.transcriber.getMqttPayload(e.result))
+        this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
 
     handleRecognized(s, e) {
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
-            this.emitTranscribed(this.transcriber.getMqttPayload(e.result))
+            this.emitTranscribed(this.transcriber.formatResult(e.result))
         }
     }
 
@@ -126,7 +126,7 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
 
     handleRecognized(s, e) {
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
-            this.emitTranscribed(this.transcriber.getMqttPayload(e.result))
+            this.emitTranscribed(this.transcriber.formatResult(e.result))
         }
     }
 
@@ -189,7 +189,7 @@ class MicrosoftTranscriber extends EventEmitter {
         );
     }
 
-    getMqttPayload(result) {
+    formatResult(result) {
         let translations = {};
         const targetLanguages = this.getTargetLanguages();
         if (result.translations && targetLanguages) {

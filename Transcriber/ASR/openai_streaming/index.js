@@ -201,7 +201,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         }
     }
 
-    getMqttPayload(text, lang) {
+    formatResult(text, lang) {
         const now = Date.now();
         const elapsedSec = this.startTime ? (now - this.startTime) / 1000 : 0;
         return {
@@ -357,7 +357,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             this._checkInternalBoundary();
 
             const lang = this.detectLanguage(this.accumulatedText);
-            const payload = this.getMqttPayload(this.accumulatedText, lang);
+            const payload = this.formatResult(this.accumulatedText, lang);
             this.emit('transcribing', payload);
             this.logger.debug(`ASR partial transcription: ${this.accumulatedText}`);
         }
@@ -374,7 +374,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         }
 
         const lang = this.detectLanguage(text, true);
-        const payload = this.getMqttPayload(text, lang);
+        const payload = this.formatResult(text, lang);
         this.lastEndTime = payload.end;
         this.emit('transcribed', payload);
 
@@ -399,7 +399,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         }
 
         const lang = this.detectLanguage(trimmedText, true);
-        const payload = this.getMqttPayload(trimmedText, lang);
+        const payload = this.formatResult(trimmedText, lang);
         this.lastEndTime = payload.end;
         this.emit('transcribed', payload);
 
@@ -456,7 +456,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
 
                     if (!this.startTime) this.startTime = now;
                     const lang = this.detectLanguage(emitText, true);
-                    const payload = this.getMqttPayload(emitText, lang);
+                    const payload = this.formatResult(emitText, lang);
                     this.lastEndTime = payload.end;
                     this.emit('transcribed', payload);
             
@@ -565,7 +565,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         if (this._wordCount(emitText) < this.minWords) return;
 
         const lang = this.detectLanguage(emitText, true);
-        const payload = this.getMqttPayload(emitText, lang);
+        const payload = this.formatResult(emitText, lang);
         this.lastEndTime = payload.end;
         this.emit('transcribed', payload);
 

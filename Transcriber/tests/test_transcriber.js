@@ -444,15 +444,15 @@ describe('OpenAIStreamingTranscriber', function () {
     });
 
     // -------------------------------------------------------------------
-    // getMqttPayload()
+    // formatResult()
     // -------------------------------------------------------------------
-    describe('getMqttPayload()', function () {
+    describe('formatResult()', function () {
         it('should produce correct payload structure', function () {
             const t = new OpenAIStreamingTranscriber(createSession(), createChannel());
             t.startedAt = '2026-01-01T00:00:00.000Z';
             t.startTime = Date.now();
             t.lastEndTime = 0;
-            const payload = t.getMqttPayload('test text', 'en-US');
+            const payload = t.formatResult('test text', 'en-US');
             assert.strictEqual(payload.astart, '2026-01-01T00:00:00.000Z');
             assert.strictEqual(payload.text, 'test text');
             assert.deepStrictEqual(payload.translations, {});
@@ -467,7 +467,7 @@ describe('OpenAIStreamingTranscriber', function () {
             t.startedAt = '2026-01-01T00:00:00.000Z';
             t.startTime = Date.now();
             t.lastEndTime = 0;
-            const payload = t.getMqttPayload('x', null);
+            const payload = t.formatResult('x', null);
             assert.strictEqual(payload.lang, null);
         });
     });

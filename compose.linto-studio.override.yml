@@ -2,11 +2,15 @@ services:
   studio-api:
     env_file:
       - ${EMEETING_ROOT}/.envdefault.linto.docker
+    environment:
+      - SESSION_API_ENDPOINT=http://sessionapi:${SESSION_API_WEBSERVER_HTTP_PORT}/v1
 
   studio-frontend:
     env_file:
       - ${EMEETING_ROOT}/.envdefault.linto.docker
+    ports: !override
+      - "8003:8080"
 
   studio-websocket:
-    ports:
+    ports: !override
       - "8004:80"

@@ -4,7 +4,7 @@ const logger = require('../../logger')
 const EventEmitter = require('eventemitter3');
 
 
-class RecognizerListener {
+class PrimaryRecognizerListener {
     constructor(transcriber, name) {
         this.transcriber = transcriber;
         this.name = name;
@@ -61,7 +61,7 @@ class RecognizerListener {
         this.transcriber.emit('closed', e.reason);
     };
 
-    handleStartContinuousRecognitionAsync() {
+    onStartSuccess() {
         if (this._startupTimeout) {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
@@ -70,7 +70,7 @@ class RecognizerListener {
         this.transcriber.emit('ready');
     };
 
-    handleStartContinuousRecognitionAsyncError(error) {
+    onStartError(error) {
         if (this._startupTimeout) {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
@@ -79,7 +79,7 @@ class RecognizerListener {
         this.transcriber.emit('error', 'STARTUP_ERROR');
     };
 
-    listen(recognizer) {
+    attachTo(recognizer) {
         const eventHandlers = {
             "recognizing": this.handleRecognizing,
             "recognized": this.handleRecognized,
@@ -105,8 +105,8 @@ class RecognizerListener {
         }
 
         recognizer[recognizerListenFun](
-            this.handleStartContinuousRecognitionAsync.bind(this),
-            this.handleStartContinuousRecognitionAsyncError.bind(this)
+            this.onStartSuccess.bind(this),
+            this.onStartError.bind(this)
         );
 
         // Startup timeout: if Azure doesn't respond within 15s, emit error
@@ -119,7 +119,7 @@ class RecognizerListener {
 }
 
 
-class OnlyRecognizedRecognizerListener extends RecognizerListener {
+class SecondaryRecognizerListener extends PrimaryRecognizerListener {
     handleRecognizing(s, e) {
         this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
@@ -139,7 +139,7 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
         this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
     };
 
-    handleStartContinuousRecognitionAsync() {
+    onStartSuccess() {
         if (this._startupTimeout) {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
@@ -237,34 +237,34 @@ class MicrosoftTranscriber extends EventEmitter {
         if (translations && translations.length && diarization) {
             this.pushStreams.push(AudioInputStream.createPushStream());
 
-            this.recognizers.push(this.startRecognizer(
+            this.recognizers.push(this.setupRecognizer(
                 transcriberProfile.config,
                 null,
                 true,
                 this.pushStreams[0],
-                new RecognizerListener(this, "[Diarization ASR]")
+                new PrimaryRecognizerListener(this, "[Diarization ASR]")
             ));
-            this.recognizers.push(this.startRecognizer(
+            this.recognizers.push(this.setupRecognizer(
                 transcriberProfile.config,
                 translations,
                 false,
                 this.pushStreams[1],
-                new OnlyRecognizedRecognizerListener(this, "[Translation ASR]")
+                new SecondaryRecognizerListener(this, "[Translation ASR]")
             ));
 
             return;
         }
 
-        this.recognizers.push(this.startRecognizer(
+        this.recognizers.push(this.setupRecognizer(
             transcriberProfile.config,
             translations,
             diarization,
             this.pushStreams[0],
-            new RecognizerListener(this, "[ASR]")
+            new PrimaryRecognizerListener(this, "[ASR]")
         ));
     }
 
-    getSpeechConfig(config, translations) {
+    createSpeechConfig(config, translations) {
         const multi = config.languages.length > 1;
         const hasTranslations = translations && translations.length;
         let usedEndpoint = null;
@@ -328,7 +328,7 @@ class MicrosoftTranscriber extends EventEmitter {
         return speechConfig;
     }
 
-    getRecognizer(config, translations, diarization, speechConfig, audioConfig) {
+    createRecognizer(config, translations, diarization, speechConfig, audioConfig) {
         const multi = config.languages.length > 1;
         const hasTranslations = translations && translations.length;
 
@@ -367,11 +367,11 @@ class MicrosoftTranscriber extends EventEmitter {
         return new SpeechRecognizer(speechConfig, audioConfig);
     }
 
-    startRecognizer(config, translations, diarization, pushStream, listener) {
-        const speechConfig = this.getSpeechConfig(config, translations);
+    setupRecognizer(config, translations, diarization, pushStream, listener) {
+        const speechConfig = this.createSpeechConfig(config, translations);
         const audioConfig = AudioConfig.fromStreamInput(pushStream);
-        const recognizer = this.getRecognizer(config, translations, diarization, speechConfig, audioConfig);
-        listener.listen(recognizer);
+        const recognizer = this.createRecognizer(config, translations, diarization, speechConfig, audioConfig);
+        listener.attachTo(recognizer);
         return recognizer;
     }
 
@@ -387,7 +387,7 @@ class MicrosoftTranscriber extends EventEmitter {
         }
     }
 
-    stopTranscription(recognizer, callback) {
+    stopRecognition(recognizer, callback) {
         const isRecognizer = recognizer instanceof SpeechRecognizer || recognizer instanceof TranslationRecognizer;
         if (isRecognizer) {
             recognizer.stopContinuousRecognitionAsync(callback);
@@ -403,7 +403,7 @@ class MicrosoftTranscriber extends EventEmitter {
                 recognizer.close();
                 resolve();
             };
-            this.stopTranscription(recognizer, handleStopContinuousRecognitionAsync);
+            this.stopRecognition(recognizer, handleStopContinuousRecognitionAsync);
         })
     }
 

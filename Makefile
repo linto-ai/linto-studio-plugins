@@ -1,5 +1,8 @@
 PACKAGE_DIRS := . Transcriber Session-API Scheduler migration lib
 
+# Load .env as override if it exists
+ENV_FILE_ARGS = --env-file .envdefault.docker $(if $(wildcard .env),--env-file .env)
+
 install-local: $(PACKAGE_DIRS)
 
 $(PACKAGE_DIRS):
@@ -12,28 +15,28 @@ run-dev: migrate
 	npm start
 
 build-docker-dev:
-	docker compose --env-file .envdefault.docker build
+	docker compose $(ENV_FILE_ARGS) build
 
 run-docker-dev:
-	docker compose --env-file .envdefault.docker up
+	docker compose $(ENV_FILE_ARGS) up
 
 stop-docker-dev:
-	docker compose --env-file .envdefault.docker stop
+	docker compose $(ENV_FILE_ARGS) stop
 
 down-docker-dev:
-	docker compose --env-file .envdefault.docker down
+	docker compose $(ENV_FILE_ARGS) down
 
 run-docker-prod:
 	docker compose -f compose.yml -f compose.prod.yml up --build
 
 run-docker-dev-linto-studio:
-	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml --env-file .envdefault.docker up --build
+	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml $(ENV_FILE_ARGS) up --build
 
 stop-docker-dev-linto-studio:
-	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml --env-file .envdefault.docker stop
+	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml $(ENV_FILE_ARGS) stop
 
 down-docker-dev-linto-studio:
-	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml --env-file .envdefault.docker down
+	docker compose -f compose.yml -f compose.override.yml -f compose.linto-studio.yml $(ENV_FILE_ARGS) down
 
 clean-node-modules:
 	find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +

@@ -35,6 +35,7 @@ class ASR extends eventEmitter {
     this.provider = null;
     this.state = ASR.states.CLOSED;
     this.segmentId = 1;
+    this._dualFinalCount = 0;
     this.init();
   }
 
@@ -113,7 +114,15 @@ class ASR extends eventEmitter {
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this.segmentId;
         this.emit('final', transcription);
-        this.segmentId++;
+        if (this.channel.diarization && this.channel.translations?.length > 0) {
+          this._dualFinalCount++;
+          if (this._dualFinalCount >= 2) {
+            this.segmentId++;
+            this._dualFinalCount = 0;
+          }
+        } else {
+          this.segmentId++;
+        }
       }
     });
   }

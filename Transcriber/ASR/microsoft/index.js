@@ -121,7 +121,7 @@ class RecognizerListener {
 
 class OnlyRecognizedRecognizerListener extends RecognizerListener {
     handleRecognizing(s, e) {
-        return;
+        this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
 
     handleRecognized(s, e) {
@@ -140,6 +140,10 @@ class OnlyRecognizedRecognizerListener extends RecognizerListener {
     };
 
     handleStartContinuousRecognitionAsync() {
+        if (this._startupTimeout) {
+            clearTimeout(this._startupTimeout);
+            this._startupTimeout = null;
+        }
         this.transcriber.logger.info(`${this.name}: Microsoft ASR recognition started`);
     };
 }

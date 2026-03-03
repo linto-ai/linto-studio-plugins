@@ -66,7 +66,7 @@ namespace TeamsMediaBot.Bot
         /// </summary>
         /// <param name="sender">The sender.</param>
         /// <param name="args">The elapsed event args.</param>
-        private void HeartbeatDetected(object sender, ElapsedEventArgs args)
+        private void HeartbeatDetected(object? sender, ElapsedEventArgs args)
         {
             var task = $"{this.GetType().FullName}.{nameof(this.HeartbeatAsync)}(args)";
             this.GraphLogger.Verbose($"Starting running task: " + task);

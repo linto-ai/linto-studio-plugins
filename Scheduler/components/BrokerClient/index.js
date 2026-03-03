@@ -381,11 +381,20 @@ class BrokerClient extends Component {
 
     // Clean up stale BotServices (not seen for more than 30 seconds)
     const staleTimeout = 30000;
+    const staleMediaHostIds = new Set();
     for (const [id, service] of this.botservices.entries()) {
       if (Date.now() - service.lastSeen > staleTimeout) {
+        if (service.mediaHostId) {
+          staleMediaHostIds.add(service.mediaHostId);
+        }
         this.botservices.delete(id);
         logger.info(`BotService ${id} disconnected (stale)`);
       }
+    }
+
+    // Check if stale BotServices caused any MediaHost to lose all its bots
+    for (const staleMediaHostId of staleMediaHostIds) {
+      await this.onMediaHostBotOffline(staleMediaHostId);
     }
 
     // Log only meaningful changes
@@ -393,6 +402,60 @@ class BrokerClient extends Component {
       logger.info(`BotService ${uniqueId} connected with ${activeBots} active bots, capabilities: [${capabilities.join(', ')}], mediaHostId: ${mediaHostId || 'none'}`);
     } else if (botCountChanged) {
       logger.info(`BotService ${uniqueId} now has ${activeBots} active bots`);
+    }
+
+    // When a new BotService with a mediaHostId arrives, set the MediaHost online
+    if (isNewService && mediaHostId) {
+      await this.onMediaHostBotOnline(mediaHostId);
+    }
+  }
+
+  // A BotService with a mediaHostId has come online — update MediaHost status
+  async onMediaHostBotOnline(mediaHostId) {
+    try {
+      const mediaHost = await Model.MediaHost.findByPk(mediaHostId);
+      if (!mediaHost) {
+        logger.warn(`onMediaHostBotOnline: MediaHost ${mediaHostId} not found`);
+        return;
+      }
+
+      if (mediaHost.status === 'provisioned' || mediaHost.status === 'offline') {
+        await mediaHost.update({ status: 'online' });
+        logger.info(`MediaHost ${mediaHostId} is now online (was ${mediaHost.status})`);
+      }
+
+      // Mark setupProgress.mediaHost on the parent IntegrationConfig
+      const integrationConfig = await Model.IntegrationConfig.findByPk(mediaHost.integrationConfigId);
+      if (integrationConfig) {
+        const setupProgress = integrationConfig.setupProgress || {};
+        if (!setupProgress.mediaHost) {
+          await integrationConfig.update({
+            setupProgress: { ...setupProgress, mediaHost: true }
+          });
+          logger.info(`IntegrationConfig ${integrationConfig.id} setupProgress.mediaHost set to true`);
+        }
+      }
+    } catch (err) {
+      logger.error(`onMediaHostBotOnline error for ${mediaHostId}: ${err.message}`);
+    }
+  }
+
+  // Check if a MediaHost still has online BotServices; if not, set it offline
+  async onMediaHostBotOffline(mediaHostId) {
+    try {
+      // Check if any remaining BotService references this mediaHostId
+      const hasOnlineBots = Array.from(this.botservices.values())
+        .some(service => service.mediaHostId === mediaHostId);
+
+      if (!hasOnlineBots) {
+        const mediaHost = await Model.MediaHost.findByPk(mediaHostId);
+        if (mediaHost && mediaHost.status === 'online') {
+          await mediaHost.update({ status: 'offline' });
+          logger.info(`MediaHost ${mediaHostId} is now offline (no more BotServices connected)`);
+        }
+      }
+    } catch (err) {
+      logger.error(`onMediaHostBotOffline error for ${mediaHostId}: ${err.message}`);
     }
   }
 
@@ -592,14 +655,14 @@ class BrokerClient extends Component {
 
   async updateMediaHostHealth(mediaHostId, healthStatus) {
     try {
-      await Model.MediaHost.update(
-        {
-          lastHealthCheck: new Date(),
-          healthStatus: healthStatus
-        },
-        { where: { id: mediaHostId } }
-      );
-      logger.debug(`Updated health status for media host ${mediaHostId}`);
+      const mediaHost = await Model.MediaHost.findByPk(mediaHostId);
+      if (!mediaHost) return;
+      const updates = { lastHealthCheck: new Date(), healthStatus };
+      if (mediaHost.status === 'provisioned') {
+        updates.status = 'online';
+        logger.info(`Media host ${mediaHostId} transitioned from provisioned to online`);
+      }
+      await mediaHost.update(updates);
     } catch (err) {
       logger.error(`Failed to update media host health for ${mediaHostId}: ${err.message}`);
     }

@@ -112,7 +112,7 @@ module.exports = (webserver) => {
                     return res.status(404).json({ error: 'Platform integration config not found' });
                 }
 
-                const allowedFields = ['status', 'config', 'setupProgress', 'allowOrganizationOverride'];
+                const allowedFields = ['status', 'config', 'setupProgress'];
                 const updates = {};
                 for (const field of allowedFields) {
                     if (req.body[field] !== undefined) {

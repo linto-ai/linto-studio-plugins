@@ -17,7 +17,7 @@ try {
 
     if ($SslMode -eq "letsencrypt") {
         Write-Host "Requesting SSL certificate via win-acme..."
-        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --installation iis --accepttos --emailaddress "admin@$Fqdn"
+        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --accepttos --emailaddress "admin@$Fqdn"
 
         $cert = Get-ChildItem -Path Cert:\LocalMachine\My | Where-Object { $_.Subject -match $Fqdn } | Select-Object -First 1
         if (-not $cert) {

@@ -36,11 +36,6 @@ module.exports = {
         allowNull: true,
         defaultValue: {}
       },
-      allowOrganizationOverride: {
-        type: Sequelize.BOOLEAN,
-        allowNull: false,
-        defaultValue: true
-      },
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

@@ -45,8 +45,4 @@ $winAcmeZip = "$env:TEMP\win-acme.zip"
 Invoke-WebRequest -Uri $winAcmeUrl -OutFile $winAcmeZip
 Expand-Archive -Path $winAcmeZip -DestinationPath "C:\win-acme" -Force
 
-# Install IIS
-Write-Host "Installing IIS..."
-Install-WindowsFeature -Name Web-Server -IncludeManagementTools
-
 Write-Host "=== Prerequisites installation completed ==="

@@ -27,3 +27,4 @@ letsencrypt
 bin/
 obj/
 .claude/
+certs/

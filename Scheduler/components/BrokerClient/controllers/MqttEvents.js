@@ -59,9 +59,14 @@ module.exports = async function () {
           if (botServiceStatus.online) {
             await this.updateBotServiceStatus(botServiceStatus);
           } else {
-            // BotService went offline
+            // BotService went offline — check if it had a mediaHostId
+            const previousService = this.botservices.get(botServiceStatus.uniqueId);
+            const mediaHostId = (previousService && previousService.mediaHostId) || botServiceStatus.mediaHostId;
             this.botservices.delete(botServiceStatus.uniqueId);
             logger.info(`BotService ${botServiceStatus.uniqueId} disconnected`);
+            if (mediaHostId) {
+              await this.onMediaHostBotOffline(mediaHostId);
+            }
           }
         }
         break;

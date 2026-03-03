@@ -22,5 +22,6 @@
     <PackageReference Include="Microsoft.Skype.Bots.Media" Version="1.27.0.2-alpha" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.7.0" />
     <PackageReference Include="MQTTnet" Version="4.3.3.952" />
+    <PackageReference Include="Serilog.Extensions.Logging.File" Version="3.0.0" />
   </ItemGroup>
 </Project>

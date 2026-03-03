@@ -85,6 +85,10 @@ namespace TeamsMediaBot
                 options.TimestampFormat = "HH:mm:ss ";
                 options.IncludeScopes = false;
             });
+            builder.Logging.AddFile(@"C:\linto-studio-plugins\logs\TeamsMediaBot-{Date}.log",
+                minimumLevel: LogLevel.Information,
+                retainedFileCountLimit: 7,
+                outputTemplate: "{Timestamp:HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
             builder.Logging.SetMinimumLevel(LogLevel.Information);
 
             builder.Services.AddSingleton<IBotService, BotService>();

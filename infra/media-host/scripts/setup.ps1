@@ -20,7 +20,7 @@ try {
     Write-Host "FQDN: $fqdn"
 
     Write-Host "Requesting SSL certificate via win-acme..."
-    & "C:\win-acme\wacs.exe" --target manual --host $fqdn --validation selfhosting --store certificatestore --certificatestore My --installation iis --accepttos --emailaddress "admin@$fqdn"
+    & "C:\win-acme\wacs.exe" --target manual --host $fqdn --validation selfhosting --store certificatestore --certificatestore My --accepttos --emailaddress "admin@$fqdn"
 
     $cert = Get-ChildItem -Path Cert:\LocalMachine\My | Where-Object { $_.Subject -match $fqdn } | Select-Object -First 1
     if (-not $cert) {

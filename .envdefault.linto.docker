@@ -17,6 +17,7 @@ BROKER_REJECT_UNAUTHORIZED=true
 LINTO_STUDIO_BASE_URL=http://studio-api
 
 ##### studio-frontend #####
+VUE_APP_MODE=basic
 VUE_APP_ENABLE_SESSION=true
 VUE_APP_SESSION_WS=http://localhost:8001
 VUE_APP_SESSION_WS_PATH=/socket.io/
@@ -24,3 +25,7 @@ VUE_APP_WEBSOCKET_SERVER=http://localhost:8004
 
 ORGANIZATION_DEFAULT_PERMISSIONS=upload,summary,session
 DB_MIGRATION_TARGET=1.6.1
+
+##### Super Admin #####
+SUPER_ADMIN_EMAIL=admin@mail.com
+SUPER_ADMIN_PWD=superadminpassword

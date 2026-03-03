@@ -1,4 +1,4 @@
-const { Model, logger, Security, canOrganizationOverride } = require("live-srt-lib");
+const { Model, logger, Security, getPlatformConfig } = require("live-srt-lib");
 const { validateAzureCredentials } = require("./helpers/validateAzureCredentials");
 
 function decryptAndMaskConfig(config) {
@@ -122,10 +122,10 @@ module.exports = (webserver) => {
                         return res.status(400).json({ error: 'organizationId and provider are required' });
                     }
 
-                    // Check if organization can override platform config
-                    const canOverride = await canOrganizationOverride(organizationId, provider);
-                    if (!canOverride) {
-                        return res.status(403).json({ error: 'Platform configuration is locked. Organization cannot override.' });
+                    // Check if a platform config exists (on-premise mode blocks org configs)
+                    const platformConfig = await getPlatformConfig(provider);
+                    if (platformConfig) {
+                        return res.status(403).json({ error: 'Platform configuration exists. Organizations cannot create their own config in on-premise mode.' });
                     }
                 } else if (effectiveScope === 'platform') {
                     if (organizationId) {
@@ -172,7 +172,7 @@ module.exports = (webserver) => {
                     return res.status(404).json({ error: 'Integration config not found' });
                 }
 
-                const allowedFields = ['status', 'config', 'setupProgress', 'allowOrganizationOverride'];
+                const allowedFields = ['status', 'config', 'setupProgress'];
                 const updates = {};
                 for (const field of allowedFields) {
                     if (req.body[field] !== undefined) {
@@ -267,7 +267,6 @@ module.exports = (webserver) => {
                     exists: true,
                     status: platformConfig.status,
                     provider: platformConfig.provider,
-                    allowOrganizationOverride: platformConfig.allowOrganizationOverride,
                     mediaHostCount: (platformConfig.mediaHosts || []).length,
                     mediaHostsHealthy: healthyCount
                 });

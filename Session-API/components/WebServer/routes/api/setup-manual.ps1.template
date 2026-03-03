@@ -4,12 +4,21 @@
 
 param(
     [string]$Fqdn = "{{FQDN}}",
-    [string]$ProvisioningToken = "{{PROVISIONING_TOKEN}}",
-    [string]$SessionApiCallbackUrl = "{{SESSION_API_CALLBACK_URL}}",
     [string]$SslMode = "{{SSL_MODE}}",
     [string]$PfxPath = "{{PFX_PATH}}",
     [string]$PackageUrl = "{{PACKAGE_URL}}",
-    [string]$ExpectedSha256 = "{{PACKAGE_SHA256}}"
+    [string]$ExpectedSha256 = "{{PACKAGE_SHA256}}",
+    [string]$MqttHost = "{{MQTT_HOST}}",
+    [string]$MqttPort = "{{MQTT_PORT}}",
+    [string]$MqttUsername = "{{MQTT_USERNAME}}",
+    [string]$MqttPassword = "{{MQTT_PASSWORD}}",
+    [string]$MqttProtocol = "{{MQTT_PROTOCOL}}",
+    [string]$MqttWsPath = "{{MQTT_WS_PATH}}",
+    [string]$MediaHostId = "{{MEDIA_HOST_ID}}",
+    [string]$IntegrationConfigId = "{{INTEGRATION_CONFIG_ID}}",
+    [string]$TenantId = "{{TENANT_ID}}",
+    [string]$ClientId = "{{CLIENT_ID}}",
+    [string]$ClientSecret = "{{CLIENT_SECRET}}"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,16 +40,10 @@ foreach ($dir in $dirs) {
 Start-Transcript -Path $logFile -Append
 
 try {
-    $scriptsPath = "$basePath\scripts"
-
     Write-Host "FQDN: $Fqdn"
 
     # ── Step 2: Install prerequisites ────────────────────────────────────────
     Write-Host "Step 2: Installing prerequisites..."
-
-    # Install IIS
-    Write-Host "Installing IIS..."
-    Install-WindowsFeature -Name Web-Server -IncludeManagementTools
 
     # Install win-acme if not already present
     if (-not (Test-Path "C:\win-acme\wacs.exe")) {
@@ -87,23 +90,75 @@ try {
         Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation Cert:\LocalMachine\My -Password $pfxPassword
     } else {
         Write-Host "Requesting SSL certificate via Let''s Encrypt (win-acme)..."
-        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --installation iis --accepttos --emailaddress "admin@$Fqdn"
+        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --accepttos --emailaddress "admin@$Fqdn"
     }
 
     $cert = Get-ChildItem -Path Cert:\LocalMachine\My | Where-Object { $_.Subject -match $Fqdn } | Select-Object -First 1
     if (-not $cert) {
         Write-Warning "SSL certificate not found in store, continuing anyway..."
+        $certThumbprint = ""
     } else {
         Write-Host "SSL certificate installed: $($cert.Thumbprint)"
+        $certThumbprint = $cert.Thumbprint
     }
 
     # ── Step 7: Configure services ───────────────────────────────────────────
     Write-Host "Step 7: Configuring services..."
-    & "$scriptsPath\configure-services.ps1"
+    $scriptsPath = "$basePath\scripts"
+    if (Test-Path "$scriptsPath\configure-services.ps1") {
+        & "$scriptsPath\configure-services.ps1"
+    }
 
-    # ── Step 8: Phone home ───────────────────────────────────────────────────
-    Write-Host "Step 8: Performing phone home..."
-    & "$scriptsPath\phone-home.ps1" -ProvisioningToken $ProvisioningToken -SessionApiUrl $SessionApiCallbackUrl -Fqdn $Fqdn
+    # ── Step 8: Write configuration files ────────────────────────────────────
+    Write-Host "Step 8: Writing configuration files..."
+
+    # Write .env file
+    $envContent = @"
+MQTT_HOST=$MqttHost
+MQTT_PORT=$MqttPort
+MQTT_USER=$MqttUsername
+MQTT_PASSWORD=$MqttPassword
+AZURE_TENANT_ID=$TenantId
+INTEGRATION_CONFIG_ID=$IntegrationConfigId
+MEDIA_HOST_ID=$MediaHostId
+"@
+    Set-Content -Path "$basePath\.env" -Value $envContent -Encoding UTF8
+    Write-Host "Written $basePath\.env"
+
+    # Write appsettings.Production.json
+    $appSettings = @{
+        AppSettings = @{
+            BrokerHost = $MqttHost
+            BrokerPort = [int]$MqttPort
+            BrokerUsername = $MqttUsername
+            BrokerPassword = $MqttPassword
+            BrokerProtocol = $MqttProtocol
+            BrokerWebSocketPath = $MqttWsPath
+            MediaHostId = $MediaHostId
+            ServiceDnsName = $Fqdn
+            MediaDnsName = "tcp.$Fqdn"
+            CertificateThumbprint = $certThumbprint
+            AadTenantId = $TenantId
+            AadAppId = $ClientId
+            AadAppSecret = $ClientSecret
+            BotCallingInternalPort = 9442
+            BotInternalPort = 9441
+            BotInstanceExternalPort = 443
+            MediaInternalPort = 8445
+            MediaInstanceExternalPort = 22210
+        }
+        Bot = @{
+            Fqdn = $Fqdn
+            PlaceCallEndpointUrl = "https://$Fqdn"
+        }
+    } | ConvertTo-Json -Depth 3
+    Set-Content -Path "$basePath\TeamsMediaBot\appsettings.Production.json" -Value $appSettings -Encoding UTF8
+    Write-Host "Written $basePath\TeamsMediaBot\appsettings.Production.json"
+
+    # ── Step 9: Start services ───────────────────────────────────────────────
+    Write-Host "Step 9: Starting services..."
+    Start-Service "LinTO-BotService"
+    Write-Host "LinTO-BotService started."
 
     Write-Host "Setup completed successfully for $Fqdn"
 } catch {
@@ -111,4 +166,6 @@ try {
     throw
 } finally {
     Stop-Transcript
+    # Auto-delete this script
+    Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 }

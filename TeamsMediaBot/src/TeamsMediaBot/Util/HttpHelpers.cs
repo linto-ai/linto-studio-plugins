@@ -45,7 +45,7 @@ namespace TeamsMediaBot.Util
             => msg.Set(m => m.Content = new StreamContent(req.Body));
 
         private static HttpRequestMessage SetContentType(this HttpRequestMessage msg, HttpRequest req)
-            => msg.Set(m => m.Content.Headers.Add("Content-Type", req.ContentType), applyIf: req.Headers.ContainsKey("Content-Type"));
+            => msg.Set(m => m.Content!.Headers.Add("Content-Type", req.ContentType), applyIf: req.Headers.ContainsKey("Content-Type"));
 
         private static HttpRequestMessage Set(this HttpRequestMessage msg, Action<HttpRequestMessage> config, bool applyIf = true)
         {

@@ -68,7 +68,7 @@ namespace TeamsMediaBot
             builder.Services.AddSwaggerGen();
 
             var section = builder.Configuration.GetSection("AppSettings");
-            var appSettings = section.Get<AppSettings>();
+            var appSettings = section.Get<AppSettings>()!;
 
             builder.Services
                 .AddOptions<AppSettings>()

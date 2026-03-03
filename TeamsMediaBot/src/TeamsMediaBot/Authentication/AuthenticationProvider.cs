@@ -58,7 +58,7 @@ namespace TeamsMediaBot.Authentication
         /// <summary>
         /// The open identifier configuration.
         /// </summary>
-        private OpenIdConnectConfiguration openIdConfiguration;
+        private OpenIdConnectConfiguration? openIdConfiguration;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AuthenticationProvider" /> class.
@@ -206,7 +206,7 @@ namespace TeamsMediaBot.Authentication
                 return new RequestValidationResult { IsValid = false };
             }
 
-            request.Properties.Add(HttpConstants.HeaderNames.Tenant, tenantClaim.Value);
+            request!.Options.Set(new HttpRequestOptionsKey<string>(HttpConstants.HeaderNames.Tenant), tenantClaim.Value);
             return new RequestValidationResult { IsValid = true, TenantId = tenantClaim.Value };
         }
 

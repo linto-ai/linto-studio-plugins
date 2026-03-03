@@ -30,28 +30,28 @@ namespace TeamsMediaBot
         /// </summary>
         /// <value>The name of the service DNS.</value>
         [Required]
-        public string ServiceDnsName { get; set; }
+        public string ServiceDnsName { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the certificate thumbprint.
         /// </summary>
         /// <value>The certificate thumbprint.</value>
         [Required]
-        public string CertificateThumbprint { get; set; }
+        public string CertificateThumbprint { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the aad application identifier.
         /// </summary>
         /// <value>The aad application identifier.</value>
         [Required]
-        public string AadAppId { get; set; }
+        public string AadAppId { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the aad application secret.
         /// </summary>
         /// <value>The aad application secret.</value>
         [Required]
-        public string AadAppSecret { get; set; }
+        public string AadAppSecret { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the instance media internal port.
@@ -102,7 +102,7 @@ namespace TeamsMediaBot
         /// since the media settings needs a different URI
         /// </summary>
         [Required]
-        public string MediaDnsName { get; set; }
+        public string MediaDnsName { get; set; } = string.Empty;
 
         // MQTT Configuration
 

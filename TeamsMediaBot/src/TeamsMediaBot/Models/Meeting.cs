@@ -13,20 +13,20 @@ namespace TeamsMediaBot.Models
         /// </summary>
         /// <value>The tid.</value>
         [DataMember]
-        public string Tid { get; set; }
+        public string Tid { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the AAD object id of the user.
         /// </summary>
         /// <value>The oid.</value>
         [DataMember]
-        public string Oid { get; set; }
+        public string Oid { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the chat message id.
         /// </summary>
         /// <value>The message identifier.</value>
         [DataMember]
-        public string MessageId { get; set; }
+        public string MessageId { get; set; } = string.Empty;
     }
 }

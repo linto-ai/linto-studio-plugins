@@ -70,7 +70,7 @@ namespace TeamsMediaBot.Bot
         /// Gets the entry point for stateful bot.
         /// </summary>
         /// <value>The client.</value>
-        public ICommunicationsClient Client { get; private set; }
+        public ICommunicationsClient Client { get; private set; } = null!;
 
 
         /// <summary>
@@ -79,7 +79,7 @@ namespace TeamsMediaBot.Bot
         public void Dispose()
         {
             this.Client?.Dispose();
-            this.Client = null;
+            this.Client = null!;
         }
 
         /// <summary>
@@ -107,7 +107,7 @@ namespace TeamsMediaBot.Bot
         public void Initialize()
         {
             _logger.LogInformation("Initializing Bot Service");
-            var name = this.GetType().Assembly.GetName().Name;
+            var name = this.GetType().Assembly.GetName().Name!;
             var builder = new CommunicationsClientBuilder(
                 name,
                 _settings.AadAppId,
@@ -264,7 +264,7 @@ namespace TeamsMediaBot.Bot
                 throw;
             }
 
-            var tenantId = (meetingInfo as OrganizerMeetingInfo).Organizer.GetPrimaryIdentity().GetTenantId();
+            var tenantId = ((OrganizerMeetingInfo)meetingInfo).Organizer!.GetPrimaryIdentity().GetTenantId();
             _logger.LogInformation("[BotService] Tenant ID: {TenantId}", tenantId);
 
             var mediaSession = this.CreateLocalMediaSession();
@@ -281,7 +281,7 @@ namespace TeamsMediaBot.Bot
             // See: https://techcommunity.microsoft.com/discussions/teamsdeveloper/meeting-bot-issue-did-not-receive-valid-response-for-joincall-request-from-call-/4144076
             _logger.LogInformation("[BotService] Joining as application identity");
 
-            if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId, out CallHandler? call))
+            if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId!, out CallHandler? call))
             {
                 _logger.LogInformation("[BotService] No existing call for this threadId, creating new call...");
 
@@ -356,32 +356,32 @@ namespace TeamsMediaBot.Bot
                 // Get the policy recording parameters.
 
                 // The context associated with the incoming call.
-                IncomingContext incomingContext =
-                    call.Resource.IncomingContext;
+                IncomingContext? incomingContext =
+                    call.Resource?.IncomingContext;
 
                 // The RP participant.
-                string observedParticipantId =
-                    incomingContext.ObservedParticipantId;
+                string? observedParticipantId =
+                    incomingContext?.ObservedParticipantId;
 
                 // If the observed participant is a delegate.
-                IdentitySet onBehalfOfIdentity =
-                    incomingContext.OnBehalfOf;
+                IdentitySet? onBehalfOfIdentity =
+                    incomingContext?.OnBehalfOf;
 
                 // If a transfer occured, the transferor.
-                IdentitySet transferorIdentity =
-                    incomingContext.Transferor;
+                IdentitySet? transferorIdentity =
+                    incomingContext?.Transferor;
 
-                string countryCode = null;
+                string? countryCode = null;
                 EndpointType? endpointType = null;
 
                 // Note: this should always be true for CR calls.
-                if (incomingContext.ObservedParticipantId == incomingContext.SourceParticipantId)
+                if (incomingContext?.ObservedParticipantId == incomingContext?.SourceParticipantId)
                 {
                     // The dynamic location of the RP.
-                    countryCode = call.Resource.Source.CountryCode;
+                    countryCode = call.Resource?.Source?.CountryCode;
 
                     // The type of endpoint being used.
-                    endpointType = call.Resource.Source.EndpointType;
+                    endpointType = call.Resource?.Source?.EndpointType;
                 }
 
                 IMediaSession mediaSession = Guid.TryParse(call.Id, out Guid callId)
@@ -407,13 +407,15 @@ namespace TeamsMediaBot.Bot
 
             foreach (var call in args.AddedResources)
             {
-                var threadId = call.Resource.ChatInfo.ThreadId;
-                var callState = call.Resource.State;
+                var threadId = call.Resource?.ChatInfo?.ThreadId;
+                var callState = call.Resource?.State;
 
                 _logger.LogInformation("[BotService] === CALL ADDED ===");
                 _logger.LogInformation("[BotService] Call ID: {CallId}", call.Id);
                 _logger.LogInformation("[BotService] ThreadId: {ThreadId}", threadId);
                 _logger.LogInformation("[BotService] State: {State}", callState);
+
+                if (threadId == null) continue;
 
                 var callHandler = new CallHandler(call, _settings, _logger);
                 this.CallHandlers[threadId] = callHandler;
@@ -424,9 +426,9 @@ namespace TeamsMediaBot.Bot
 
             foreach (var call in args.RemovedResources)
             {
-                var threadId = call.Resource.ChatInfo.ThreadId;
-                var callState = call.Resource.State;
-                var resultInfo = call.Resource.ResultInfo;
+                var threadId = call.Resource?.ChatInfo?.ThreadId;
+                var callState = call.Resource?.State;
+                var resultInfo = call.Resource?.ResultInfo;
 
                 _logger.LogWarning("[BotService] === CALL REMOVED ===");
                 _logger.LogWarning("[BotService] Call ID: {CallId}", call.Id);
@@ -438,7 +440,7 @@ namespace TeamsMediaBot.Bot
                         resultInfo.Code, resultInfo.Message);
                 }
 
-                if (this.CallHandlers.TryRemove(threadId, out CallHandler? handler))
+                if (threadId != null && this.CallHandlers.TryRemove(threadId, out CallHandler? handler))
                 {
                     _logger.LogInformation("[BotService] CallHandler removed for threadId {ThreadId}", threadId);
                     Task.Run(async () => {

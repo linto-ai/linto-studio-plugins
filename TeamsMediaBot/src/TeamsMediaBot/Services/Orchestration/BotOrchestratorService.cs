@@ -201,7 +201,7 @@ namespace TeamsMediaBot.Services.Orchestration
                 };
 
                 var call = await _botService.JoinCallAsync(joinCallBody);
-                var threadId = call.Resource.ChatInfo.ThreadId;
+                var threadId = call.Resource?.ChatInfo?.ThreadId;
                 managedBot.ThreadId = threadId;
 
                 _logger.LogDebug("[Orchestrator] Joined meeting, ThreadId: {ThreadId}", threadId);
@@ -210,7 +210,7 @@ namespace TeamsMediaBot.Services.Orchestration
                     await _mqttService.PublishSessionMappingAsync(
                         payload.Session.Id,
                         payload.Channel.Id,
-                        threadId,
+                        threadId!,
                         payload.Address,
                         enableDisplaySub: false);
                 }
@@ -220,10 +220,10 @@ namespace TeamsMediaBot.Services.Orchestration
                 }
 
                 // Wait for CallHandler to be created
-                await WaitForCallHandlerAsync(threadId);
+                await WaitForCallHandlerAsync(threadId!);
 
                 // Get the CallHandler
-                if (_botService.CallHandlers.TryGetValue(threadId, out var callHandler))
+                if (_botService.CallHandlers.TryGetValue(threadId!, out var callHandler))
                 {
                     managedBot.CallHandler = callHandler;
                     managedBot.WireAudioHandler();

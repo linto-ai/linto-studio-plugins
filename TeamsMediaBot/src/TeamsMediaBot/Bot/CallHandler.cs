@@ -55,7 +55,7 @@ namespace TeamsMediaBot.Bot
             AppSettings settings,
             ILogger logger
         )
-            : base(TimeSpan.FromMinutes(10), statefulCall?.GraphLogger)
+            : base(TimeSpan.FromMinutes(10), statefulCall.GraphLogger)
         {
             _logger = logger;
             this.Call = statefulCall;
@@ -79,7 +79,7 @@ namespace TeamsMediaBot.Bot
         protected override void Dispose(bool disposing)
         {
             _disposing = true;
-            _logger.LogInformation("[CallHandler] Disposing CallHandler for call {CallId}", this.Call?.Id);
+            _logger.LogInformation("[CallHandler] Disposing CallHandler for call {CallId}", this.Call.Id);
 
             // Cancel empty meeting timer
             CancelEmptyMeetingTimer();
@@ -129,7 +129,7 @@ namespace TeamsMediaBot.Bot
         {
             foreach (var participant in eventArgs)
             {
-                var participantDetails = participant.Resource.Info.Identity.User;
+                var participantDetails = participant.Resource?.Info?.Identity?.User;
                 string? displayName = null;
                 bool isUsable = false;
 
@@ -138,12 +138,12 @@ namespace TeamsMediaBot.Bot
                     displayName = participantDetails.DisplayName ?? "";
                     isUsable = true;
                 }
-                else if (participant.Resource.Info.Identity.AdditionalData?.Count > 0)
+                else if (participant.Resource?.Info?.Identity?.AdditionalData?.Count > 0)
                 {
                     isUsable = CheckParticipantIsUsable(participant);
                     if (isUsable)
                     {
-                        displayName = ExtractDisplayNameFromAdditionalData(participant.Resource.Info.Identity.AdditionalData);
+                        displayName = ExtractDisplayNameFromAdditionalData(participant.Resource!.Info!.Identity!.AdditionalData!);
                     }
                 }
 
@@ -158,7 +158,7 @@ namespace TeamsMediaBot.Bot
                     uint? msi = null;
                     try
                     {
-                        var mediaStreams = participant.Resource.MediaStreams;
+                        var mediaStreams = participant.Resource?.MediaStreams;
                         if (mediaStreams != null)
                         {
                             foreach (var ms in mediaStreams)
@@ -319,7 +319,7 @@ namespace TeamsMediaBot.Bot
 
         private bool CheckParticipantIsUsable(IParticipant p)
         {
-            foreach (var entry in p.Resource.Info.Identity.AdditionalData)
+            foreach (var entry in p.Resource!.Info!.Identity!.AdditionalData!)
             {
                 if (entry.Key == "applicationInstance") continue;
 

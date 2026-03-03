@@ -82,14 +82,14 @@ namespace TeamsMediaBot.Services.Mqtt
             switch (_settings.BrokerProtocol)
             {
                 case BrokerProtocol.WebSocket:
-                    var wsUri = new Uri($"ws://{_settings.BrokerHost}:{_settings.BrokerPort}{_settings.BrokerWebSocketPath}");
-                    optionsBuilder.WithConnectionUri(wsUri);
+                    var wsUri = $"ws://{_settings.BrokerHost}:{_settings.BrokerPort}{_settings.BrokerWebSocketPath}";
+                    optionsBuilder.WithWebSocketServer(o => o.WithUri(wsUri));
                     _logger.LogInformation("[TeamsMediaBot] Using WebSocket transport: {Uri}", wsUri);
                     break;
 
                 case BrokerProtocol.SecureWebSocket:
-                    var wssUri = new Uri($"wss://{_settings.BrokerHost}:{_settings.BrokerPort}{_settings.BrokerWebSocketPath}");
-                    optionsBuilder.WithConnectionUri(wssUri);
+                    var wssUri = $"wss://{_settings.BrokerHost}:{_settings.BrokerPort}{_settings.BrokerWebSocketPath}";
+                    optionsBuilder.WithWebSocketServer(o => o.WithUri(wssUri));
                     _logger.LogInformation("[TeamsMediaBot] Using Secure WebSocket transport: {Uri}", wssUri);
                     break;
 

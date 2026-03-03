@@ -52,7 +52,7 @@ namespace TeamsMediaBot.Models
 
             using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(match.Groups["context"].Value)))
             {
-                var ctxt = (Meeting)new DataContractJsonSerializer(typeof(Meeting)).ReadObject(stream);
+                var ctxt = (Meeting)new DataContractJsonSerializer(typeof(Meeting)).ReadObject(stream)!;
 
                 if (string.IsNullOrEmpty(ctxt.Tid))
                 {

@@ -22,7 +22,7 @@ namespace TeamsMediaBot.Models
         /// Gets or sets the Teams meeting join URL.
         /// </summary>
         /// <value>The join URL.</value>
-        public string JoinUrl { get; set; }
+        public string JoinUrl { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the display name.

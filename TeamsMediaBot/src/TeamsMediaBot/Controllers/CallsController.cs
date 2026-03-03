@@ -54,7 +54,7 @@ namespace TeamsMediaBot.Controllers
                 {
                     CallId = call.Id,
                     ScenarioId = call.ScenarioId,
-                    ThreadId = call.Resource.ChatInfo.ThreadId,
+                    ThreadId = call.Resource?.ChatInfo?.ThreadId,
                     Port = _settings.BotInstanceExternalPort.ToString()
                 };
 

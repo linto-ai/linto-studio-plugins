@@ -155,8 +155,8 @@ async function getSessionResult(sessionId, withCaptions=false) {
             attributes: {
                 exclude: exclude
             },
-            order: [['id', 'ASC']]
-        }
+        },
+        order: [[Model.Channel, 'id', 'ASC']]
     });
 
     if (!session) {
@@ -242,9 +242,9 @@ module.exports = (webserver) => {
                         attributes: {
                             exclude: ['sessionId', 'closedCaptions', 'translatedCaptions']
                         },
-                        order: [['id', 'ASC']]
                     },
-                    where: where
+                    where: where,
+                    order: [[Model.Channel, 'id', 'ASC']]
                 });
 
                 // set channels index

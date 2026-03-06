@@ -233,6 +233,25 @@
             }
         ]
     },
+    "TranslationEntry": {
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "BCP47 language tag"
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["discrete", "external"],
+                "description": "Translation mode"
+            },
+            "translator": {
+                "type": "string",
+                "description": "Translator name (required for external mode)"
+            }
+        },
+        "required": ["target", "mode"]
+    },
     "ChannelRequest": {
         "type": "object",
         "properties": {
@@ -246,9 +265,17 @@
             },
             "translations": {
                 "type": "array",
-                "description": "List of bcp47 strings.",
+                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or objects with target, mode, and optional translator.",
                 "items": {
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "description": "BCP47 language tag (legacy format, converted to discrete mode)"
+                        },
+                        {
+                            "$ref": "#/components/schemas/TranslationEntry"
+                        }
+                    ]
                 },
                 "default": []
             },
@@ -295,9 +322,17 @@
             },
             "translations": {
                 "type": "array",
-                "description": "List of bcp47 strings.",
+                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or objects with target, mode, and optional translator.",
                 "items": {
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "description": "BCP47 language tag (legacy format, converted to discrete mode)"
+                        },
+                        {
+                            "$ref": "#/components/schemas/TranslationEntry"
+                        }
+                    ]
                 },
                 "default": []
             },
@@ -368,7 +403,10 @@
             },
             "translations": {
                 "type": "array",
-                "description": "The translations enabled for the channel as a BCP-47 language tag"
+                "description": "The translations enabled for the channel",
+                "items": {
+                    "$ref": "#/components/schemas/TranslationEntry"
+                }
             },
             "transcriberProfileId": {
                 "type": "integer",

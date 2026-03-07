@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const logger = require('../../logger')
 const EventEmitter = require('eventemitter3');
+const { createLangDetector } = require('../lang-detect');
 
 const RECONNECT_DELAY_MS = 2000;
 
@@ -28,17 +29,39 @@ class LintoTranscriber extends EventEmitter {
         this.ws = null;
         this._connGeneration = 0;
         this._reconnectTimer = null;
+
+        // Language detection from profile languages
+        const config = channel.transcriberProfile?.config;
+        const candidates = (config?.languages || []).map(l => l.candidate);
+        this._langDetector = createLangDetector(candidates);
+        // Fallback: first configured language
+        this._fallbackLang = candidates[0] || null;
+
         this.emit('closed');
     }
 
     formatResult(text) {
+        const lang = this._langDetector.detectLanguage(text) || this._fallbackLang;
         return {
             "astart": this.startedAt,
             "text": text,
             "translations": {},
             "start": this.lastEndTime,
             "end": (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER / 1000)) / 1000,
-            "lang": process.env.ASR_LANGUAGE,
+            "lang": lang,
+            "locutor": null
+        };
+    }
+
+    formatFinalResult(text) {
+        const lang = this._langDetector.detectLanguage(text, true) || this._fallbackLang;
+        return {
+            "astart": this.startedAt,
+            "text": text,
+            "translations": {},
+            "start": this.lastEndTime,
+            "end": (this.lastEndTime + (Date.now() - this.startTime - process.env.MIN_AUDIO_BUFFER / 1000)) / 1000,
+            "lang": lang,
             "locutor": null
         };
     }
@@ -69,10 +92,10 @@ class LintoTranscriber extends EventEmitter {
         this.ws.on('message', (message) => {
             const data = JSON.parse(message);
             if (data.text) {
-                const result = this.formatResult(data.text);
+                const result = this.formatFinalResult(data.text);
                 this.lastEndTime = result.end;
                 this.emit('transcribed', result);
-                this.logger.debug(`ASR transcription: ${data.text}`);
+                this.logger.debug(`ASR transcription [${result.lang}]: ${data.text}`);
             } else if (data.partial) {
                 if (!this.startTime) {
                     this.startTime = Date.now();

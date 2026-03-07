@@ -1,39 +1,15 @@
 const WebSocket = require('ws');
 const { Security } = require('live-srt-lib');
-
-// Dynamic import for ESM-only franc module
-let _franc = null;
-import('franc').then(m => { _franc = m.franc; });
 const logger = require('../../logger');
 const EventEmitter = require('eventemitter3');
 const { loadProtocol } = require('./protocols');
-
-// BCP 47 -> ISO 639-3 mapping for franc language detection
-const BCP47_TO_ISO3 = {
-    'fr-FR': 'fra',
-    'en-US': 'eng',
-    'de-DE': 'deu',
-    'es-ES': 'spa',
-    'it-IT': 'ita',
-    'pt-BR': 'por',
-    'nl-NL': 'nld',
-    'ru-RU': 'rus',
-    'zh-CN': 'zho',
-    'ja-JP': 'jpn',
-    'ko-KR': 'kor',
-    'ar-SA': 'ara',
-    'hi-IN': 'hin'
-};
+const { createLangDetector } = require('../lang-detect');
 
 // Sentence-ending punctuation (multilingual)
 const SENTENCE_ENDING_PUNCT = /[.!?。！？]$/;
 
 // Segmentation check interval
 const SEGMENTATION_CHECK_MS = 250;
-
-// Language detection thresholds
-const LANG_DETECT_MIN_CHARS = 30;
-const LANG_DETECT_RECHECK_CHARS = 80;
 
 // Segmentation defaults
 const DEFAULT_SILENCE_MS = 1000;
@@ -102,23 +78,9 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         const ProtocolClass = loadProtocol(protocolName);
         this.protocolName = protocolName;
 
-        // Build language detection mappings from config.languages
-        this.allowedIso3 = [];
-        this.iso3ToBcp47 = {};
-        if (config.languages && config.languages.length) {
-            for (const lang of config.languages) {
-                const bcp47 = lang.candidate;
-                const iso3 = BCP47_TO_ISO3[bcp47];
-                if (iso3) {
-                    this.allowedIso3.push(iso3);
-                    this.iso3ToBcp47[iso3] = bcp47;
-                }
-            }
-        }
-
-        // Language detection state
-        this._cachedLang = null;
-        this._lastLangCheckLen = 0;
+        // Language detection via shared module
+        const candidates = (config.languages || []).map(l => l.candidate);
+        this._langDetector = createLangDetector(candidates);
 
         // Protocol will be fully initialized in start() after apiKey decryption
         this._config = config;
@@ -128,40 +90,8 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.emit('closed');
     }
 
-    /**
-     * Detect language from text using franc, constrained to profile languages.
-     * Uses caching: only re-detects when text grows significantly.
-     * @param {string} text
-     * @param {boolean} force - Force re-detection (for finals)
-     * @returns {string|null} BCP 47 language tag or null if undetermined
-     */
     detectLanguage(text, force = false) {
-        if (!this.allowedIso3.length || !text || text.trim().length === 0) {
-            return this._cachedLang;
-        }
-
-        const textLen = text.length;
-
-        // Don't attempt detection on very short text, return cached value
-        if (textLen < LANG_DETECT_MIN_CHARS && !force) {
-            return this._cachedLang;
-        }
-
-        // Only re-detect when text has grown enough (or forced for finals)
-        if (!force && this._cachedLang && (textLen - this._lastLangCheckLen) < LANG_DETECT_RECHECK_CHARS) {
-            return this._cachedLang;
-        }
-
-        if (!_franc) return this._cachedLang;
-        const detected = _franc(text, { only: this.allowedIso3 });
-        const bcp47 = detected === 'und' ? null : (this.iso3ToBcp47[detected] || null);
-
-        if (bcp47) {
-            this._cachedLang = bcp47;
-            this._lastLangCheckLen = textLen;
-        }
-
-        return this._cachedLang;
+        return this._langDetector.detectLanguage(text, force);
     }
 
     /**

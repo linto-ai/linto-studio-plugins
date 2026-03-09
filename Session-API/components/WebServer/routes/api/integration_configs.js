@@ -1,4 +1,4 @@
-const { Model, logger, Security, getPlatformConfig } = require("live-srt-lib");
+const { Model, logger, Security } = require("live-srt-lib");
 const { validateAzureCredentials } = require("./helpers/validateAzureCredentials");
 
 function decryptAndMaskConfig(config) {
@@ -19,8 +19,7 @@ function decryptAndMaskConfig(config) {
 
 module.exports = (webserver) => {
     return [{
-        // GET /integration-configs — List configs for organization
-        // If organizationId is provided without scope, include both org configs AND platform config (without credentials)
+        // GET /integration-configs — List platform configs
         path: '/integration-configs',
         method: 'get',
         controller: async (req, res, next) => {
@@ -28,18 +27,12 @@ module.exports = (webserver) => {
             const offset = req.query.offset ?? 0;
 
             try {
-                const where = {};
-                if (req.query.organizationId) where.organizationId = req.query.organizationId;
-                if (req.query.scope) where.scope = req.query.scope;
+                const where = { scope: 'platform' };
 
-                // Fetch organization configs
                 const results = await Model.IntegrationConfig.findAndCountAll({
                     limit,
                     offset,
-                    where: {
-                        ...where,
-                        scope: where.scope || 'organization'
-                    },
+                    where,
                     include: [
                         { model: Model.MediaHost, as: 'mediaHosts' }
                     ]
@@ -51,30 +44,9 @@ module.exports = (webserver) => {
                     return json;
                 });
 
-                // If organizationId is provided and no explicit scope filter,
-                // also include platform configs (without credentials)
-                let platformConfigs = [];
-                if (req.query.organizationId && !req.query.scope) {
-                    const platformResults = await Model.IntegrationConfig.findAll({
-                        where: {
-                            scope: 'platform',
-                            status: { [Model.Op.ne]: 'disabled' }
-                        },
-                        include: [
-                            { model: Model.MediaHost, as: 'mediaHosts' }
-                        ]
-                    });
-
-                    platformConfigs = platformResults.map(row => {
-                        const json = row.toJSON();
-                        json.config = null; // Mask ALL credentials for platform configs
-                        return json;
-                    });
-                }
-
                 res.json({
-                    configs: [...configs, ...platformConfigs],
-                    totalItems: results.count + platformConfigs.length
+                    configs,
+                    totalItems: results.count
                 });
             } catch (err) {
                 next(err);
@@ -97,12 +69,7 @@ module.exports = (webserver) => {
                 }
 
                 const json = config.toJSON();
-                // Platform configs: mask all credentials for org admins
-                if (json.scope === 'platform') {
-                    json.config = null;
-                } else {
-                    json.config = decryptAndMaskConfig(json.config);
-                }
+                json.config = decryptAndMaskConfig(json.config);
                 res.json(json);
             } catch (err) {
                 next(err);
@@ -114,28 +81,10 @@ module.exports = (webserver) => {
         method: 'post',
         controller: async (req, res, next) => {
             try {
-                const { organizationId, provider, config, setupProgress, scope } = req.body;
-                const effectiveScope = scope || 'organization';
+                const { provider, config, setupProgress } = req.body;
 
-                if (effectiveScope === 'organization') {
-                    if (!organizationId || !provider) {
-                        return res.status(400).json({ error: 'organizationId and provider are required' });
-                    }
-
-                    // Check if a platform config exists (on-premise mode blocks org configs)
-                    const platformConfig = await getPlatformConfig(provider);
-                    if (platformConfig) {
-                        return res.status(403).json({ error: 'Platform configuration exists. Organizations cannot create their own config in on-premise mode.' });
-                    }
-                } else if (effectiveScope === 'platform') {
-                    if (organizationId) {
-                        return res.status(400).json({ error: 'Platform configs must not have an organizationId' });
-                    }
-                    if (!provider) {
-                        return res.status(400).json({ error: 'provider is required' });
-                    }
-                } else {
-                    return res.status(400).json({ error: 'scope must be organization or platform' });
+                if (!provider) {
+                    return res.status(400).json({ error: 'provider is required' });
                 }
 
                 let encryptedConfig = config;
@@ -144,8 +93,8 @@ module.exports = (webserver) => {
                 }
 
                 const createData = {
-                    scope: effectiveScope,
-                    organizationId: effectiveScope === 'platform' ? null : organizationId,
+                    scope: 'platform',
+                    organizationId: null,
                     provider,
                     config: encryptedConfig,
                     setupProgress: setupProgress || {}

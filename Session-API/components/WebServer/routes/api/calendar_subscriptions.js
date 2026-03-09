@@ -83,6 +83,8 @@ module.exports = (webserver) => {
                     keepAudio: req.body.keepAudio,
                     enableDisplaySub: req.body.enableDisplaySub,
                     createdBy: req.body.createdBy,
+                    graphUserDisplayName: req.body.graphUserDisplayName,
+                    graphUserEmail: req.body.graphUserEmail,
                     status: 'pending'
                 });
 

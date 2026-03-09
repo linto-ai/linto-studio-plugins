@@ -45,5 +45,11 @@ namespace TeamsMediaBot.Models.Mqtt
         /// </summary>
         [JsonPropertyName("mediaHostId")]
         public string? MediaHostId { get; set; }
+
+        [JsonPropertyName("dns")]
+        public string? Dns { get; set; }
+
+        [JsonPropertyName("publicIp")]
+        public string? PublicIp { get; set; }
     }
 }

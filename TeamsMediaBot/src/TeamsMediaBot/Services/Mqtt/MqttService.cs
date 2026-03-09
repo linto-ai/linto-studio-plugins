@@ -66,7 +66,9 @@ namespace TeamsMediaBot.Services.Mqtt
                 Online = false,
                 ActiveBots = 0,
                 On = DateTime.UtcNow.ToString("o"),
-                MediaHostId = _settings.MediaHostId
+                MediaHostId = _settings.MediaHostId,
+                Dns = _settings.ServiceDnsName,
+                PublicIp = _settings.PublicIp
             });
 
             var optionsBuilder = new MqttClientOptionsBuilder()
@@ -196,7 +198,9 @@ namespace TeamsMediaBot.Services.Mqtt
                 ActiveBots = activeBots,
                 Capabilities = new List<string> { "teams" },
                 On = DateTime.UtcNow.ToString("o"),
-                MediaHostId = _settings.MediaHostId
+                MediaHostId = _settings.MediaHostId,
+                Dns = _settings.ServiceDnsName,
+                PublicIp = _settings.PublicIp
             };
 
             var payload = JsonSerializer.Serialize(status);

@@ -1,5 +1,5 @@
 const { Component, MqttClient, Model, logger } = require('live-srt-lib');
-const { resolveIntegrationConfig, getDecryptedCredentials } = require('live-srt-lib');
+const { getPlatformConfig, getDecryptedCredentials } = require('live-srt-lib');
 const express = require('express');
 require('dotenv/config');
 require('isomorphic-fetch');
@@ -126,12 +126,12 @@ class WebhookServer extends Component {
 
   async getGraphClientForSubscription(subscription) {
     try {
-      const result = await resolveIntegrationConfig(subscription.organizationId, 'teams');
-      if (result && result.config) {
-        return this.getGraphClient(result.config.id);
+      const config = await getPlatformConfig('teams');
+      if (config) {
+        return this.getGraphClient(config.id);
       }
     } catch (err) {
-      logger.warn(`Failed to resolve integration config for org ${subscription.organizationId}: ${err.message}`);
+      logger.warn(`Failed to resolve platform integration config: ${err.message}`);
     }
     return this.fallbackGraph;
   }

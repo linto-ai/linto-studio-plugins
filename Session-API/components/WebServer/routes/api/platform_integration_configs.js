@@ -175,6 +175,18 @@ module.exports = (webserver) => {
                 }
 
                 const result = await validateAzureCredentials(config);
+
+                if (result.valid) {
+                    try {
+                        const currentProgress = config.setupProgress || {};
+                        await config.update({
+                            setupProgress: { ...currentProgress, credentialsValidatedAt: new Date().toISOString() }
+                        });
+                    } catch (persistErr) {
+                        console.error('Failed to persist credentialsValidatedAt:', persistErr);
+                    }
+                }
+
                 res.json(result);
             } catch (err) {
                 if (err.statusCode) {
@@ -190,18 +202,6 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             const { provider } = req.params;
             try {
-                // Count orgs with their own active config for this provider
-                const orgConfigs = await Model.IntegrationConfig.findAll({
-                    where: {
-                        scope: 'organization',
-                        provider,
-                        status: { [Model.Op.ne]: 'disabled' }
-                    },
-                    attributes: ['organizationId']
-                });
-
-                const orgIds = orgConfigs.map(c => c.organizationId);
-
                 // Check if platform config exists
                 const platformConfig = await Model.IntegrationConfig.findOne({
                     where: {
@@ -214,9 +214,7 @@ module.exports = (webserver) => {
                 res.json({
                     provider,
                     platformConfigExists: !!platformConfig,
-                    platformConfigId: platformConfig?.id || null,
-                    organizationsWithOwnConfig: orgIds.length,
-                    organizationIds: orgIds
+                    platformConfigId: platformConfig?.id || null
                 });
             } catch (err) {
                 next(err);

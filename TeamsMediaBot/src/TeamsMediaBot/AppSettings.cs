@@ -170,6 +170,12 @@ namespace TeamsMediaBot
         /// Published in MQTT status so the Scheduler can route bot commands to the correct host.
         /// </summary>
         public string? MediaHostId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the public IP address of this media host.
+        /// Published in MQTT status for auto-registration.
+        /// </summary>
+        public string? PublicIp { get; set; }
     }
 }
 

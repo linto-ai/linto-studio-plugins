@@ -19,6 +19,10 @@ module.exports = function () {
         await this.deleteCalendarSubscription(subscriptionId);
     });
 
+    this.app.components['WebServer'].on('refreshCalendarSubscription', async (subscriptionId) => {
+        this.client.publish(`calendar-subscription/refresh/${subscriptionId}`, { subscriptionId }, 1, false, true);
+    });
+
     this.app.components['WebServer'].on('mediaHostRegistered', async (integrationConfigId) => {
         await this.publishMediaHostRegistered(integrationConfigId);
     });

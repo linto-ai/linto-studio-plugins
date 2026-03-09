@@ -1,4 +1,5 @@
-const { MqttClient, Component, Model, logger, Utils, resolveIntegrationConfig } = require('live-srt-lib')
+const crypto = require('crypto')
+const { MqttClient, Component, Model, logger, Utils, getPlatformConfig } = require('live-srt-lib')
 
 class BrokerClient extends Component {
 
@@ -363,7 +364,7 @@ class BrokerClient extends Component {
 
   // Handle BotService status updates
   async updateBotServiceStatus(botServiceStatus) {
-    const { uniqueId, activeBots, timestamp, capabilities = [], mediaHostId = null } = botServiceStatus;
+    const { uniqueId, activeBots, timestamp, capabilities = [], mediaHostId = null, dns = null, publicIp = null } = botServiceStatus;
 
     const previousService = this.botservices.get(uniqueId);
     const isNewService = !previousService;
@@ -376,6 +377,8 @@ class BrokerClient extends Component {
       capabilities,
       timestamp,
       mediaHostId,
+      dns,
+      publicIp,
       lastSeen: Date.now()
     });
 
@@ -404,35 +407,67 @@ class BrokerClient extends Component {
       logger.info(`BotService ${uniqueId} now has ${activeBots} active bots`);
     }
 
-    // When a new BotService with a mediaHostId arrives, set the MediaHost online
-    if (isNewService && mediaHostId) {
-      await this.onMediaHostBotOnline(mediaHostId);
+    // When a new Teams BotService arrives, auto-register or set MediaHost online
+    if (isNewService && capabilities.includes('teams')) {
+      let effectiveMediaHostId = mediaHostId;
+      if (!effectiveMediaHostId) {
+        // Use dns (ServiceDnsName) as stable identifier — constant per machine across restarts
+        effectiveMediaHostId = dns || crypto.randomUUID();
+        logger.info(`BotService ${uniqueId} has no mediaHostId, using: ${effectiveMediaHostId}`);
+      }
+      // Update the stored entry with effective ID
+      const entry = this.botservices.get(uniqueId);
+      entry.mediaHostId = effectiveMediaHostId;
+      await this.onMediaHostBotOnline(effectiveMediaHostId, botServiceStatus);
     }
   }
 
-  // A BotService with a mediaHostId has come online — update MediaHost status
-  async onMediaHostBotOnline(mediaHostId) {
+  // A BotService has come online — update or auto-create MediaHost
+  async onMediaHostBotOnline(mediaHostId, botServiceStatus = {}) {
     try {
-      const mediaHost = await Model.MediaHost.findByPk(mediaHostId);
+      let mediaHost = await Model.MediaHost.findByPk(mediaHostId);
+
       if (!mediaHost) {
-        logger.warn(`onMediaHostBotOnline: MediaHost ${mediaHostId} not found`);
+        // Auto-registration
+        const platformConfig = await getPlatformConfig('teams');
+        if (!platformConfig) {
+          logger.warn(`Cannot auto-register MediaHost ${mediaHostId}: no platform config 'teams'`);
+          return;
+        }
+        mediaHost = await Model.MediaHost.create({
+          id: mediaHostId,
+          integrationConfigId: platformConfig.id,
+          status: 'online',
+          deploymentMode: 'auto-registered',
+          dns: botServiceStatus.dns || null,
+          publicIp: botServiceStatus.publicIp || null,
+        });
+        logger.info(`MediaHost ${mediaHostId} auto-registered (config: ${platformConfig.id})`);
+        // Mark setupProgress
+        const sp = platformConfig.setupProgress || {};
+        if (!sp.mediaHost) {
+          await platformConfig.update({ setupProgress: { ...sp, mediaHost: true } });
+        }
         return;
       }
 
+      // Existing host: transition provisioned/offline → online
       if (mediaHost.status === 'provisioned' || mediaHost.status === 'offline') {
         await mediaHost.update({ status: 'online' });
         logger.info(`MediaHost ${mediaHostId} is now online (was ${mediaHost.status})`);
       }
+      // Update dns/publicIp if provided and currently empty
+      const updates = {};
+      if (!mediaHost.dns && botServiceStatus.dns) updates.dns = botServiceStatus.dns;
+      if (!mediaHost.publicIp && botServiceStatus.publicIp) updates.publicIp = botServiceStatus.publicIp;
+      if (Object.keys(updates).length > 0) await mediaHost.update(updates);
 
       // Mark setupProgress.mediaHost on the parent IntegrationConfig
-      const integrationConfig = await Model.IntegrationConfig.findByPk(mediaHost.integrationConfigId);
-      if (integrationConfig) {
-        const setupProgress = integrationConfig.setupProgress || {};
-        if (!setupProgress.mediaHost) {
-          await integrationConfig.update({
-            setupProgress: { ...setupProgress, mediaHost: true }
-          });
-          logger.info(`IntegrationConfig ${integrationConfig.id} setupProgress.mediaHost set to true`);
+      const ic = await Model.IntegrationConfig.findByPk(mediaHost.integrationConfigId);
+      if (ic) {
+        const sp = ic.setupProgress || {};
+        if (!sp.mediaHost) {
+          await ic.update({ setupProgress: { ...sp, mediaHost: true } });
         }
       }
     } catch (err) {
@@ -459,60 +494,15 @@ class BrokerClient extends Component {
     }
   }
 
-  // Select the least-loaded BotService. For Teams + organizationId, route to the org's MediaHosts.
+  // Select the least-loaded BotService with the required capability
   async selectBotService(provider, organizationId = null) {
-    if (this.botservices.size === 0) {
-      return null;
-    }
-
-    // Filter services that have the required capability
+    if (this.botservices.size === 0) return null;
     const validServices = Array.from(this.botservices.values())
       .filter(service => service.capabilities && service.capabilities.includes(provider));
-
     if (validServices.length === 0) {
       logger.warn(`No BotService available with capability '${provider}'`);
       return null;
     }
-
-    // For Teams with an organizationId, apply multi-tenant routing
-    if (provider === 'teams' && organizationId) {
-      try {
-        const result = await resolveIntegrationConfig(organizationId, 'teams');
-        if (result && result.config) {
-          const mediaHosts = result.config.mediaHosts || [];
-          const onlineHostIds = mediaHosts
-            .filter(mh => mh.status === 'online')
-            .map(mh => mh.id);
-
-          if (onlineHostIds.length > 0) {
-            // Filter bots that belong to this org's MediaHosts
-            const tenantServices = validServices.filter(
-              service => service.mediaHostId && onlineHostIds.includes(service.mediaHostId)
-            );
-
-            if (tenantServices.length > 0) {
-              logger.info(`Multi-tenant routing: found ${tenantServices.length} BotService(s) for org ${organizationId} (mediaHosts: [${onlineHostIds.join(', ')}])`);
-              return this._selectLeastLoaded(tenantServices);
-            }
-
-            // Fallback: try legacy bots without mediaHostId
-            const legacyServices = validServices.filter(service => !service.mediaHostId);
-            if (legacyServices.length > 0) {
-              logger.warn(`Multi-tenant routing: no tenant-specific BotService for org ${organizationId}, falling back to ${legacyServices.length} legacy bot(s)`);
-              return this._selectLeastLoaded(legacyServices);
-            }
-
-            logger.warn(`Multi-tenant routing: no BotService available for org ${organizationId} mediaHosts [${onlineHostIds.join(', ')}]`);
-            return null;
-          }
-        }
-      } catch (err) {
-        logger.error(`Multi-tenant routing error for org ${organizationId}:`, err);
-        // Fall through to classic selection
-      }
-    }
-
-    // Classic selection: least-loaded among all valid services
     return this._selectLeastLoaded(validServices);
   }
 

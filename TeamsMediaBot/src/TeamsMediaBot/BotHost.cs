@@ -11,6 +11,7 @@
 // </copyright>
 // <summary></summary>
 // ***********************************************************************
+using System.Security.Cryptography.X509Certificates;
 using DotNetEnv.Configuration;
 using TeamsMediaBot.Bot;
 using TeamsMediaBot.Services.Certificate;
@@ -140,6 +141,7 @@ namespace TeamsMediaBot
             builder.WebHost.UseUrls(callListeningUris.ToArray());
 
             CertificateManager? certManager = null;
+            X509Certificate2? pfxCert = null;
             var isLetsEncrypt = string.Equals(appSettings.SslMode, "letsencrypt", StringComparison.OrdinalIgnoreCase);
 
             if (isLetsEncrypt)
@@ -153,6 +155,10 @@ namespace TeamsMediaBot
                         options.TimestampFormat = "HH:mm:ss ";
                         options.IncludeScopes = false;
                     });
+                    lb.AddFile(@"C:\linto-studio-plugins\logs\TeamsMediaBot-{Date}.log",
+                        minimumLevel: LogLevel.Information,
+                        retainedFileCountLimit: 7,
+                        outputTemplate: "{Timestamp:HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
                     lb.SetMinimumLevel(LogLevel.Information);
                 }).CreateLogger<CertificateManager>();
 
@@ -173,11 +179,12 @@ namespace TeamsMediaBot
             }
             else
             {
+                pfxCert = Utilities.GetCertificateFromStore(appSettings.CertificateThumbprint, _logger);
                 builder.WebHost.ConfigureKestrel(serverOptions =>
                 {
                     serverOptions.ConfigureHttpsDefaults(listenOptions =>
                     {
-                        listenOptions.ServerCertificate = Utilities.GetCertificateFromStore(appSettings.CertificateThumbprint, _logger);
+                        listenOptions.ServerCertificate = pfxCert;
                     });
                 });
             }
@@ -187,12 +194,19 @@ namespace TeamsMediaBot
             // Subscribe to certificate renewal for graceful restart
             if (isLetsEncrypt && certManager != null)
             {
-                certManager.CertificateRenewed += async (sender, args) =>
+                certManager.CertificateRenewed += (sender, args) =>
                 {
-                    _logger.LogWarning(
-                        "Certificate renewed (Old={OldThumbprint}, New={NewThumbprint}, Expiry={NewExpiry}). Initiating graceful restart...",
-                        args.OldThumbprint, args.NewThumbprint, args.NewExpiry.ToString("o"));
-                    await StopAsync();
+                    try
+                    {
+                        _logger.LogWarning(
+                            "Certificate renewed (Old={OldThumbprint}, New={NewThumbprint}, Expiry={NewExpiry}). Initiating graceful restart...",
+                            args.OldThumbprint, args.NewThumbprint, args.NewExpiry.ToString("o"));
+                        _ = StopAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error initiating graceful restart after certificate renewal");
+                    }
                 };
             }
 
@@ -210,18 +224,9 @@ namespace TeamsMediaBot
             {
                 mqttService.SetCertExpiry(certManager.CertificateExpiry);
             }
-            else
+            else if (pfxCert != null)
             {
-                // In pfx mode, read expiry from the loaded certificate
-                try
-                {
-                    var cert = Utilities.GetCertificateFromStore(appSettings.CertificateThumbprint);
-                    mqttService.SetCertExpiry(cert.NotAfter);
-                }
-                catch
-                {
-                    // Certificate info already logged during Kestrel setup
-                }
+                mqttService.SetCertExpiry(pfxCert.NotAfter);
             }
 
             // Configure the HTTP request pipeline.

@@ -12,8 +12,14 @@ namespace TeamsMediaBot.Services.Certificate
 
     public class CertificateRenewedEventArgs : EventArgs
     {
-        public required string OldThumbprint { get; init; }
-        public required string NewThumbprint { get; init; }
+        public CertificateRenewedEventArgs(string oldThumbprint, string newThumbprint)
+        {
+            OldThumbprint = oldThumbprint;
+            NewThumbprint = newThumbprint;
+        }
+
+        public string OldThumbprint { get; }
+        public string NewThumbprint { get; }
         public DateTime NewExpiry { get; init; }
     }
 }

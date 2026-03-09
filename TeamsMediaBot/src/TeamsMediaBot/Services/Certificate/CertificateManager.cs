@@ -23,7 +23,16 @@ namespace TeamsMediaBot.Services.Certificate
             _logger = logger;
             _settings = settings.Value;
             _currentThumbprint = _settings.CertificateThumbprint;
-            _currentCert = Utilities.GetCertificateFromStore(_currentThumbprint, _logger);
+            try
+            {
+                _currentCert = Utilities.GetCertificateFromStore(_currentThumbprint, _logger);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "CertificateManager: Could not load initial certificate (may be expired). " +
+                    "The background service will attempt renewal.");
+            }
         }
 
         public X509Certificate2? GetCurrentCertificate()
@@ -121,10 +130,8 @@ namespace TeamsMediaBot.Services.Certificate
 
             UpdateAppSettingsFile(newCert.Thumbprint);
 
-            CertificateRenewed?.Invoke(this, new CertificateRenewedEventArgs
+            CertificateRenewed?.Invoke(this, new CertificateRenewedEventArgs(oldThumbprint, newCert.Thumbprint)
             {
-                OldThumbprint = oldThumbprint,
-                NewThumbprint = newCert.Thumbprint,
                 NewExpiry = newCert.NotAfter
             });
         }
@@ -164,10 +171,8 @@ namespace TeamsMediaBot.Services.Certificate
 
                     UpdateAppSettingsFile(newCert.Thumbprint);
 
-                    CertificateRenewed?.Invoke(this, new CertificateRenewedEventArgs
+                    CertificateRenewed?.Invoke(this, new CertificateRenewedEventArgs(oldThumbprint, newCert.Thumbprint)
                     {
-                        OldThumbprint = oldThumbprint,
-                        NewThumbprint = newCert.Thumbprint,
                         NewExpiry = newCert.NotAfter
                     });
                 }
@@ -212,8 +217,11 @@ namespace TeamsMediaBot.Services.Certificate
                     return false;
                 }
 
-                var stdout = await process.StandardOutput.ReadToEndAsync(stoppingToken);
-                var stderr = await process.StandardError.ReadToEndAsync(stoppingToken);
+                var stdoutTask = process.StandardOutput.ReadToEndAsync();
+                var stderrTask = process.StandardError.ReadToEndAsync();
+                await Task.WhenAll(stdoutTask, stderrTask);
+                var stdout = stdoutTask.Result;
+                var stderr = stderrTask.Result;
                 await process.WaitForExitAsync(stoppingToken);
 
                 _logger.LogInformation("CertificateManager: win-acme exited with code {ExitCode}", process.ExitCode);

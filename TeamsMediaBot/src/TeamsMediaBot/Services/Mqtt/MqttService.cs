@@ -20,6 +20,7 @@ namespace TeamsMediaBot.Services.Mqtt
         private readonly string _uniqueId;
         private readonly string _pubRoot;
         private int _activeBots;
+        private DateTime? _certExpiry;
         private bool _disposed;
         private readonly SemaphoreSlim _reconnectLock = new(1, 1);
 
@@ -200,7 +201,8 @@ namespace TeamsMediaBot.Services.Mqtt
                 On = DateTime.UtcNow.ToString("o"),
                 MediaHostId = _settings.MediaHostId,
                 Dns = _settings.ServiceDnsName,
-                PublicIp = _settings.PublicIp
+                PublicIp = _settings.PublicIp,
+                CertExpiry = _certExpiry?.ToString("o")
             };
 
             var payload = JsonSerializer.Serialize(status);
@@ -368,6 +370,12 @@ namespace TeamsMediaBot.Services.Mqtt
             {
                 _logger.LogError(ex, "[TeamsMediaBot] Failed to publish session unmapping for session {SessionId}", sessionId);
             }
+        }
+
+        /// <inheritdoc/>
+        public void SetCertExpiry(DateTime? expiry)
+        {
+            _certExpiry = expiry;
         }
 
         private async Task SubscribeToCommandsAsync()

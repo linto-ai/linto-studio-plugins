@@ -51,5 +51,8 @@ namespace TeamsMediaBot.Models.Mqtt
 
         [JsonPropertyName("publicIp")]
         public string? PublicIp { get; set; }
+
+        [JsonPropertyName("certExpiry")]
+        public string? CertExpiry { get; set; }
     }
 }

@@ -13,6 +13,7 @@
 // ***********************************************************************
 using Microsoft.AspNetCore.Mvc;
 using System.Net;
+using TeamsMediaBot.Services.Certificate;
 
 namespace TeamsMediaBot.Controllers
 {
@@ -22,10 +23,12 @@ namespace TeamsMediaBot.Controllers
     public class HealthController : ControllerBase
     {
         private readonly ILogger<HealthController> _logger;
+        private readonly ICertificateManager? _certManager;
 
-        public HealthController(ILogger<HealthController> logger)
+        public HealthController(ILogger<HealthController> logger, ICertificateManager? certManager = null)
         {
             _logger = logger;
+            _certManager = certManager;
         }
 
         /// <summary>
@@ -38,7 +41,12 @@ namespace TeamsMediaBot.Controllers
             try
             {
                 _logger.LogInformation("HEALTH CALL");
-                return Ok();
+                return Ok(new
+                {
+                    status = "ok",
+                    certExpiry = _certManager?.CertificateExpiry?.ToString("o"),
+                    certThumbprint = _certManager?.CurrentThumbprint
+                });
             }
             catch (Exception e)
             {

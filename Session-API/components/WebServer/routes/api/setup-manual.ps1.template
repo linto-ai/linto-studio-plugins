@@ -90,7 +90,7 @@ try {
         Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation Cert:\LocalMachine\My -Password $pfxPassword
     } else {
         Write-Host "Requesting SSL certificate via Let''s Encrypt (win-acme)..."
-        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --accepttos --emailaddress "admin@$Fqdn"
+        & "C:\win-acme\wacs.exe" --target manual --host $Fqdn --validation selfhosting --store certificatestore --certificatestore My --accepttos --emailaddress "admin@$Fqdn" --notaskscheduler
     }
 
     $cert = Get-ChildItem -Path Cert:\LocalMachine\My | Where-Object { $_.Subject -match $Fqdn } | Select-Object -First 1
@@ -146,6 +146,8 @@ MEDIA_HOST_ID=$MediaHostId
             BotInstanceExternalPort = 443
             MediaInternalPort = 8445
             MediaInstanceExternalPort = 22210
+            SslMode = $SslMode
+            WinAcmePath = "C:\win-acme\wacs.exe"
         }
         Bot = @{
             Fqdn = $Fqdn

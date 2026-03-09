@@ -83,5 +83,11 @@ namespace TeamsMediaBot.Services.Mqtt
         /// <param name="sessionId">The session ID to unmap.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         Task PublishSessionUnmappingAsync(string sessionId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Sets the certificate expiry date to be included in status payloads.
+        /// </summary>
+        /// <param name="expiry">The certificate expiry date, or null if unknown.</param>
+        void SetCertExpiry(DateTime? expiry);
     }
 }

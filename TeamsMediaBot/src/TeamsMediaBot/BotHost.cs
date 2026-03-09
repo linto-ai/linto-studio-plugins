@@ -13,6 +13,7 @@
 // ***********************************************************************
 using DotNetEnv.Configuration;
 using TeamsMediaBot.Bot;
+using TeamsMediaBot.Services.Certificate;
 using TeamsMediaBot.Services.Mqtt;
 using TeamsMediaBot.Services.Orchestration;
 using TeamsMediaBot.Util;
@@ -138,15 +139,62 @@ namespace TeamsMediaBot
 
             builder.WebHost.UseUrls(callListeningUris.ToArray());
 
-            builder.WebHost.ConfigureKestrel(serverOptions =>
+            CertificateManager? certManager = null;
+            var isLetsEncrypt = string.Equals(appSettings.SslMode, "letsencrypt", StringComparison.OrdinalIgnoreCase);
+
+            if (isLetsEncrypt)
             {
-                serverOptions.ConfigureHttpsDefaults(listenOptions =>
+                // Pre-create CertificateManager so it can be used as ServerCertificateSelector
+                var certManagerLogger = LoggerFactory.Create(lb =>
                 {
-                    listenOptions.ServerCertificate = Utilities.GetCertificateFromStore(appSettings.CertificateThumbprint);
+                    lb.AddSimpleConsole(options =>
+                    {
+                        options.SingleLine = true;
+                        options.TimestampFormat = "HH:mm:ss ";
+                        options.IncludeScopes = false;
+                    });
+                    lb.SetMinimumLevel(LogLevel.Information);
+                }).CreateLogger<CertificateManager>();
+
+                certManager = new CertificateManager(
+                    certManagerLogger,
+                    Microsoft.Extensions.Options.Options.Create(appSettings));
+
+                builder.Services.AddSingleton<ICertificateManager>(certManager);
+                builder.Services.AddHostedService(sp => (CertificateManager)sp.GetRequiredService<ICertificateManager>());
+
+                builder.WebHost.ConfigureKestrel(serverOptions =>
+                {
+                    serverOptions.ConfigureHttpsDefaults(listenOptions =>
+                    {
+                        listenOptions.ServerCertificateSelector = (ctx, name) => certManager.GetCurrentCertificate();
+                    });
                 });
-            });
+            }
+            else
+            {
+                builder.WebHost.ConfigureKestrel(serverOptions =>
+                {
+                    serverOptions.ConfigureHttpsDefaults(listenOptions =>
+                    {
+                        listenOptions.ServerCertificate = Utilities.GetCertificateFromStore(appSettings.CertificateThumbprint, _logger);
+                    });
+                });
+            }
 
             _app = builder.Build();
+
+            // Subscribe to certificate renewal for graceful restart
+            if (isLetsEncrypt && certManager != null)
+            {
+                certManager.CertificateRenewed += async (sender, args) =>
+                {
+                    _logger.LogWarning(
+                        "Certificate renewed (Old={OldThumbprint}, New={NewThumbprint}, Expiry={NewExpiry}). Initiating graceful restart...",
+                        args.OldThumbprint, args.NewThumbprint, args.NewExpiry.ToString("o"));
+                    await StopAsync();
+                };
+            }
 
             // Get singleton services and store references for shutdown
             _botService = _app.Services.GetRequiredService<IBotService>();
@@ -155,6 +203,26 @@ namespace TeamsMediaBot
             // Initialize the bot orchestrator (MQTT connection and command handling)
             _orchestrator = _app.Services.GetRequiredService<IBotOrchestratorService>();
             await _orchestrator.InitializeAsync();
+
+            // Publish certificate expiry in MQTT status
+            var mqttService = _app.Services.GetRequiredService<IMqttService>();
+            if (isLetsEncrypt && certManager != null)
+            {
+                mqttService.SetCertExpiry(certManager.CertificateExpiry);
+            }
+            else
+            {
+                // In pfx mode, read expiry from the loaded certificate
+                try
+                {
+                    var cert = Utilities.GetCertificateFromStore(appSettings.CertificateThumbprint);
+                    mqttService.SetCertExpiry(cert.NotAfter);
+                }
+                catch
+                {
+                    // Certificate info already logged during Kestrel setup
+                }
+            }
 
             // Configure the HTTP request pipeline.
             if (_app.Environment.IsDevelopment())

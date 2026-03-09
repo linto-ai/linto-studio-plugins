@@ -176,6 +176,26 @@ namespace TeamsMediaBot
         /// Published in MQTT status for auto-registration.
         /// </summary>
         public string? PublicIp { get; set; }
+
+        /// <summary>
+        /// SSL mode: "letsencrypt" for auto-renewal via win-acme, "pfx" for manual management.
+        /// </summary>
+        public string SslMode { get; set; } = "pfx";
+
+        /// <summary>
+        /// Path to win-acme (wacs.exe) executable. Only used when SslMode is "letsencrypt".
+        /// </summary>
+        public string WinAcmePath { get; set; } = @"C:\win-acme\wacs.exe";
+
+        /// <summary>
+        /// Interval in hours between certificate expiration checks. Only used when SslMode is "letsencrypt".
+        /// </summary>
+        public int CertRenewalCheckIntervalHours { get; set; } = 12;
+
+        /// <summary>
+        /// Days before expiration to trigger renewal. Only used when SslMode is "letsencrypt".
+        /// </summary>
+        public int CertRenewalThresholdDays { get; set; } = 30;
     }
 }
 

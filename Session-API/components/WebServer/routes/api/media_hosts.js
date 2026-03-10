@@ -24,8 +24,7 @@ function generateSetupScript(fqdn, sslMode, pfxPath, config) {
         .replace(/\{\{TENANT_ID\}\}/g, config.tenantId || '')
         .replace(/\{\{CLIENT_ID\}\}/g, config.clientId || '')
         .replace(/\{\{CLIENT_SECRET\}\}/g, config.clientSecret || '')
-        .replace(/\{\{PACKAGE_URL\}\}/g, config.packageUrl || '')
-        .replace(/\{\{PACKAGE_SHA256\}\}/g, config.packageSha256 || '');
+        .replace(/\{\{PACKAGE_URL\}\}/g, config.packageUrl || '');
 }
 
 module.exports = (webserver) => {
@@ -314,8 +313,7 @@ module.exports = (webserver) => {
                         tenantId: decryptedConfig.tenantId || '',
                         clientId: decryptedConfig.clientId || '',
                         clientSecret: decryptedConfig.clientSecret || '',
-                        packageUrl: process.env.TEAMS_MEDIA_BOT_PACKAGE_URL || '',
-                        packageSha256: process.env.TEAMS_MEDIA_BOT_PACKAGE_SHA256 || ''
+                        packageUrl: process.env.TEAMS_MEDIA_BOT_PACKAGE_URL || ''
                     }
                 );
 
@@ -359,11 +357,6 @@ module.exports = (webserver) => {
                 const packageUrl = process.env.TEAMS_MEDIA_BOT_PACKAGE_URL;
                 if (!packageUrl) {
                     return res.status(404).json({ error: 'Package not configured (TEAMS_MEDIA_BOT_PACKAGE_URL not set)' });
-                }
-
-                const packageSha256 = process.env.TEAMS_MEDIA_BOT_PACKAGE_SHA256 || '';
-                if (packageSha256) {
-                    res.setHeader('X-Package-SHA256', packageSha256);
                 }
 
                 if (packageUrl.startsWith('/') || packageUrl.match(/^[a-zA-Z]:\\/)) {

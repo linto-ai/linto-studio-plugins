@@ -106,9 +106,8 @@ Set these on the Session-API container/service:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `TEAMS_MEDIA_BOT_PACKAGE_URL` | URL or local path to the ZIP archive | `https://github.com/.../TeamsMediaBot-v1.0.0-win-x64.zip` |
-| `TEAMS_MEDIA_BOT_PACKAGE_SHA256` | SHA256 hash of the ZIP | `a1b2c3d4...` |
 
-These values are injected into the generated `setup-manual.ps1` script and also used by the `GET /integration-configs/:id/media-host-package` endpoint.
+This value is injected into the generated `setup-manual.ps1` script. The SHA256 checksum is automatically downloaded from `<PackageUrl>.sha256` at install time (the CI uploads this companion file alongside the ZIP).
 
 ## CI Integration
 
@@ -172,7 +171,7 @@ For integration with the existing Jenkinsfile:
 1. Extract the version from `RELEASE.md` (same pattern as `linto-deploy`)
 2. Use a Windows agent or a Windows Docker container for the build
 3. Publish the artifact to the configured storage (GitHub Releases, Azure Blob, or a mounted volume)
-4. Update `TEAMS_MEDIA_BOT_PACKAGE_URL` and `TEAMS_MEDIA_BOT_PACKAGE_SHA256` in the deployment configuration
+4. Update `TEAMS_MEDIA_BOT_PACKAGE_URL` in the deployment configuration (SHA256 is verified automatically from the companion `.sha256` file)
 
 ```groovy
 stage('Build TeamsMediaBot') {

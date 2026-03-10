@@ -109,7 +109,7 @@ jobs:
           # Update release metadata
           gh release edit $tag `
             --title "TeamsMediaBot - Dev Build ($tag)" `
-            --notes "## TeamsMediaBot Dev Build`n`nCommit: ``${{ github.sha }}```n`n**SHA256**: ``${{ env.PACKAGE_SHA256 }}```n`n### Configuration Session-API`n``````n TEAMS_MEDIA_BOT_PACKAGE_SHA256=${{ env.PACKAGE_SHA256 }}`n``````" `
+            --notes "## TeamsMediaBot Dev Build`n`nCommit: ``${{ github.sha }}```n`n**SHA256**: ``${{ env.PACKAGE_SHA256 }}``" `
             --prerelease
 
       - name: Create GitHub Release
@@ -123,8 +123,3 @@ jobs:
             ## TeamsMediaBot ${{ env.VERSION }}
 
             **SHA256**: `${{ env.PACKAGE_SHA256 }}`
-
-            ### Configuration Session-API
-            ```
-            TEAMS_MEDIA_BOT_PACKAGE_SHA256=${{ env.PACKAGE_SHA256 }}
-            ```

@@ -7,7 +7,6 @@ param(
     [string]$SslMode = "{{SSL_MODE}}",
     [string]$PfxPath = "{{PFX_PATH}}",
     [string]$PackageUrl = "{{PACKAGE_URL}}",
-    [string]$ExpectedSha256 = "{{PACKAGE_SHA256}}",
     [string]$MqttHost = "{{MQTT_HOST}}",
     [string]$MqttPort = "{{MQTT_PORT}}",
     [string]$MqttUsername = "{{MQTT_USERNAME}}",
@@ -68,10 +67,18 @@ try {
     # ── Step 4: Verify SHA256 ────────────────────────────────────────────────
     Write-Host "Step 4: Verifying SHA256 checksum..."
     $actualHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
-    if ($ExpectedSha256 -and ($actualHash -ne $ExpectedSha256)) {
-        throw "SHA256 mismatch! Expected: $ExpectedSha256, Got: $actualHash"
+    $sha256Url = "$PackageUrl.sha256"
+    try {
+        Write-Host "Downloading expected SHA256 from $sha256Url..."
+        $ExpectedSha256 = (Invoke-WebRequest -Uri $sha256Url -UseBasicParsing).Content.Trim()
+        if ($actualHash -ne $ExpectedSha256) {
+            throw "SHA256 mismatch! Expected: $ExpectedSha256, Got: $actualHash"
+        }
+        Write-Host "SHA256 verified: $actualHash"
+    } catch [System.Net.WebException] {
+        Write-Warning "Could not download SHA256 file from $sha256Url, skipping verification."
+        Write-Host "Actual SHA256: $actualHash"
     }
-    Write-Host "SHA256 verified: $actualHash"
 
     # ── Step 5: Extract package ──────────────────────────────────────────────
     Write-Host "Step 5: Extracting package to $basePath..."

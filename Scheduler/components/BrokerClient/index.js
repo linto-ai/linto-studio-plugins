@@ -428,7 +428,8 @@ class BrokerClient extends Component {
             as: 'transcriberProfile' // Use the correct alias as defined in your association
           }]
         }
-      ]
+      ],
+      order: [[Model.Channel, 'id', 'ASC']]
     });
     logger.debug('Publishing all ACTIVE and READY sessions on broker: ', sessions.length);
     // Publish the sessions to the broker

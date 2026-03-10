@@ -121,8 +121,14 @@ class StreamingServer extends Component {
         const asr = new ASR(session, channel);
         asr.on('partial', (transcription) => {
           let subtitle = transcription.text;
-          if (subSource && transcription.translations && subSource in transcription.translations) {
+          if (subSource && transcription.translations) {
             subtitle = transcription.translations[subSource];
+            if (subtitle === undefined) {
+              const shortSource = subSource.split('-')[0];
+              const matchingKey = Object.keys(transcription.translations)
+                .find(k => k.split('-')[0] === shortSource);
+              if (matchingKey) subtitle = transcription.translations[matchingKey];
+            }
           }
 
           if (enableDisplaySub) {
@@ -133,8 +139,14 @@ class StreamingServer extends Component {
         });
         asr.on('final', (transcription) => {
           let subtitle = transcription.text;
-          if (subSource && transcription.translations && subSource in transcription.translations) {
+          if (subSource && transcription.translations) {
             subtitle = transcription.translations[subSource];
+            if (subtitle === undefined) {
+              const shortSource = subSource.split('-')[0];
+              const matchingKey = Object.keys(transcription.translations)
+                .find(k => k.split('-')[0] === shortSource);
+              if (matchingKey) subtitle = transcription.translations[matchingKey];
+            }
           }
 
           if (enableDisplaySub) {
@@ -170,7 +182,8 @@ class StreamingServer extends Component {
             if (topic !== translationTopic) return
             try {
               const translation = JSON.parse(message.toString())
-              if (translation.targetLang === subSource) {
+              if (translation.targetLang === subSource ||
+                  translation.targetLang.split('-')[0] === subSource.split('-')[0]) {
                 bot.updateCaptions(translation.text, true)
               }
             } catch (err) {

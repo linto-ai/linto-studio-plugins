@@ -33,6 +33,11 @@ function validateTranslations(translations) {
     });
 }
 
+function languageMatches(requested, available) {
+    if (requested === available) return true;
+    return requested.split('-')[0] === available.split('-')[0];
+}
+
 // Enrich translations with correct mode/translator based on profile capabilities and online translators
 async function enrichTranslations(validatedTranslations, transcriberProfile) {
     if (!validatedTranslations || validatedTranslations.length === 0) return validatedTranslations;
@@ -50,10 +55,10 @@ async function enrichTranslations(validatedTranslations, transcriberProfile) {
         // If already tagged as external, keep it
         if (entry.mode === 'external') return entry;
         // If the profile supports discrete for this language, keep as discrete
-        if (discreteLangs.has(entry.target)) return entry;
+        if ([...discreteLangs].some(lang => languageMatches(entry.target, lang))) return entry;
         // Otherwise, find an external translator that supports it
         for (const translator of onlineTranslators) {
-            if (translator.languages && translator.languages.includes(entry.target)) {
+            if (translator.languages && translator.languages.some(lang => languageMatches(entry.target, lang))) {
                 return { target: entry.target, mode: 'external', translator: translator.name };
             }
         }

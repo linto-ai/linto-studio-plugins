@@ -193,11 +193,24 @@ class MicrosoftTranscriber extends EventEmitter {
         );
     }
 
+    getOriginalTargetLanguages() {
+        const { translations } = this.channel;
+        if (!translations || !translations.length) return;
+        const discreteTranslations = translations.filter(entry =>
+            typeof entry === 'object' ? entry.mode === 'discrete' : true
+        );
+        if (!discreteTranslations.length) return;
+        return discreteTranslations.map(entry =>
+            typeof entry === 'object' ? entry.target : entry
+        );
+    }
+
     formatResult(result) {
         let translations = {};
         const targetLanguages = this.getTargetLanguages();
         if (result.translations && targetLanguages) {
-            translations = Object.fromEntries(targetLanguages.map((key, i) => [key, result.translations.get(key)]));
+            const originalKeys = this.getOriginalTargetLanguages();
+            translations = Object.fromEntries(targetLanguages.map((azureKey, i) => [originalKeys[i], result.translations.get(azureKey)]));
         }
         const lang = result.language ? result.language : this.channel.transcriberProfile.config.languages[0].candidate;
         return {

@@ -27,11 +27,11 @@ module.exports = (webserver) => {
                 const sessionTemplate = await Model.SessionTemplate.findByPk(req.params.id, {
                     include: {
                         model: Model.ChannelTemplate,
-                        order: [['id', 'ASC']],
                         attributes: {
                             exclude: ['sessionTemplateId']
                         }
-                    }
+                    },
+                    order: [[Model.ChannelTemplate, 'id', 'ASC']]
                 });
                 if (!sessionTemplate) {
                     return res.status(404).send('Session template not found');
@@ -83,10 +83,10 @@ module.exports = (webserver) => {
                         model: Model.ChannelTemplate,
                         attributes: {
                             exclude: ['sessionTemplateId']
-                        },
-                        order: [['id', 'ASC']]
+                        }
                     },
-                    where: where
+                    where: where,
+                    order: [[Model.ChannelTemplate, 'id', 'ASC']]
                 });
 
                 res.json({
@@ -149,11 +149,11 @@ module.exports = (webserver) => {
                 res.json(await Model.SessionTemplate.findByPk(sessionTemplate.id, {
                     include: {
                         model: Model.ChannelTemplate,
-                        order: [['id', 'ASC']],
                         attributes: {
                             exclude: ['sessionTemplateId']
                         }
-                    }
+                    },
+                    order: [[Model.ChannelTemplate, 'id', 'ASC']]
                 }));
             } catch (err) {
                 logger.debug(err);
@@ -225,11 +225,11 @@ module.exports = (webserver) => {
                 res.json(await Model.SessionTemplate.findByPk(sessionTemplate.id, {
                     include: {
                         model: Model.ChannelTemplate,
-                        order: [['id', 'ASC']],
                         attributes: {
                             exclude: ['sessionTemplateId']
                         }
-                    }
+                    },
+                    order: [[Model.ChannelTemplate, 'id', 'ASC']]
                 }));
             } catch (err) {
                 logger.debug(err);

@@ -1,10 +1,10 @@
 const { Model, logger, Security } = require("live-srt-lib");
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
+const tags = require('language-tags');
 
 function isValidLocale(locale) {
-    const pattern = /^[a-z]{2}-[A-Z]{2}$/;
-    return pattern.test(locale);
+    return tags.check(locale);
 }
 
 const validateTranscriberProfile = (body, update=false) => {

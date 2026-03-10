@@ -7,6 +7,7 @@ namespace TeamsMediaBot.Services.Certificate
         DateTime? CertificateExpiry { get; }
         string CurrentThumbprint { get; }
         X509Certificate2? GetCurrentCertificate();
+        Task EnsureValidCertificateAsync(CancellationToken stoppingToken = default);
         event EventHandler<CertificateRenewedEventArgs>? CertificateRenewed;
     }
 

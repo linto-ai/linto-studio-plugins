@@ -166,6 +166,21 @@ namespace TeamsMediaBot
                     certManagerLogger,
                     Microsoft.Extensions.Options.Options.Create(appSettings));
 
+                // If certificate is expired/missing, renew before startup to avoid deadlock
+                // (BotService.Initialize hangs on expired cert, blocking ExecuteAsync from ever starting)
+                await certManager.EnsureValidCertificateAsync();
+                if (certManager.GetCurrentCertificate() != null &&
+                    !string.Equals(certManager.CurrentThumbprint, appSettings.CertificateThumbprint, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("Updating CertificateThumbprint in settings: {OldThumbprint} -> {NewThumbprint}",
+                        appSettings.CertificateThumbprint, certManager.CurrentThumbprint);
+                    appSettings.CertificateThumbprint = certManager.CurrentThumbprint;
+                    builder.Services.PostConfigure<AppSettings>(options =>
+                    {
+                        options.CertificateThumbprint = certManager.CurrentThumbprint;
+                    });
+                }
+
                 builder.Services.AddSingleton<ICertificateManager>(certManager);
                 builder.Services.AddHostedService(sp => (CertificateManager)sp.GetRequiredService<ICertificateManager>());
 

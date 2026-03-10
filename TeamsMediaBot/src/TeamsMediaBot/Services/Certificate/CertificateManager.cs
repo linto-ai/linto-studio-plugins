@@ -40,6 +40,25 @@ namespace TeamsMediaBot.Services.Certificate
             return _currentCert;
         }
 
+        /// <summary>
+        /// Ensures a valid certificate is available, running renewal if needed.
+        /// Called before app startup to avoid deadlock when cert is expired.
+        /// </summary>
+        public async Task EnsureValidCertificateAsync(CancellationToken stoppingToken = default)
+        {
+            if (_currentCert != null && _currentCert.NotAfter > DateTime.UtcNow)
+                return;
+
+            if (!string.Equals(_settings.SslMode, "letsencrypt", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("CertificateManager: Certificate is invalid but SslMode is not letsencrypt, cannot auto-renew");
+                return;
+            }
+
+            _logger.LogWarning("CertificateManager: Certificate is missing or expired, attempting immediate renewal before startup");
+            await CheckAndRenewAsync(stoppingToken);
+        }
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             if (!string.Equals(_settings.SslMode, "letsencrypt", StringComparison.OrdinalIgnoreCase))
@@ -83,21 +102,22 @@ namespace TeamsMediaBot.Services.Certificate
 
             if (_currentCert == null)
             {
-                _logger.LogWarning("CertificateManager: No current certificate available");
-                return;
+                _logger.LogWarning("CertificateManager: No current certificate available, attempting renewal");
             }
+            else
+            {
+                var daysUntilExpiry = (_currentCert.NotAfter - DateTime.UtcNow).TotalDays;
+                _logger.LogInformation(
+                    "CertificateManager: Certificate {Thumbprint} expires in {Days:F1} days",
+                    _currentThumbprint, daysUntilExpiry);
 
-            var daysUntilExpiry = (_currentCert.NotAfter - DateTime.UtcNow).TotalDays;
-            _logger.LogInformation(
-                "CertificateManager: Certificate {Thumbprint} expires in {Days:F1} days",
-                _currentThumbprint, daysUntilExpiry);
+                if (daysUntilExpiry > _settings.CertRenewalThresholdDays)
+                    return;
 
-            if (daysUntilExpiry > _settings.CertRenewalThresholdDays)
-                return;
-
-            _logger.LogWarning(
-                "CertificateManager: Certificate expires in {Days:F1} days (threshold: {Threshold}), attempting renewal",
-                daysUntilExpiry, _settings.CertRenewalThresholdDays);
+                _logger.LogWarning(
+                    "CertificateManager: Certificate expires in {Days:F1} days (threshold: {Threshold}), attempting renewal",
+                    daysUntilExpiry, _settings.CertRenewalThresholdDays);
+            }
 
             var success = await RunWinAcmeRenewalAsync(stoppingToken);
             if (!success)

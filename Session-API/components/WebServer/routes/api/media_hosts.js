@@ -100,6 +100,33 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        // PUT /media-hosts/:id — Update a MediaHost configuration
+        path: '/media-hosts/:id',
+        method: 'put',
+        controller: async (req, res, next) => {
+            const { id } = req.params;
+            try {
+                const mediaHost = await Model.MediaHost.findByPk(id);
+                if (!mediaHost) {
+                    return res.status(404).json({ error: 'Media host not found' });
+                }
+                if (mediaHost.status === 'decommissioned') {
+                    return res.status(400).json({ error: 'Cannot update a decommissioned media host' });
+                }
+                const allowedFields = ['dns', 'publicIp', 'manualConfig'];
+                const updates = {};
+                for (const field of allowedFields) {
+                    if (req.body[field] !== undefined) {
+                        updates[field] = req.body[field];
+                    }
+                }
+                await mediaHost.update(updates);
+                res.json(mediaHost.toJSON());
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
         // DELETE /media-hosts/:id — Decommission (status → 'decommissioned')
         path: '/media-hosts/:id',
         method: 'delete',
@@ -292,7 +319,11 @@ module.exports = (webserver) => {
                 // Consume provisioning token and set status to provisioned
                 // Note: setupProgress.mediaHost is NOT set here — it will be set when the
                 // TeamsMediaBot actually connects via MQTT (detected by the Scheduler)
-                await mediaHost.update({ provisioningToken: null, status: 'provisioned' });
+                const statusUpdate = { provisioningToken: null };
+                if (mediaHost.status === 'provisioning') {
+                    statusUpdate.status = 'provisioned';
+                }
+                await mediaHost.update(statusUpdate);
 
                 res.setHeader('Content-Type', 'text/plain');
                 res.setHeader('Content-Disposition', 'attachment; filename="setup-manual.ps1"');

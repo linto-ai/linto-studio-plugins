@@ -237,12 +237,23 @@ namespace TeamsMediaBot.Services.Certificate
                     return false;
                 }
 
+                // Timeout: 5 minutes max for ACME renewal
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
+
                 var stdoutTask = process.StandardOutput.ReadToEndAsync();
                 var stderrTask = process.StandardError.ReadToEndAsync();
                 await Task.WhenAll(stdoutTask, stderrTask);
                 var stdout = stdoutTask.Result;
                 var stderr = stderrTask.Result;
-                await process.WaitForExitAsync(stoppingToken);
+                await process.WaitForExitAsync(timeoutCts.Token);
+
+                if (!process.HasExited)
+                {
+                    _logger.LogError("CertificateManager: win-acme timed out after 5 minutes, killing process");
+                    process.Kill(entireProcessTree: true);
+                    return false;
+                }
 
                 _logger.LogInformation("CertificateManager: win-acme exited with code {ExitCode}", process.ExitCode);
 

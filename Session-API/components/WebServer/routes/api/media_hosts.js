@@ -120,6 +120,9 @@ module.exports = (webserver) => {
                         updates[field] = req.body[field];
                     }
                 }
+                if (Object.keys(updates).length === 0) {
+                    return res.status(400).json({ error: 'No updatable fields provided (allowed: dns, publicIp, manualConfig)' });
+                }
                 await mediaHost.update(updates);
                 res.json(mediaHost.toJSON());
             } catch (err) {

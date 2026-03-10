@@ -83,6 +83,35 @@ jobs:
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
 
+      - name: Update teams-latest pre-release
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "teams-latest"
+          $zipName = "${{ env.ZIP_NAME }}"
+          $sha256File = "$zipName.sha256"
+          $latestZip = "TeamsMediaBot-teams-latest-win-x64.zip"
+          $latestSha = "$latestZip.sha256"
+
+          # Rename files to stable name for the release
+          Copy-Item $zipName $latestZip -Force
+          Copy-Item $sha256File $latestSha -Force
+
+          # Move the tag to current commit
+          git tag -f $tag
+          git push origin $tag --force
+
+          # Delete old assets and upload new ones
+          gh release upload $tag $latestZip $latestSha --clobber
+
+          # Update release metadata
+          gh release edit $tag `
+            --title "TeamsMediaBot - Dev Build ($tag)" `
+            --notes "## TeamsMediaBot Dev Build`n`nCommit: ``${{ github.sha }}```n`n**SHA256**: ``${{ env.PACKAGE_SHA256 }}```n`n### Configuration Session-API`n``````n TEAMS_MEDIA_BOT_PACKAGE_SHA256=${{ env.PACKAGE_SHA256 }}`n``````" `
+            --prerelease
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

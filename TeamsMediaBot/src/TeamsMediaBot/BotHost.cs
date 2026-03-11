@@ -51,7 +51,10 @@ namespace TeamsMediaBot
         {
             _logger.LogInformation("Starting the Teams Media Bot");
             // Set up the bot web application
-            var builder = WebApplication.CreateBuilder();
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                ContentRootPath = AppContext.BaseDirectory
+            });
 
             if (builder.Environment.IsDevelopment())
             {

@@ -146,6 +146,26 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        // DELETE /media-hosts/:id/purge — Permanently delete a decommissioned MediaHost
+        path: '/media-hosts/:id/purge',
+        method: 'delete',
+        controller: async (req, res, next) => {
+            const { id } = req.params;
+            try {
+                const mediaHost = await Model.MediaHost.findByPk(id);
+                if (!mediaHost) {
+                    return res.status(404).json({ error: 'Media host not found' });
+                }
+                if (mediaHost.status !== 'decommissioned') {
+                    return res.status(400).json({ error: 'Only decommissioned media hosts can be permanently deleted' });
+                }
+                await mediaHost.destroy();
+                res.json({ success: true });
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
         // POST /media-hosts/:id/generate-provisioning-token — Generate 32 bytes hex token
         path: '/media-hosts/:id/generate-provisioning-token',
         method: 'post',

@@ -70,7 +70,12 @@ try {
     $sha256Url = "$PackageUrl.sha256"
     try {
         Write-Host "Downloading expected SHA256 from $sha256Url..."
-        $ExpectedSha256 = (Invoke-WebRequest -Uri $sha256Url -UseBasicParsing).Content.Trim()
+        $response = Invoke-WebRequest -Uri $sha256Url -UseBasicParsing
+        if ($response.Content -is [byte[]]) {
+            $ExpectedSha256 = [System.Text.Encoding]::UTF8.GetString($response.Content).Trim()
+        } else {
+            $ExpectedSha256 = $response.Content.Trim()
+        }
         if ($actualHash -ne $ExpectedSha256) {
             throw "SHA256 mismatch! Expected: $ExpectedSha256, Got: $actualHash"
         }
@@ -152,7 +157,7 @@ MEDIA_HOST_ID=$MediaHostId
             BotInternalPort = 9441
             BotInstanceExternalPort = 443
             MediaInternalPort = 8445
-            MediaInstanceExternalPort = 22210
+            MediaInstanceExternalPort = 8445
             SslMode = $SslMode
             WinAcmePath = "C:\win-acme\wacs.exe"
         }

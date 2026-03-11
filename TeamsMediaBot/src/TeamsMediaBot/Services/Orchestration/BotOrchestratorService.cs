@@ -48,8 +48,35 @@ namespace TeamsMediaBot.Services.Orchestration
             _mqttService.OnStartBot += HandleStartBot;
             _mqttService.OnStopBot += HandleStopBot;
 
-            // Connect to MQTT
-            await _mqttService.ConnectAsync(cancellationToken);
+            // Connect to MQTT with retry loop (broker may be unavailable at startup)
+            var baseDelay = 2000;  // Start at 2 seconds
+            var maxDelay = 60000;  // Max 60 seconds between attempts
+            var attempt = 0;
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    await _mqttService.ConnectAsync(cancellationToken);
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    attempt++;
+                    var exponentialDelay = Math.Min(baseDelay * (int)Math.Pow(2, attempt - 1), maxDelay);
+                    var jitter = Random.Shared.Next(0, 1000);
+                    var delay = exponentialDelay + jitter;
+
+                    _logger.LogWarning(ex, "[TeamsMediaBot] MQTT connection attempt {Attempt} failed, retrying in {Delay}ms", attempt, delay);
+                    await Task.Delay(delay, cancellationToken);
+                }
+            }
 
             _logger.LogInformation("[TeamsMediaBot] Bot Orchestrator Service initialized");
         }

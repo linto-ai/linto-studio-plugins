@@ -1,3 +1,28 @@
+# 1.2.0
+
+_2026_03_11_
+
+- Language improvements
+  - Add flexible BCP47 language matching for ASR providers
+  - Add language detection to LinTO ASR connector for translation support
+  - Extract shared language detection module (franc-based) from OpenAI to reusable lang-detect utility
+- MQTT and configuration
+  - Add TLS/SSL support for MQTT broker connections
+  - Add .env override support for easier environment customization
+- LinTO Studio integration
+  - Make integration paths configurable
+  - Add websocket server env var and transcriber audio storage volume
+  - Add SDK base URL, session API endpoint, and fix port overrides
+  - Remove linto-studio submodule in favor of configurable paths
+- Documentation
+  - Update swagger with new translation schemas
+- Bug fixes
+  - Fix MQTT status always set to ERROR on publish
+  - Fix segmentId dual counting and enable partials in Microsoft ASR
+  - Fix FK onDelete for transcriberProfileId constraints (migration)
+  - Fix channel ordering in API responses
+  - Fix Sequelize ordering in sessions, templates, and transcriber profiles
+
 # 1.1.0
 
 _2026_02_24_

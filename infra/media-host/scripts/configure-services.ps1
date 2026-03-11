@@ -24,9 +24,22 @@ foreach ($svcName in @("LinTO-BotService", "LinTO-MediaPlatform")) {
     if ($existing) {
         Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
         sc.exe delete $svcName
+        # Wait for the service to be fully removed (marked-for-deletion state)
+        $retries = 0
+        while ((Get-Service -Name $svcName -ErrorAction SilentlyContinue) -and $retries -lt 30) {
+            Write-Host "Waiting for service $svcName to be removed..."
+            Start-Sleep -Seconds 1
+            $retries++
+        }
+        if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+            throw "Service $svcName is still marked for deletion. Close services.msc and any other management tools, then retry (or reboot)."
+        }
     }
 }
 
 sc.exe create "LinTO-BotService" binPath= "$servicePath\TeamsMediaBot\TeamsMediaBot.exe" start= auto
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create LinTO-BotService (sc.exe exit code: $LASTEXITCODE). If error 1072, reboot the server and retry."
+}
 
 Write-Host "Services configured successfully."

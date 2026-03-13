@@ -346,12 +346,20 @@ class BrokerClient extends Component {
     try {
       let newTranscriberId = null;
       if (newStreamStatus === 'active') {
-        newTranscriberId = transcriberId; // Set the transcriberId for the channel
+        newTranscriberId = transcriberId;
+      }
+
+      const whereClause = { id: channelId };
+      // Only deactivate if the requesting transcriber still owns this channel.
+      // Prevents a stale deactivation from a former transcriber from overriding
+      // a new activation by a different transcriber (race condition on reconnection).
+      if (newStreamStatus === 'inactive') {
+        whereClause.transcriberId = transcriberId;
       }
 
       await Model.Channel.update(
         { streamStatus: newStreamStatus, transcriberId: newTranscriberId },
-        { where: { id: channelId }, transaction }
+        { where: whereClause, transaction }
       );
 
       const escapedSessionId = Model.sequelize.escape(sessionId);

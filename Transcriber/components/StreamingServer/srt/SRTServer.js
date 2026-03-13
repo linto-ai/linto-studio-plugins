@@ -18,6 +18,7 @@ class MultiplexedSRTServer extends EventEmitter {
         this.asyncSrtServer = null;
         this.runningSessions = {}
         this.runningChannels = {}
+        this.pendingChannels = new Set();
         this.channelTimeoutSeconds = 5;
         this.isRunning = false;
 
@@ -106,10 +107,19 @@ class MultiplexedSRTServer extends EventEmitter {
         }
         const channelId = channel.id;
 
-        // Check if the channel's streamStatus is 'active'
-        if (channel.streamStatus === 'active') {
-            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+        // Guard against concurrent connection setup for same channel
+        if (this.pendingChannels.has(channelId)) {
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} connection already pending. Skipping.`);
             return { isValid: false };
+        }
+
+        // Check local state (reliable) instead of cached global state (stale)
+        let needsLocalCleanup = false;
+        if (this.runningChannels[channelId]) {
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} already running locally. Will replace existing connection.`);
+            needsLocalCleanup = true;
+        } else if (channel.streamStatus === 'active') {
+            logger.warn(`Connection: ${connection.fd} --> session ${sessionId}, Channel id ${channelId} marked active elsewhere (stale cache). Accepting reconnection.`);
         }
         // Check scheduleOn is after now
         const now = new Date();
@@ -124,43 +134,42 @@ class MultiplexedSRTServer extends EventEmitter {
         }
 
         logger.info(`Connection: ${connection.fd} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
-        return { isValid: true, session, channel };
+        return { isValid: true, session, channel, needsLocalCleanup };
     }
 
     async onConnection(connection) {
         logger.info("Got new connection:", connection.fd);
-        // New connection, validate stream
         const validation = await this.validateStream(connection);
         if (!validation.isValid) {
             logger.warn(`Invalid stream: ${connection.fd}, voiding connection.`);
-            // no worker to cleanup, nothing to do.
             connection.close();
             connection = null;
             return;
         }
-        // Stream is valid, store connection file descriptor
-        const { channel, session } = validation;
-        // Create a new file descriptor object to store connection details and session info
-        const fd = {
-            channel,
-            session
-        };
-        // Start a new worker for this connection
-        const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), [], {
-        });
-        this.workers.push(worker);
-        // Start gstreamer pipeline
-        worker.send({ type: 'init' });
-        // handle events
-        this.handleWorkerEvents(connection, fd, worker);
-        this.handleConnectionEvents(connection, fd, worker);
-        // Acknowledge session for streaming server controller to handle further processing
-        // - call scheduler to update session status to active
-        // - start buffering audio in circular buffer
-        // - start transcription
-        logger.info(`Session ${session.name} starts.`, {sessionId: session.id, channelId: channel.id});
-        this.emit('session-start', fd.session, fd.channel);
-        this.addRunningSession(session, connection, fd, worker);
+        const { channel, session, needsLocalCleanup } = validation;
+
+        this.pendingChannels.add(channel.id);
+        try {
+            if (needsLocalCleanup) {
+                const existing = this.runningChannels[channel.id];
+                if (existing) {
+                    logger.warn(`Replacing existing connection for channel ${channel.id}`, {sessionId: session.id, channelId: channel.id});
+                    this.cleanupConnection(existing.connection, existing.fd, existing.worker);
+                }
+            }
+
+            const fd = { channel, session };
+            const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), []);
+            this.workers.push(worker);
+            worker.send({ type: 'init' });
+            this.handleWorkerEvents(connection, fd, worker);
+            this.handleConnectionEvents(connection, fd, worker);
+            logger.info(`Session ${session.name} starts.`, {sessionId: session.id, channelId: channel.id});
+            this.emit('session-start', fd.session, fd.channel);
+            this.addRunningSession(session, connection, fd, worker);
+        } finally {
+            this.pendingChannels.delete(channel.id);
+        }
     }
 
     addRunningSession(session, connection, fd, worker) {

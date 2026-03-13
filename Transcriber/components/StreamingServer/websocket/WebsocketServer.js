@@ -10,7 +10,6 @@ const {
     STREAMING_WS_ENDPOINT
 } = process.env;
 
-// TODO: handle forced session stop (see SrtServer)
 class MultiplexedWebsocketServer extends EventEmitter {
   constructor(app) {
     super();
@@ -18,7 +17,14 @@ class MultiplexedWebsocketServer extends EventEmitter {
     this.wss = null;
     this.workers = [];
     this.runningSessions = {}
+    this.runningChannels = {};
+    this.pendingChannels = new Set();
+    this.channelTimeoutSeconds = 5;
     this.isRunning = false;
+
+    setInterval(() => {
+        this.checkTimedOutChannel();
+    }, 1000);
   }
 
   // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
@@ -68,12 +74,23 @@ class MultiplexedWebsocketServer extends EventEmitter {
       return streamId;
   }
 
+  checkTimedOutChannel() {
+      const now = Date.now();
+      for (const value of Object.values(this.runningChannels)) {
+          if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
+              logger.warn('Channel timeout, closing!', {sessionId: value.fd.session.id, channelId: value.fd.channel.id});
+              this.cleanupWebsocket(value.ws, value.fd, value.worker);
+          }
+      }
+  }
+
   addRunningSession(session, ws, fd, worker) {
     if (!this.runningSessions[session.id]) {
       this.runningSessions[session.id] = [];
     }
 
     this.runningSessions[session.id].push({ ws, fd, worker });
+    this.runningChannels[fd.channel.id] = { ws, fd, worker, lastPacket: Date.now() };
   }
 
   stopRunningSession(session) {
@@ -105,10 +122,19 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
       const channelId = channel.id;
 
-      // Check if the channel's streamStatus is 'active'
-      if (channel.streamStatus === 'active') {
-          logger.warn(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+      // Guard against concurrent connection setup for same channel
+      if (this.pendingChannels.has(channelId)) {
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} connection already pending. Skipping.`);
           return { isValid: false };
+      }
+
+      // Check local state (reliable) instead of cached global state (stale)
+      let needsLocalCleanup = false;
+      if (this.runningChannels[channelId]) {
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} already running locally. Will replace existing connection.`);
+          needsLocalCleanup = true;
+      } else if (channel.streamStatus === 'active') {
+          logger.warn(`Connection: ${req.url} --> session ${sessionId}, Channel id ${channelId} marked active elsewhere (stale cache). Accepting reconnection.`);
       }
       // Check scheduleOn is after now
       const now = new Date();
@@ -123,12 +149,11 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
 
       logger.info(`Connection: ${req.url} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
-      return { isValid: true, session, channel };
+      return { isValid: true, session, channel, needsLocalCleanup };
   }
 
   async onConnection(ws, req) {
       logger.info("Got new connection:", req.url);
-      // New connection, validate stream
       const validation = await this.validateStream(req);
       if (!validation.isValid) {
           logger.warn(`Invalid stream: ${req.url}, voiding connection.`);
@@ -136,28 +161,34 @@ class MultiplexedWebsocketServer extends EventEmitter {
           return;
       }
 
-      // Stream is valid, store connection file descriptor
-      const { channel, session } = validation;
-      // Create a new file descriptor object to store connection details and session info
-      const fd = {
-          channel,
-          session
-      };
+      const { channel, session, needsLocalCleanup } = validation;
 
-      let messageCallback = null;
-
-      // handle websocket messages
-      ws.on("message", (message) => {
-          if (!messageCallback) {
-              messageCallback = this.handleInitMessage(ws, message, fd);
-              if (!messageCallback) {
-                  this.cleanupWebsocket(ws);
+      this.pendingChannels.add(channel.id);
+      try {
+          if (needsLocalCleanup) {
+              const existing = this.runningChannels[channel.id];
+              if (existing) {
+                  logger.warn(`Replacing existing connection for channel ${channel.id}`, {sessionId: session.id, channelId: channel.id});
+                  this.cleanupWebsocket(existing.ws, existing.fd, existing.worker);
               }
           }
-          else {
-              messageCallback(message);
-          }
-      });
+
+          const fd = { channel, session };
+          let messageCallback = null;
+
+          ws.on("message", (message) => {
+              if (!messageCallback) {
+                  messageCallback = this.handleInitMessage(ws, message, fd);
+                  if (!messageCallback) {
+                      this.cleanupWebsocket(ws);
+                  }
+              } else {
+                  messageCallback(message);
+              }
+          });
+      } finally {
+          this.pendingChannels.delete(channel.id);
+      }
   }
 
   handleInitMessage(ws, message, fd) {
@@ -204,6 +235,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
       return (message) => {
           this.emit('data', message, fd.session.id, fd.channel.id);
+          if (this.runningChannels[fd.channel.id]) {
+              this.runningChannels[fd.channel.id].lastPacket = Date.now();
+          }
       };
   }
 
@@ -239,6 +273,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
       return (message) => {
           worker.send({ type: 'buffer', chunks: Buffer.from(new Int16Array(message))});
+          if (this.runningChannels[fd.channel.id]) {
+              this.runningChannels[fd.channel.id].lastPacket = Date.now();
+          }
       };
   }
 
@@ -295,6 +332,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
           if (this.runningSessions[fd.session.id].length === 0) {
               delete this.runningSessions[fd.session.id];
           }
+      }
+      if (fd && this.runningChannels[fd.channel.id]) {
+          delete this.runningChannels[fd.channel.id];
       }
   }
 }

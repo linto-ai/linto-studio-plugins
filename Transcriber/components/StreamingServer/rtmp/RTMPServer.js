@@ -9,18 +9,64 @@ const {
     STREAMING_RTMP_TCP_PORT
 } = process.env;
 
-// TODO: handle forced session stop (see SrtServer)
 class MultiplexedRTMPServer extends EventEmitter {
   constructor(app) {
     super();
     this.app = app;
     this.nms = null;
     this.workers = {};
+    this.runningSessions = {};
+    this.runningChannels = {};
+    this.pendingChannels = new Set();
+    this.channelTimeoutSeconds = 5;
     this.isRunning = false;
+
+    setInterval(() => {
+        this.checkTimedOutChannel();
+    }, 1000);
   }
 
   setSessions(sessions) {
+      const prevSessions = this.sessions;
       this.sessions = sessions;
+
+      if (prevSessions) {
+          const deletedSessions = prevSessions.filter(currentSession =>
+              !sessions.some(newSession => newSession.id === currentSession.id)
+          );
+          const sessionsToStop = deletedSessions.filter(deletedSession =>
+              this.runningSessions.hasOwnProperty(deletedSession.id)
+          );
+          if (sessionsToStop.length > 0) {
+              logger.warn(`Force cut the stream of sessions: ${sessionsToStop.map(s => s.id).join(", ")}`);
+          }
+          sessionsToStop.forEach(session => this.stopRunningSession(session));
+      }
+  }
+
+  addRunningSession(session, nmsSessionId, fd, worker) {
+      if (!this.runningSessions[session.id]) {
+          this.runningSessions[session.id] = [];
+      }
+      this.runningSessions[session.id].push({ nmsSessionId, fd, worker });
+      this.runningChannels[fd.channel.id] = { nmsSessionId, fd, worker, lastPacket: Date.now() };
+  }
+
+  stopRunningSession(session) {
+      while (this.runningSessions[session.id] && this.runningSessions[session.id].length > 0) {
+          const { nmsSessionId } = this.runningSessions[session.id][0];
+          this.cleanupConnection(nmsSessionId);
+      }
+  }
+
+  checkTimedOutChannel() {
+      const now = Date.now();
+      for (const value of Object.values(this.runningChannels)) {
+          if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
+              logger.warn('Channel timeout, closing!', {sessionId: value.fd.session.id, channelId: value.fd.channel.id});
+              this.cleanupConnection(value.nmsSessionId);
+          }
+      }
   }
 
   async start() {
@@ -79,10 +125,19 @@ class MultiplexedRTMPServer extends EventEmitter {
       }
       const channelId = channel.id;
 
-      // Check if the channel's streamStatus is 'active'
-      if (channel.streamStatus === 'active') {
-          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already active. Skipping.`);
+      // Guard against concurrent connection setup for same channel
+      if (this.pendingChannels.has(channelId)) {
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} connection already pending. Skipping.`);
           return { isValid: false };
+      }
+
+      // Check local state (reliable) instead of cached global state (stale)
+      let needsLocalCleanup = false;
+      if (this.runningChannels[channelId]) {
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} already running locally. Will replace existing connection.`);
+          needsLocalCleanup = true;
+      } else if (channel.streamStatus === 'active') {
+          logger.warn(`Connection: ${streamPath} --> session ${sessionId}, Channel id ${channelId} marked active elsewhere (stale cache). Accepting reconnection.`);
       }
       // Check scheduleOn is after now
       const now = new Date();
@@ -97,56 +152,60 @@ class MultiplexedRTMPServer extends EventEmitter {
       }
 
       logger.info(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
-      return { isValid: true, session, channel };
+      return { isValid: true, session, channel, needsLocalCleanup };
   }
 
-  async onConnection(sessionId, streamPath) {
+  async onConnection(nmsSessionId, streamPath) {
       logger.info("Got new connection:", streamPath);
-      // New connection, validate stream
       const validation = await this.validateStream(streamPath);
       if (!validation.isValid) {
           logger.warn(`Invalid stream: ${streamPath}, voiding connection.`);
-          this.cleanupConnection(sessionId, null, null);
+          this.cleanupConnection(nmsSessionId);
           return;
       }
 
-      // Stream is valid, store connection file descriptor
-      const { channel, session } = validation;
-      // Create a new file descriptor object to store connection details and session info
-      const fd = {
-          channel,
-          session
-      };
-      // Start a new worker for this connection
-      const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), [], {
-      });
-      this.workers[sessionId] = [fd, worker];
-      // Start gstreamer pipeline
-      worker.send({ type: 'init', streamPath: streamPath });
-      // handle events
-      this.handleWorkerEvents(sessionId, fd, worker);
-      // Acknowledge session for streaming server controller to handle further processing
-      // - call scheduler to update session status to active
-      // - start buffering audio in circular buffer
-      // - start transcription
-      this.emit('session-start', fd.session, fd.channel);
+      const { channel, session, needsLocalCleanup } = validation;
+
+      this.pendingChannels.add(channel.id);
+      try {
+          if (needsLocalCleanup) {
+              const existing = this.runningChannels[channel.id];
+              if (existing) {
+                  logger.warn(`Replacing existing connection for channel ${channel.id}`, {sessionId: session.id, channelId: channel.id});
+                  this.cleanupConnection(existing.nmsSessionId);
+              }
+          }
+
+          const fd = { channel, session };
+          const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), []);
+          this.workers[nmsSessionId] = [fd, worker];
+          worker.send({ type: 'init', streamPath: streamPath });
+          this.handleWorkerEvents(nmsSessionId, fd, worker);
+          this.emit('session-start', fd.session, fd.channel);
+          this.addRunningSession(session, nmsSessionId, fd, worker);
+      } finally {
+          this.pendingChannels.delete(channel.id);
+      }
   }
 
   // Events sent by the worker
-  handleWorkerEvents(sessionId, fd, worker) {
+  handleWorkerEvents(nmsSessionId, fd, worker) {
       worker.on('message', async (message) => {
           if (message.type === 'data') {
               this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channel.id);
+              if (this.runningChannels[fd.channel.id]) {
+                  this.runningChannels[fd.channel.id].lastPacket = Date.now();
+              }
           }
           if (message.type === 'error') {
               logger.error(`Worker ${worker.pid} error --> ${message.error}`);
-              this.cleanupConnection(sessionId);
+              this.cleanupConnection(nmsSessionId);
           }
       });
 
       worker.on('error', (err) => {
           logger.error(`Worker: ${worker.pid} --> Error:`, err);
-          this.cleanupConnection(sessionId);
+          this.cleanupConnection(nmsSessionId);
       });
 
       worker.on('exit', (code, signal) => {
@@ -154,28 +213,39 @@ class MultiplexedRTMPServer extends EventEmitter {
       });
   }
 
-  cleanupConnection(sessionId) {
-      logger.info(`Connection: ${sessionId} --> cleaning up.`);
-      const [fd, worker] = this.workers.hasOwnProperty(sessionId) ? this.workers[sessionId] : [null, null];
+  cleanupConnection(nmsSessionId) {
+      logger.info(`Connection: ${nmsSessionId} --> cleaning up.`);
+      const [fd, worker] = this.workers.hasOwnProperty(nmsSessionId) ? this.workers[nmsSessionId] : [null, null];
 
-      // Tell the streaming server controller to forward the session stop message to the broker
       if (fd) {
-        this.emit('session-stop', fd.session, fd.channel.id)
+          this.emit('session-stop', fd.session, fd.channel.id);
       }
 
       if (worker) {
           worker.kill();
       }
 
-      if (sessionId && this.nms) {
-        const session = this.nms.getSession(sessionId);
-        if (session) {
-          session.stop();
-        }
+      if (nmsSessionId && this.nms) {
+          const session = this.nms.getSession(nmsSessionId);
+          if (session) {
+              session.stop();
+          }
       }
 
-      if (this.workers.hasOwnProperty(sessionId)) {
-        delete this.workers[sessionId];
+      if (this.workers.hasOwnProperty(nmsSessionId)) {
+          delete this.workers[nmsSessionId];
+      }
+
+      if (fd && this.runningSessions[fd.session.id]) {
+          this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(
+              item => item.fd.channel.id !== fd.channel.id
+          );
+          if (this.runningSessions[fd.session.id].length === 0) {
+              delete this.runningSessions[fd.session.id];
+          }
+      }
+      if (fd && this.runningChannels[fd.channel.id]) {
+          delete this.runningChannels[fd.channel.id];
       }
   }
 }

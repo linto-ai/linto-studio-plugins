@@ -1,3 +1,10 @@
+# 1.2.1
+
+_2026_03_18_
+
+- Fix SRT memory leak: cache ReaderWriter per connection instead of creating a new native-bound object on every data event
+- Optimize SRT→GStreamer IPC: use binary Buffer transfer instead of Array.from() serialization
+
 # 1.2.0
 
 _2026_03_11_

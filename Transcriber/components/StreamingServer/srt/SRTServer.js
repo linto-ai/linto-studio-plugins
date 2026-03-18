@@ -162,8 +162,10 @@ class MultiplexedSRTServer extends EventEmitter {
             const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), []);
             this.workers.push(worker);
             worker.send({ type: 'init' });
+            // Cache the ReaderWriter to avoid creating a new native-bound object on every data event
+            const readerWriter = connection.getReaderWriter();
             this.handleWorkerEvents(connection, fd, worker);
-            this.handleConnectionEvents(connection, fd, worker);
+            this.handleConnectionEvents(connection, fd, worker, readerWriter);
             logger.info(`Session ${session.name} starts.`, {sessionId: session.id, channelId: channel.id});
             this.emit('session-start', fd.session, fd.channel);
             this.addRunningSession(session, connection, fd, worker);
@@ -228,12 +230,12 @@ class MultiplexedSRTServer extends EventEmitter {
     }
 
 
-    handleConnectionEvents(connection, fd, worker) {
+    handleConnectionEvents(connection, fd, worker, readerWriter) {
         const logMeta = this.getLogMeta(fd);
 
         connection.on("data", async () => {
             if (worker && worker.connected) {
-                this.onClientData(connection, fd, worker);
+                this.onClientData(readerWriter, fd, worker, connection);
             }
             if (this.runningChannels[fd.channel.id]) {
                 this.runningChannels[fd.channel.id].lastPacket = Date.now();
@@ -260,11 +262,11 @@ class MultiplexedSRTServer extends EventEmitter {
     }
 
     // Handle incoming SRT packets
-    async onClientData(connection, fd, worker) {
+    async onClientData(readerWriter, fd, worker, connection) {
         try {
-            const chunks = await connection.getReaderWriter().readChunks();
-            const serializedChunks = chunks.map(chunk => Array.from(chunk));
-            worker.send({ type: 'data', chunks: serializedChunks });
+            const chunks = await readerWriter.readChunks();
+            const buffer = Buffer.concat(chunks);
+            worker.send({ type: 'buffer', chunks: buffer });
         } catch (error) {
             const logMeta = this.getLogMeta(fd);
             logger.error(`Error reading chunks: ${error.message}`, logMeta);

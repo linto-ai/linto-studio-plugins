@@ -4,6 +4,8 @@ _2026_03_18_
 
 - Fix SRT memory leak: cache ReaderWriter per connection instead of creating a new native-bound object on every data event
 - Optimize SRT→GStreamer IPC: use binary Buffer transfer instead of Array.from() serialization
+- Fix native AsyncSRT leak: reuse shared instance for stream validation instead of creating one per connection
+- Fix event listener leak: removeAllListeners on connection and worker during cleanup
 
 # 1.2.0
 

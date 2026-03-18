@@ -19,6 +19,7 @@ class MultiplexedSRTServer extends EventEmitter {
         this.runningSessions = {}
         this.runningChannels = {}
         this.pendingChannels = new Set();
+        this.asyncSrtHelper = new AsyncSRT(); // Shared instance for socket option reads (validateStream)
         this.channelTimeoutSeconds = 5;
         this.isRunning = false;
 
@@ -85,8 +86,7 @@ class MultiplexedSRTServer extends EventEmitter {
     }
 
     async validateStream(connection) {
-        const asyncSrt = new AsyncSRT();
-        const streamId = await asyncSrt.getSockOpt(connection.fd, SRT.SRTO_STREAMID);
+        const streamId = await this.asyncSrtHelper.getSockOpt(connection.fd, SRT.SRTO_STREAMID);
         logger.info(`Connection: ${connection.fd} --> Validating streamId ${streamId}`);
 
         // Extract sessionId and channelId from streamId
@@ -282,10 +282,12 @@ class MultiplexedSRTServer extends EventEmitter {
         this.emit('session-stop', fd.session, fd.channel.id)
         logger.info(`Connection: ${connection.fd} --> cleaning up.`, this.getLogMeta(fd));
         if (connection) {
+            connection.removeAllListeners();
             connection.close();
             connection = null;
         }
         if (worker) {
+            worker.removeAllListeners();
             worker.kill();
             const workerIndex = this.workers.indexOf(worker);
             if (workerIndex > -1) {

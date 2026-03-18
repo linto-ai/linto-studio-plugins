@@ -201,6 +201,7 @@ module.exports = (webserver) => {
             const statusList = req.query.statusList ? req.query.statusList.split(',') : null
             const organizationId = req.query.organizationId;
             const visibility = req.query.visibility;
+            const excludeVisibility = req.query.excludeVisibility;
             const scheduleOn = req.query.scheduleOn;
             const endOn = req.query.endOn;
 
@@ -220,6 +221,10 @@ module.exports = (webserver) => {
 
             if (visibility) {
                 where.visibility = visibility;
+            }
+
+            if (excludeVisibility) {
+                where.visibility = { ...where.visibility, [Model.Op.ne]: excludeVisibility };
             }
 
             if (scheduleOn && scheduleOn.before) {

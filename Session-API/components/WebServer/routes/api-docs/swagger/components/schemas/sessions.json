@@ -28,7 +28,8 @@
               "enum": [
                   "public",
                   "organization",
-                  "private"
+                  "private",
+                  "user"
               ],
               "default": "private"
             },
@@ -83,7 +84,8 @@
               "enum": [
                   "public",
                   "organization",
-                  "private"
+                  "private",
+                  "user"
               ],
               "default": "private"
             },
@@ -165,7 +167,8 @@
               "enum": [
                   "public",
                   "organization",
-                  "private"
+                  "private",
+                  "user"
               ],
               "default": "private"
             },

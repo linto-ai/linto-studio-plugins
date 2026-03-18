@@ -85,7 +85,23 @@
             "enum": [
               "private",
               "organization",
-              "public"
+              "public",
+              "user"
+            ]
+          }
+        },
+        {
+          "in": "query",
+          "name": "excludeVisibility",
+          "description": "Exclude sessions with a specific visibility.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "private",
+              "organization",
+              "public",
+              "user"
             ]
           }
         },

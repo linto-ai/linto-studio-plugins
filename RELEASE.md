@@ -1,3 +1,15 @@
+# 1.3.0
+
+_2026_03_23_
+
+- Add `user` visibility type for sessions, allowing per-user session scoping (new migration, API and Swagger updated)
+- Fix reconnection race condition rejecting streaming clients with "Channel already active"
+  - Replace stale MQTT-cached streamStatus check with local runningChannels state
+  - Support same-transcriber reconnection (force-clean old worker) and cross-transcriber reconnection via load balancer
+  - Guard against concurrent connection setup with pendingChannels Set
+  - Bring RTMP and WebSocket servers to feature parity with SRT (runningChannels tracking, channel timeout, setSessions force-stop)
+  - Scheduler safety: condition channel deactivation on transcriberId ownership to prevent stale overrides
+
 # 1.2.1
 
 _2026_03_18_

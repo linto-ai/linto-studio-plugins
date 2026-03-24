@@ -27,14 +27,14 @@ class ASR extends eventEmitter {
     TRANSCRIBING: 'transcribing'
   };
 
-  constructor(session, channel) {
+  constructor(session, channel, options = {}) {
     super();
     this.session = session;
     this.channel = channel;
     this.logger = logger.getChannelLogger(this.session.id, this.channel.id);
     this.provider = null;
     this.state = ASR.states.CLOSED;
-    this.segmentId = 1;
+    this.segmentId = options.initialSegmentId || 1;
     this._dualFinalCount = 0;
     this.init();
   }

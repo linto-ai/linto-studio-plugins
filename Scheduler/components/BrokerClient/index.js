@@ -221,19 +221,22 @@ class BrokerClient extends Component {
   async saveTranscription(transcription, sessionId, channelId) {
     try {
       const newTranscription = JSON.stringify([transcription]);
-      await Model.Channel.update(
-        {
-          closedCaptions: Model.sequelize.literal(
-            `COALESCE("closedCaptions"::jsonb, '[]'::jsonb) || ${Model.sequelize.escape(newTranscription)}::jsonb`
-          )
-        },
-        {
-          where: {
-            sessionId: sessionId,
-            id: channelId
-          }
+      const updateFields = {
+        closedCaptions: Model.sequelize.literal(
+          `COALESCE("closedCaptions"::jsonb, '[]'::jsonb) || ${Model.sequelize.escape(newTranscription)}::jsonb`
+        )
+      };
+      if (transcription.segmentId !== undefined) {
+        updateFields.lastSegmentId = Model.sequelize.literal(
+          `GREATEST(COALESCE("lastSegmentId", 0), ${parseInt(transcription.segmentId, 10) || 0})`
+        );
+      }
+      await Model.Channel.update(updateFields, {
+        where: {
+          sessionId: sessionId,
+          id: channelId
         }
-      );
+      });
     } catch (err) {
       logger.error(
         `${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`,
@@ -429,7 +432,7 @@ class BrokerClient extends Component {
         {
           model: Model.Channel,
           as: 'channels',
-          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio', 'compressAudio', 'enableLiveTranscripts'],
+          attributes: ['id', 'translations', 'streamEndpoints', 'streamStatus', 'diarization', 'keepAudio', 'compressAudio', 'enableLiveTranscripts', 'lastSegmentId'],
           include: [{
             model: Model.TranscriberProfile,
             attributes: ['config'],

@@ -28,6 +28,7 @@ class StreamingServer extends Component {
     this.state = StreamingServer.states.CLOSED;
     this.ASRs = new Map();
     this.bots = new Map();
+    this.lastSegmentIds = new Map();
     this.servers = [];
     this.init().then(async () => {
       // intialize the streaming servers
@@ -52,7 +53,8 @@ class StreamingServer extends Component {
 
       server.on('session-start', (session, channel) => {
         try {
-          const asr = new ASR(session, channel);
+          const initialSegmentId = this.resolveInitialSegmentId(session.id, channel.id, channel);
+          const asr = new ASR(session, channel, { initialSegmentId });
           asr.on('partial', (transcription) => {
             this.emit('partial', transcription, session.id, channel.id, channel);
           });
@@ -74,6 +76,8 @@ class StreamingServer extends Component {
           if (!asr) {
             return;
           }
+
+          this.preserveSegmentId(session.id, channelId, asr);
 
           // store in a final with the bot the session-stop
           asr.streamStopped();
@@ -118,7 +122,8 @@ class StreamingServer extends Component {
       bot.on('session-start', (session, channel) => {
         logger.info(`Session ${session.id}, channel ${channel.id} started`);
 
-        const asr = new ASR(session, channel);
+        const initialSegmentId = this.resolveInitialSegmentId(session.id, channel.id, channel);
+        const asr = new ASR(session, channel, { initialSegmentId });
         asr.on('partial', (transcription) => {
           let subtitle = transcription.text;
           if (subSource && transcription.translations) {
@@ -228,6 +233,8 @@ class StreamingServer extends Component {
       // Also stop and remove the associated ASR instance if it exists
       const asr = this.ASRs.get(botKey);
       if (asr) {
+        this.preserveSegmentId(sessionId, channelId, asr);
+        asr.streamStopped();
         asr.removeAllListeners();
         asr.dispose();
         this.ASRs.delete(botKey);
@@ -238,6 +245,18 @@ class StreamingServer extends Component {
     } catch (error) {
       logger.error(`Error stopping bot: ${error.message}`);
     }
+  }
+
+  resolveInitialSegmentId(sessionId, channelId, channel) {
+    const key = `${sessionId}_${channelId}`;
+    const memorySegmentId = this.lastSegmentIds.get(key);
+    const mqttSegmentId = channel.lastSegmentId;
+    return memorySegmentId || (mqttSegmentId ? mqttSegmentId + 1 : 1);
+  }
+
+  preserveSegmentId(sessionId, channelId, asr) {
+    const key = `${sessionId}_${channelId}`;
+    this.lastSegmentIds.set(key, asr.segmentId + 1);
   }
 
   async startServers() {

@@ -227,6 +227,7 @@ module.exports = (webserver) => {
                 );
 
                 const result = channel.toJSON();
+                result.organizationId = session.organizationId;
                 result.closedCaptions = captions.closedCaptions;
                 result.totalClosedCaptions = captions.totalClosedCaptions;
                 result.translatedCaptions = captions.translatedCaptions;

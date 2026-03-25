@@ -1,6 +1,6 @@
 {
   "name": "live-transcription-open-source-toolbox-library",
-  "version": "1.0.0",
+  "version": "1.3.1",
   "description": "Live Transcription Open Source Toolbox : Component's shared Library",
   "main": "index.js",
   "scripts": {

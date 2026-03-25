@@ -1,3 +1,9 @@
+# 1.3.1
+
+_2026_03_25_
+
+- Fix segmentId continuity across ASR restarts: preserve segment numbering when an ASR instance is stopped and restarted within the same session (new migration, in-memory + DB tracking)
+
 # 1.3.0
 
 _2026_03_23_

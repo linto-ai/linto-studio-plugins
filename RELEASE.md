@@ -1,3 +1,10 @@
+# 1.3.2
+
+_2026_03_26_
+
+- Add channel turns pagination endpoint with organization and visibility support
+- Remove channel timeout mechanism from RTMP and WebSocket servers
+
 # 1.3.1
 
 _2026_03_25_

@@ -214,7 +214,7 @@ module.exports = (webserver) => {
                     return res.status(404).json({ error: 'Channel not found' });
                 }
 
-                // Calculer l'index (même logique que getSessionResult)
+                // Compute the index (same logic as getSessionResult)
                 const allChannels = await Model.Channel.findAll({
                     where: { sessionId },
                     attributes: ['id'],
@@ -222,7 +222,7 @@ module.exports = (webserver) => {
                 });
                 channel.setDataValue('index', allChannels.findIndex(c => c.id === channel.id));
 
-                // Récupérer les captions paginées via la méthode model
+                // Retrieve paginated captions via the model method
                 const captions = await Model.Channel.getPaginatedCaptions(
                     parseInt(channelId), { limit, offset }
                 );

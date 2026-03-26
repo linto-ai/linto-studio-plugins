@@ -182,7 +182,8 @@ module.exports = (webserver) => {
         method: 'get',
         controller: async (req, res, next) => {
             try {
-                const session = await getSessionResult(req.params.id, true);
+                const withCaptions = req.query.withCaptions !== 'false';
+                const session = await getSessionResult(req.params.id, withCaptions);
                 if (!session) {
                     return res.status(404).send('Session not found');
                 }
@@ -228,6 +229,7 @@ module.exports = (webserver) => {
 
                 const result = channel.toJSON();
                 result.organizationId = session.organizationId;
+                result.visibility = session.visibility;
                 result.closedCaptions = captions.closedCaptions;
                 result.totalClosedCaptions = captions.totalClosedCaptions;
                 result.translatedCaptions = captions.translatedCaptions;

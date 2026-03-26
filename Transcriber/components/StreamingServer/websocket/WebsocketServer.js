@@ -19,12 +19,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
     this.runningSessions = {}
     this.runningChannels = {};
     this.pendingChannels = new Set();
-    this.channelTimeoutSeconds = 5;
     this.isRunning = false;
-
-    setInterval(() => {
-        this.checkTimedOutChannel();
-    }, 1000);
   }
 
   // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
@@ -74,23 +69,13 @@ class MultiplexedWebsocketServer extends EventEmitter {
       return streamId;
   }
 
-  checkTimedOutChannel() {
-      const now = Date.now();
-      for (const value of Object.values(this.runningChannels)) {
-          if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
-              logger.warn('Channel timeout, closing!', {sessionId: value.fd.session.id, channelId: value.fd.channel.id});
-              this.cleanupWebsocket(value.ws, value.fd, value.worker);
-          }
-      }
-  }
-
   addRunningSession(session, ws, fd, worker) {
     if (!this.runningSessions[session.id]) {
       this.runningSessions[session.id] = [];
     }
 
     this.runningSessions[session.id].push({ ws, fd, worker });
-    this.runningChannels[fd.channel.id] = { ws, fd, worker, lastPacket: Date.now() };
+    this.runningChannels[fd.channel.id] = { ws, fd, worker };
   }
 
   stopRunningSession(session) {
@@ -235,9 +220,6 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
       return (message) => {
           this.emit('data', message, fd.session.id, fd.channel.id);
-          if (this.runningChannels[fd.channel.id]) {
-              this.runningChannels[fd.channel.id].lastPacket = Date.now();
-          }
       };
   }
 
@@ -273,9 +255,6 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
       return (message) => {
           worker.send({ type: 'buffer', chunks: Buffer.from(new Int16Array(message))});
-          if (this.runningChannels[fd.channel.id]) {
-              this.runningChannels[fd.channel.id].lastPacket = Date.now();
-          }
       };
   }
 

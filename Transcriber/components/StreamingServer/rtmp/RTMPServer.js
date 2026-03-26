@@ -18,12 +18,7 @@ class MultiplexedRTMPServer extends EventEmitter {
     this.runningSessions = {};
     this.runningChannels = {};
     this.pendingChannels = new Set();
-    this.channelTimeoutSeconds = 5;
     this.isRunning = false;
-
-    setInterval(() => {
-        this.checkTimedOutChannel();
-    }, 1000);
   }
 
   setSessions(sessions) {
@@ -49,23 +44,13 @@ class MultiplexedRTMPServer extends EventEmitter {
           this.runningSessions[session.id] = [];
       }
       this.runningSessions[session.id].push({ nmsSessionId, fd, worker });
-      this.runningChannels[fd.channel.id] = { nmsSessionId, fd, worker, lastPacket: Date.now() };
+      this.runningChannels[fd.channel.id] = { nmsSessionId, fd, worker };
   }
 
   stopRunningSession(session) {
       while (this.runningSessions[session.id] && this.runningSessions[session.id].length > 0) {
           const { nmsSessionId } = this.runningSessions[session.id][0];
           this.cleanupConnection(nmsSessionId);
-      }
-  }
-
-  checkTimedOutChannel() {
-      const now = Date.now();
-      for (const value of Object.values(this.runningChannels)) {
-          if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
-              logger.warn('Channel timeout, closing!', {sessionId: value.fd.session.id, channelId: value.fd.channel.id});
-              this.cleanupConnection(value.nmsSessionId);
-          }
       }
   }
 
@@ -193,9 +178,6 @@ class MultiplexedRTMPServer extends EventEmitter {
       worker.on('message', async (message) => {
           if (message.type === 'data') {
               this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channel.id);
-              if (this.runningChannels[fd.channel.id]) {
-                  this.runningChannels[fd.channel.id].lastPacket = Date.now();
-              }
           }
           if (message.type === 'error') {
               logger.error(`Worker ${worker.pid} error --> ${message.error}`);

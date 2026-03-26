@@ -469,6 +469,30 @@
                 }
             }
         ]
+    },
+    "ChannelAnswerWithPaginatedCaptions": {
+        "allOf": [
+            { "$ref": "#/components/schemas/ChannelAnswerWithCaptions" },
+            {
+                "type": "object",
+                "properties": {
+                    "translatedCaptions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "totalClosedCaptions": {
+                        "type": "integer",
+                        "description": "Total number of closed captions for this channel"
+                    },
+                    "totalTranslatedCaptions": {
+                        "type": "integer",
+                        "description": "Total number of translated captions for this channel"
+                    }
+                }
+            }
+        ]
     }
 
 }

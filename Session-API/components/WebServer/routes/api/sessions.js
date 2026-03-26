@@ -182,11 +182,60 @@ module.exports = (webserver) => {
         method: 'get',
         controller: async (req, res, next) => {
             try {
-                const session = await getSessionResult(req.params.id, true);
+                const withCaptions = req.query.withCaptions !== 'false';
+                const session = await getSessionResult(req.params.id, withCaptions);
                 if (!session) {
                     return res.status(404).send('Session not found');
                 }
                 res.json(session);
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
+        path: '/sessions/:id/channels/:channelId',
+        method: 'get',
+        controller: async (req, res, next) => {
+            const { id: sessionId, channelId } = req.params;
+            const limit = parseInt(req.query.limit) || 50;
+            const offset = parseInt(req.query.offset) || 0;
+
+            try {
+                const session = await Model.Session.findByPk(sessionId);
+                if (!session) {
+                    return res.status(404).json({ error: 'Session not found' });
+                }
+
+                const channel = await Model.Channel.findOne({
+                    where: { id: channelId, sessionId },
+                    attributes: { exclude: ['closedCaptions', 'translatedCaptions', 'sessionId'] }
+                });
+                if (!channel) {
+                    return res.status(404).json({ error: 'Channel not found' });
+                }
+
+                // Compute the index (same logic as getSessionResult)
+                const allChannels = await Model.Channel.findAll({
+                    where: { sessionId },
+                    attributes: ['id'],
+                    order: [['id', 'ASC']]
+                });
+                channel.setDataValue('index', allChannels.findIndex(c => c.id === channel.id));
+
+                // Retrieve paginated captions via the model method
+                const captions = await Model.Channel.getPaginatedCaptions(
+                    parseInt(channelId), { limit, offset }
+                );
+
+                const result = channel.toJSON();
+                result.organizationId = session.organizationId;
+                result.visibility = session.visibility;
+                result.closedCaptions = captions.closedCaptions;
+                result.totalClosedCaptions = captions.totalClosedCaptions;
+                result.translatedCaptions = captions.translatedCaptions;
+                result.totalTranslatedCaptions = captions.totalTranslatedCaptions;
+
+                res.json(result);
             } catch (err) {
                 next(err);
             }

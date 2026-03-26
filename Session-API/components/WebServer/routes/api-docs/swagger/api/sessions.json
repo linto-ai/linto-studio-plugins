@@ -206,6 +206,16 @@
             "type": "string",
             "format": "uuid"
           }
+        },
+        {
+          "name": "withCaptions",
+          "in": "query",
+          "description": "Include closedCaptions and translatedCaptions in the response",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "default": true
+          }
         }
       ],
       "responses": {
@@ -331,6 +341,71 @@
       "responses": {
         "200": {
           "description": "Session successfully deleted"
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    }
+  },
+  "/sessions/{id}/channels/{channelId}": {
+    "get": {
+      "tags": [
+        "sessions"
+      ],
+      "summary": "Get a single channel of a session with paginated captions",
+      "description": "Returns a single channel with reverse-paginated closedCaptions and translatedCaptions. offset=0 returns the N most recent turns, offset=50 returns the 50 before that, etc. Within a page, turns are in chronological order (oldest first).",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "description": "Session ID",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "channelId",
+          "in": "path",
+          "description": "Channel ID",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of turns to return",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "default": 50
+          }
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of turns to skip from the end (reverse pagination)",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "default": 0
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The channel with paginated captions",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelAnswerWithPaginatedCaptions"
+              }
+            }
+          }
         },
         "404": {
           "$ref": "#/components/responses/NotFound"

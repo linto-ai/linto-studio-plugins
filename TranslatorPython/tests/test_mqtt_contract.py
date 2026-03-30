@@ -29,11 +29,11 @@ class TestOutgoingTranslationPayload:
                 {"targetLang": "en", "translator": "gemma"}
             ],
         }
-        payload = Pipeline._build_payload(transcription, "Hello, welcome", "en", partial=False)
+        payload = Pipeline._build_payload(transcription, "Hello, welcome", "en", final=True)
 
         expected_keys = {
             "segmentId", "astart", "text", "start", "end",
-            "sourceLang", "targetLang", "locutor", "partial",
+            "sourceLang", "targetLang", "locutor", "final",
         }
         assert set(payload.keys()) == expected_keys
 
@@ -52,7 +52,7 @@ class TestOutgoingTranslationPayload:
                 {"targetLang": "de", "translator": "test"}
             ],
         }
-        payload = Pipeline._build_payload(transcription, "Hallo Welt", "de", partial=False)
+        payload = Pipeline._build_payload(transcription, "Hallo Welt", "de", final=True)
 
         assert payload["segmentId"] == 42
         assert payload["astart"] == "2026-02-06T21:01:00.570Z"
@@ -62,7 +62,7 @@ class TestOutgoingTranslationPayload:
         assert payload["sourceLang"] == "fr-FR"
         assert payload["targetLang"] == "de"
         assert payload["locutor"] == "speaker1"
-        assert payload["partial"] is False
+        assert payload["final"] is True
 
     def test_payload_null_locutor(self):
         """Locutor can be null."""
@@ -75,9 +75,9 @@ class TestOutgoingTranslationPayload:
             "lang": "en-US",
             "externalTranslations": [],
         }
-        payload = Pipeline._build_payload(transcription, "Test", "fr", partial=True)
+        payload = Pipeline._build_payload(transcription, "Test", "fr", final=False)
         assert payload["locutor"] is None
-        assert payload["partial"] is True
+        assert payload["final"] is False
 
     def test_payload_json_serializable(self):
         """Payload must be JSON-serializable."""
@@ -91,7 +91,7 @@ class TestOutgoingTranslationPayload:
             "locutor": None,
             "externalTranslations": [],
         }
-        payload = Pipeline._build_payload(transcription, "Hello", "en", partial=False)
+        payload = Pipeline._build_payload(transcription, "Hello", "en", final=True)
         serialized = json.dumps(payload)
         deserialized = json.loads(serialized)
         assert deserialized == payload

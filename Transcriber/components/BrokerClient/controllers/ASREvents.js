@@ -23,7 +23,8 @@ function publishDiscreteTranslations(client, transcription, sessionId, channelId
             end: transcription.end,
             sourceLang: transcription.lang,
             targetLang: lang,
-            locutor: transcription.locutor
+            locutor: transcription.locutor,
+            partial: action === 'partial'
         };
         client.publish(`transcriber/out/${sessionId}/${channelId}/${action}/translations`, translationPayload);
     }

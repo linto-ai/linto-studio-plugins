@@ -204,7 +204,7 @@ class Pipeline:
                 )
                 return
 
-            payload = self._build_payload(transcription, translated, target_lang)
+            payload = self._build_payload(transcription, translated, target_lang, final=True)
             logger.debug(
                 "[pipeline] seg=%s ch=%s lang=%s action=FORCE reason=\"final arrived\"",
                 transcription.get("segmentId"),
@@ -373,7 +373,7 @@ class Pipeline:
                 seg_id, channel_id, target_lang, reason,
             )
 
-            payload = self._build_payload(transcription, translated, target_lang)
+            payload = self._build_payload(transcription, translated, target_lang, final=False)
             await self.publish_fn(session_id, channel_id, "partial", payload, key)
 
             state.last_published_text = translated
@@ -417,7 +417,7 @@ class Pipeline:
                     seg_id, channel_id, target_lang,
                     self.max_consecutive_holds,
                 )
-                payload = self._build_payload(transcription, translated, target_lang)
+                payload = self._build_payload(transcription, translated, target_lang, final=False)
                 await self.publish_fn(session_id, channel_id, "partial", payload, key)
                 state.last_published_text = translated
                 state.consecutive_holds = 0
@@ -460,7 +460,7 @@ class Pipeline:
                 seg_id, channel_id, target_lang, self.max_hold_seconds,
             )
             payload = self._build_payload(
-                transcription, state.held_translation, target_lang
+                transcription, state.held_translation, target_lang, final=False
             )
             await self.publish_fn(session_id, channel_id, "partial", payload, key)
             state.last_published_text = state.held_translation
@@ -474,6 +474,8 @@ class Pipeline:
         transcription: dict[str, Any],
         translated_text: str,
         target_lang: str,
+        *,
+        final: bool,
     ) -> dict[str, Any]:
         """Build the outgoing translation payload matching the MQTT contract."""
         return {
@@ -485,4 +487,5 @@ class Pipeline:
             "sourceLang": transcription.get("lang"),
             "targetLang": target_lang,
             "locutor": transcription.get("locutor"),
+            "final": final,
         }

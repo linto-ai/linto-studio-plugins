@@ -477,9 +477,13 @@
                 "type": "object",
                 "properties": {
                     "translatedCaptions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object"
+                        "type": "object",
+                        "description": "Translations grouped by segmentId",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "type": "object"
+                            }
                         }
                     },
                     "totalClosedCaptions": {
@@ -488,7 +492,7 @@
                     },
                     "totalTranslatedCaptions": {
                         "type": "integer",
-                        "description": "Total number of translated captions for this channel"
+                        "description": "Total number of segments with translations for this channel"
                     }
                 }
             }

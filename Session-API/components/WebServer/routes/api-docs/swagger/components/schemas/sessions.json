@@ -465,6 +465,16 @@
                                 "text": "string"
                             }
                         }
+                    },
+                    "translatedCaptions": {
+                        "type": "object",
+                        "description": "Translations grouped by segmentId",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "type": "object"
+                            }
+                        }
                     }
                 }
             }
@@ -476,16 +486,6 @@
             {
                 "type": "object",
                 "properties": {
-                    "translatedCaptions": {
-                        "type": "object",
-                        "description": "Translations grouped by segmentId",
-                        "additionalProperties": {
-                            "type": "array",
-                            "items": {
-                                "type": "object"
-                            }
-                        }
-                    },
                     "totalClosedCaptions": {
                         "type": "integer",
                         "description": "Total number of closed captions for this channel"

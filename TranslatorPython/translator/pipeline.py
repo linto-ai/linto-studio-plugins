@@ -488,4 +488,5 @@ class Pipeline:
             "targetLang": target_lang,
             "locutor": transcription.get("locutor"),
             "final": final,
+            "mode": "external",
         }

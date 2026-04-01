@@ -249,11 +249,21 @@ class BrokerClient extends Component {
 
   async saveTranslation(translation, sessionId, channelId) {
     try {
-      const newTranslation = JSON.stringify([translation]);
+      const segmentKey = String(translation.segmentId);
+      const escapedKey = Model.sequelize.escape(segmentKey);
+      const escapedTranslation = Model.sequelize.escape(JSON.stringify(translation));
+
       await Model.Channel.update(
         {
           translatedCaptions: Model.sequelize.literal(
-            `COALESCE("translatedCaptions"::jsonb, '[]'::jsonb) || ${Model.sequelize.escape(newTranslation)}::jsonb`
+            `jsonb_set(
+              COALESCE("translatedCaptions"::jsonb, '{}'::jsonb),
+              ARRAY[${escapedKey}],
+              COALESCE(
+                COALESCE("translatedCaptions"::jsonb, '{}'::jsonb) -> ${escapedKey},
+                '[]'::jsonb
+              ) || ${escapedTranslation}::jsonb
+            )`
           )
         },
         {

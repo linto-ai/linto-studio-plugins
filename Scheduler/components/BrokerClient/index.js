@@ -164,7 +164,7 @@ class BrokerClient extends Component {
       if (chosenTranscriber) {
         // retrieve bot data
         const botData = await this.getStartBotData(botId);
-        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, botData, 2, false, true);
+        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, botData, 1, false, true);
         logger.debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${botData.session.id}, channel ${botData.channelId}`);
       } else {
         logger.error('No transcriber available to start bot.');
@@ -210,7 +210,7 @@ class BrokerClient extends Component {
         return;
       }
 
-      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
+      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 1, false, true);
     } catch (error) {
       logger.error('Failed to stop bot:', error);
     }

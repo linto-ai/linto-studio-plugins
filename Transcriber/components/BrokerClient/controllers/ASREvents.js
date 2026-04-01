@@ -24,7 +24,8 @@ function publishDiscreteTranslations(client, transcription, sessionId, channelId
             sourceLang: transcription.lang,
             targetLang: lang,
             locutor: transcription.locutor,
-            final: action === 'final'
+            final: action === 'final',
+            mode: 'discrete'
         };
         client.publish(`transcriber/out/${sessionId}/${channelId}/${action}/translations`, translationPayload);
     }

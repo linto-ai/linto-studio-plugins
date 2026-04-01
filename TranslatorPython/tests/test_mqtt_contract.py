@@ -33,7 +33,7 @@ class TestOutgoingTranslationPayload:
 
         expected_keys = {
             "segmentId", "astart", "text", "start", "end",
-            "sourceLang", "targetLang", "locutor", "final",
+            "sourceLang", "targetLang", "locutor", "final", "mode",
         }
         assert set(payload.keys()) == expected_keys
 
@@ -63,6 +63,7 @@ class TestOutgoingTranslationPayload:
         assert payload["targetLang"] == "de"
         assert payload["locutor"] == "speaker1"
         assert payload["final"] is True
+        assert payload["mode"] == "external"
 
     def test_payload_null_locutor(self):
         """Locutor can be null."""

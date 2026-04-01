@@ -38,10 +38,11 @@ module.exports = async function () {
             transcription.externalTranslations = externalTranslations;
         }
 
-        this.client.publish(`transcriber/out/${sessionId}/${channelId}/partial`, transcription);
-
-        // Publish discrete translations to separate topic
+        // Publish discrete translations to separate topic (must read transcription.translations before stripping)
         publishDiscreteTranslations(this.client, transcription, sessionId, channelId, 'partial');
+
+        const { translations: _partialTranslations, ...partialPayload } = transcription;
+        this.client.publish(`transcriber/out/${sessionId}/${channelId}/partial`, partialPayload);
     });
 
     this.app.components['StreamingServer'].on('final', (transcription, sessionId, channelId, channel) => {
@@ -51,9 +52,10 @@ module.exports = async function () {
             transcription.externalTranslations = externalTranslations;
         }
 
-        this.client.publish(`transcriber/out/${sessionId}/${channelId}/final`, transcription);
-
-        // Publish discrete translations to separate topic
+        // Publish discrete translations to separate topic (must read transcription.translations before stripping)
         publishDiscreteTranslations(this.client, transcription, sessionId, channelId, 'final');
+
+        const { translations: _finalTranslations, ...finalPayload } = transcription;
+        this.client.publish(`transcriber/out/${sessionId}/${channelId}/final`, finalPayload);
     });
 }

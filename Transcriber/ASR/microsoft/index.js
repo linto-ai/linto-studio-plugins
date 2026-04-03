@@ -176,17 +176,13 @@ class MicrosoftTranscriber extends EventEmitter {
     getTargetLanguages() {
         const { translations } = this.channel;
         if (!translations || !translations.length) {
-            return;
+            return [];
         }
 
         // Filter for discrete translations only (external translations are handled by TranslationBus)
         const discreteTranslations = translations.filter(entry =>
             typeof entry === 'object' ? entry.mode === 'discrete' : true
         );
-
-        if (!discreteTranslations.length) {
-            return;
-        }
 
         return discreteTranslations.map(entry =>
             typeof entry === 'object' ? entry.target.split('-')[0] : entry.split('-')[0]
@@ -195,11 +191,10 @@ class MicrosoftTranscriber extends EventEmitter {
 
     getOriginalTargetLanguages() {
         const { translations } = this.channel;
-        if (!translations || !translations.length) return;
+        if (!translations || !translations.length) return [];
         const discreteTranslations = translations.filter(entry =>
             typeof entry === 'object' ? entry.mode === 'discrete' : true
         );
-        if (!discreteTranslations.length) return;
         return discreteTranslations.map(entry =>
             typeof entry === 'object' ? entry.target : entry
         );
@@ -208,7 +203,7 @@ class MicrosoftTranscriber extends EventEmitter {
     formatResult(result) {
         let translations = {};
         const targetLanguages = this.getTargetLanguages();
-        if (result.translations && targetLanguages) {
+        if (result.translations && targetLanguages.length > 0) {
             const originalKeys = this.getOriginalTargetLanguages();
             translations = Object.fromEntries(targetLanguages.map((azureKey, i) => [originalKeys[i], result.translations.get(azureKey)]));
         }
@@ -229,7 +224,7 @@ class MicrosoftTranscriber extends EventEmitter {
         let msg = 'Starting Microsoft ASR';
 
         if (translations && translations.length > 0) {
-            msg = `${msg} - translations=${translations}`;
+            msg = `${msg} - translations=${JSON.stringify(translations)}`;
         } else {
             msg = `${msg} - without translation`;
         }
@@ -247,7 +242,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.startedAt = new Date().toISOString();
 
         // If translation and diarization are enabled, we use two recognizers
-        if (translations && translations.length && diarization) {
+        if (this.getTargetLanguages().length > 0 && diarization) {
             this.pushStreams.push(AudioInputStream.createPushStream());
 
             this.recognizers.push(this.setupRecognizer(
@@ -279,7 +274,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     createSpeechConfig(config, translations) {
         const multi = config.languages.length > 1;
-        const hasTranslations = translations && translations.length;
+        const hasTranslations = this.getTargetLanguages().length > 0;
         let usedEndpoint = null;
 
         const decryptedKey = new Security().safeDecrypt(config.key);
@@ -343,7 +338,7 @@ class MicrosoftTranscriber extends EventEmitter {
 
     createRecognizer(config, translations, diarization, speechConfig, audioConfig) {
         const multi = config.languages.length > 1;
-        const hasTranslations = translations && translations.length;
+        const hasTranslations = this.getTargetLanguages().length > 0;
 
         if (multi) {
             const candidates = config.languages.map(language => {

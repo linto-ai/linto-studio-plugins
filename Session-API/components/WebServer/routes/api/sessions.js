@@ -148,17 +148,11 @@ async function setChannelsEndpoints(sessionId, transaction) {
 }
 
 async function getSessionResult(sessionId, withCaptions=false) {
-    const exclude = ['sessionId'];
-    if (!withCaptions) {
-        exclude.push('closedCaptions');
-        exclude.push('translatedCaptions');
-    }
-
     const session = await Model.Session.findByPk(sessionId, {
         include: {
             model: Model.Channel,
             attributes: {
-                exclude: exclude
+                exclude: ['sessionId', 'closedCaptions', 'translatedCaptions']
             },
         },
         order: [[Model.Channel, 'id', 'ASC']]
@@ -168,9 +162,42 @@ async function getSessionResult(sessionId, withCaptions=false) {
         return null;
     }
 
-    session.channels.forEach((channel, index) => {
+    for (const [index, channel] of session.channels.entries()) {
         channel.setDataValue('index', index);
-    });
+        if (withCaptions) {
+            const captions = await Model.Caption.findAll({
+                where: { channelId: channel.id },
+                order: [['id', 'ASC']],
+                raw: true,
+            });
+            channel.setDataValue('closedCaptions', captions.map(c => ({
+                segmentId: c.segmentId,
+                start: c.start !== null ? parseFloat(c.start) : null,
+                end: c.end !== null ? parseFloat(c.end) : null,
+                text: c.text,
+                astart: c.astart,
+                aend: c.aend,
+                lang: c.lang,
+                locutor: c.locutor,
+            })));
+
+            const translations = await Model.TranslatedCaption.findAll({
+                where: { channelId: channel.id },
+                raw: true,
+            });
+            const translatedCaptions = {};
+            for (const t of translations) {
+                const key = String(t.segmentId);
+                if (!translatedCaptions[key]) translatedCaptions[key] = [];
+                translatedCaptions[key].push({
+                    segmentId: t.segmentId,
+                    targetLang: t.targetLang,
+                    text: t.text,
+                });
+            }
+            channel.setDataValue('translatedCaptions', translatedCaptions);
+        }
+    }
 
     return session;
 }
@@ -675,48 +702,88 @@ module.exports = (webserver) => {
             const startSecs = start_time ? toSeconds(start_time) : null;
             const endSecs   = end_time   ? toSeconds(end_time)   : null;
 
-            // Build removal conditions: abs_start >= startSecs AND abs_end <= endSecs
-            const removalConditions = [];
-            if (startSecs !== null) removalConditions.push(`abs_start >= ${Model.sequelize.escape(startSecs)}`);
-            if (endSecs   !== null) removalConditions.push(`abs_end   <= ${Model.sequelize.escape(endSecs)}`);
-            const whereRemove = removalConditions.length
-              ? removalConditions.join(' AND ')
-              : 'FALSE';
-
             try {
-                // First, check if the session exists and is active
                 const session = await Model.Session.findByPk(sessionId);
                 if (!session) {
                     throw new ApiError(404, 'Session not found');
                 }
 
-                await Model.Channel.update(
-                  {
-                    closedCaptions: Model.sequelize.literal(`(
-                      WITH base AS (
-                        SELECT ("closedCaptions"->0->>'astart')::timestamptz AS base
-                        FROM channels
-                        WHERE "sessionId" = ${Model.sequelize.escape(sessionId)}
-                      ), elems AS (
-                        SELECT elem,
-                          -- compute absolute start in seconds from base + relative start
-                          EXTRACT(EPOCH FROM ((elem->>'astart')::timestamptz - base))
-                            + (elem->>'start')::numeric AS abs_start,
-                          -- compute absolute end in seconds
-                          COALESCE(
-                            EXTRACT(EPOCH FROM ((elem->>'aend')::timestamptz - base)),
-                            EXTRACT(EPOCH FROM ((elem->>'astart')::timestamptz - base))
-                              + (elem->>'end')::numeric
-                          ) AS abs_end
-                        FROM base, jsonb_array_elements("closedCaptions"::jsonb) AS elem
-                      )
-                      SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb)
-                      FROM elems
-                      WHERE NOT (${whereRemove})
-                    )`)
-                  },
-                  { where: { sessionId } }
+                // If no time bounds specified, nothing to delete (matches original behavior)
+                if (startSecs === null && endSecs === null) {
+                    const result = await getSessionResult(session.id, true);
+                    return res.json(result);
+                }
+
+                // Get all channel IDs for this session
+                const channelIds = (await Model.Channel.findAll({
+                    where: { sessionId },
+                    attributes: ['id'],
+                    raw: true,
+                })).map(c => c.id);
+
+                if (channelIds.length === 0) {
+                    const result = await getSessionResult(session.id, true);
+                    return res.json(result);
+                }
+
+                // Get per-channel base timestamps (earliest astart per channel)
+                // Each channel has its own time reference since channels can start at different times
+                const channelBases = await Model.sequelize.query(
+                    `SELECT "channelId", MIN(astart) as base FROM captions WHERE "channelId" IN (:channelIds) GROUP BY "channelId"`,
+                    { replacements: { channelIds }, type: Model.sequelize.constructor.QueryTypes.SELECT }
                 );
+
+                if (channelBases.length === 0) {
+                    const result = await getSessionResult(session.id, true);
+                    return res.json(result);
+                }
+
+                // Delete captions and translated_captions per-channel, each with its own base
+                const channelSegmentMap = {};
+                for (const { channelId: chId, base } of channelBases) {
+                    const chBase = new Date(base);
+                    let conditions = ['"channelId" = :chId'];
+                    const replacements = { chId };
+
+                    if (startSecs !== null) {
+                        conditions.push(`(EXTRACT(EPOCH FROM (astart - :chBase)) + start) >= :startSecs`);
+                        replacements.chBase = chBase;
+                        replacements.startSecs = startSecs;
+                    }
+                    if (endSecs !== null) {
+                        conditions.push(`COALESCE(
+                            EXTRACT(EPOCH FROM (aend - :chBase)),
+                            EXTRACT(EPOCH FROM (astart - :chBase)) + "end"
+                        ) <= :endSecs`);
+                        replacements.chBase = chBase;
+                        replacements.endSecs = endSecs;
+                    }
+
+                    const whereClause = conditions.join(' AND ');
+
+                    // Collect segmentIds before deleting
+                    const captionsToDelete = await Model.sequelize.query(
+                        `SELECT "segmentId" FROM captions WHERE ${whereClause}`,
+                        { replacements, type: Model.sequelize.constructor.QueryTypes.SELECT }
+                    );
+
+                    await Model.sequelize.query(
+                        `DELETE FROM captions WHERE ${whereClause}`,
+                        { replacements }
+                    );
+
+                    const segIds = new Set(captionsToDelete.map(c => c.segmentId).filter(Boolean));
+                    if (segIds.size > 0) {
+                        channelSegmentMap[chId] = segIds;
+                    }
+                }
+
+                // Delete corresponding translated_captions per-channel
+                for (const [chId, segIds] of Object.entries(channelSegmentMap)) {
+                    await Model.TranslatedCaption.destroy({
+                        where: { channelId: parseInt(chId), segmentId: [...segIds] }
+                    });
+                }
 
                 const result = await getSessionResult(session.id, true);
                 res.json(result);

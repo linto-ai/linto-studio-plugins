@@ -44,7 +44,7 @@
                 "default": false
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             },
             "channels": {
@@ -100,7 +100,7 @@
                 "default": false
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             }
         }
@@ -146,10 +146,9 @@
             "status": {
                 "type": "string",
                 "enum": [
-                    "pending_creation",
+                    "on_schedule",
                     "ready",
                     "active",
-                    "errored",
                     "terminated"
                 ]
             },
@@ -199,7 +198,7 @@
                 "type": "boolean"
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             }
         }
@@ -303,7 +302,7 @@
                 "default": true
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             }
         }
@@ -359,7 +358,7 @@
                 "default": true
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             }
         }
@@ -396,13 +395,20 @@
                 "type": "string",
                 "description": "The id of the transcriber that is currently transcribing this channel"
             },
+            "lastSegmentId": {
+                "type": "integer",
+                "description": "The id of the last transcription segment received on this channel"
+            },
             "name": {
                 "type": "string",
                 "description": "The name of the channel"
             },
             "languages": {
                 "type": "array",
-                "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...) and endpoints"
+                "description": "The language of the channel as a BCP-47 language tag (fr-FR, en-US, ...) and endpoints",
+                "items": {
+                    "type": "string"
+                }
             },
             "translations": {
                 "type": "array",
@@ -445,6 +451,66 @@
             "audioFile": {
                 "type": "string",
                 "description": "URL to the audio file"
+            },
+            "meta": {
+                "type": "object",
+                "description": "Custom metadata for the channel"
+            }
+        }
+    },
+    "Caption": {
+        "type": "object",
+        "properties": {
+            "segmentId": {
+                "type": "integer",
+                "description": "Segment identifier"
+            },
+            "start": {
+                "type": "number",
+                "description": "Relative start time in seconds within the segment"
+            },
+            "end": {
+                "type": "number",
+                "description": "Relative end time in seconds within the segment"
+            },
+            "text": {
+                "type": "string",
+                "description": "Transcribed text"
+            },
+            "astart": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Absolute start time (wall clock)"
+            },
+            "aend": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Absolute end time (wall clock)"
+            },
+            "lang": {
+                "type": "string",
+                "description": "BCP47 language tag of the transcription"
+            },
+            "locutor": {
+                "type": "string",
+                "description": "Speaker identifier from diarization"
+            }
+        }
+    },
+    "TranslatedCaption": {
+        "type": "object",
+        "properties": {
+            "segmentId": {
+                "type": "integer",
+                "description": "Segment identifier matching the source caption"
+            },
+            "targetLang": {
+                "type": "string",
+                "description": "BCP47 target language tag"
+            },
+            "text": {
+                "type": "string",
+                "description": "Translated text"
             }
         }
     },
@@ -456,13 +522,18 @@
                 "properties": {
                     "closedCaptions": {
                         "type": "array",
+                        "description": "Transcription captions for this channel",
                         "items": {
-                            "type": "object",
-                            "example": {
-                                "astart": "date-time",
-                                "start": 0.0,
-                                "end": 3.12,
-                                "text": "string"
+                            "$ref": "#/components/schemas/Caption"
+                        }
+                    },
+                    "translatedCaptions": {
+                        "type": "object",
+                        "description": "Translations grouped by segmentId. Keys are segmentId strings, values are arrays of translations.",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/components/schemas/TranslatedCaption"
                             }
                         }
                     }
@@ -476,11 +547,14 @@
             {
                 "type": "object",
                 "properties": {
-                    "translatedCaptions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object"
-                        }
+                    "organizationId": {
+                        "type": "string",
+                        "description": "Organization ID of the parent session"
+                    },
+                    "visibility": {
+                        "type": "string",
+                        "description": "Visibility of the parent session",
+                        "enum": ["public", "organization", "private", "user"]
                     },
                     "totalClosedCaptions": {
                         "type": "integer",
@@ -488,7 +562,7 @@
                     },
                     "totalTranslatedCaptions": {
                         "type": "integer",
-                        "description": "Total number of translated captions for this channel"
+                        "description": "Total number of distinct segments with translations for this channel"
                     }
                 }
             }

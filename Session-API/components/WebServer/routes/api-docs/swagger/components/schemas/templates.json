@@ -33,7 +33,7 @@
                 "default": false
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             },
             "channels": {
@@ -66,14 +66,13 @@
                 "type": "object",
                 "properties": {
                     "id": {
-                        "type": "integer",
-                        "format": "uuid"
-                    }
-                },
-                "channels": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/ChannelTemplateAnswer"
+                        "type": "integer"
+                    },
+                    "channels": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ChannelTemplateAnswer"
+                        }
                     }
                 }
             }
@@ -119,7 +118,7 @@
                 "default": true
             },
             "meta": {
-                "type": "json",
+                "type": "object",
                 "default": null
             }
         }

@@ -220,23 +220,27 @@ class BrokerClient extends Component {
 
   async saveTranscription(transcription, sessionId, channelId) {
     try {
-      const newTranscription = JSON.stringify([transcription]);
-      const updateFields = {
-        closedCaptions: Model.sequelize.literal(
-          `COALESCE("closedCaptions"::jsonb, '[]'::jsonb) || ${Model.sequelize.escape(newTranscription)}::jsonb`
-        )
-      };
+      await Model.Caption.create({
+        channelId: channelId,
+        segmentId: transcription.segmentId,
+        start: transcription.start,
+        end: transcription.end,
+        text: transcription.text,
+        astart: transcription.astart,
+        aend: transcription.aend,
+        lang: transcription.lang,
+        locutor: transcription.locutor,
+      });
+      // Update lastSegmentId on channel
       if (transcription.segmentId !== undefined) {
-        updateFields.lastSegmentId = Model.sequelize.literal(
-          `GREATEST(COALESCE("lastSegmentId", 0), ${parseInt(transcription.segmentId, 10) || 0})`
+        await Model.Channel.update(
+          { lastSegmentId: Model.sequelize.literal(
+              `GREATEST(COALESCE("lastSegmentId", 0), ${parseInt(transcription.segmentId, 10) || 0})`
+            )
+          },
+          { where: { sessionId, id: channelId } }
         );
       }
-      await Model.Channel.update(updateFields, {
-        where: {
-          sessionId: sessionId,
-          id: channelId
-        }
-      });
     } catch (err) {
       logger.error(
         `${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`,
@@ -249,30 +253,12 @@ class BrokerClient extends Component {
 
   async saveTranslation(translation, sessionId, channelId) {
     try {
-      const segmentKey = String(translation.segmentId);
-      const escapedKey = Model.sequelize.escape(segmentKey);
-      const escapedTranslation = Model.sequelize.escape(JSON.stringify(translation));
-
-      await Model.Channel.update(
-        {
-          translatedCaptions: Model.sequelize.literal(
-            `jsonb_set(
-              COALESCE("translatedCaptions"::jsonb, '{}'::jsonb),
-              ARRAY[${escapedKey}],
-              COALESCE(
-                COALESCE("translatedCaptions"::jsonb, '{}'::jsonb) -> ${escapedKey},
-                '[]'::jsonb
-              ) || ${escapedTranslation}::jsonb
-            )`
-          )
-        },
-        {
-          where: {
-            sessionId: sessionId,
-            id: channelId
-          }
-        }
-      );
+      await Model.TranslatedCaption.create({
+        channelId: channelId,
+        segmentId: translation.segmentId,
+        targetLang: translation.targetLang,
+        text: translation.text,
+      });
     } catch (err) {
       logger.error(
         `${new Date().toISOString()} [TRANSLATION_SAVE_ERROR]: ${err.message}`,

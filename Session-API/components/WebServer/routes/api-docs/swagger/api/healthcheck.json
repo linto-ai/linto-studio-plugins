@@ -10,15 +10,17 @@
             "description": "OK",
             "content": {
               "application/json": {
-                "type": "object",
-                "properties": {
-                  "status": {
-                    "type": "string",
-                    "description": "Status of the service"
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "Status of the service"
+                    }
+                  },
+                  "example": {
+                    "status": "OK"
                   }
-                },
-                "example": {
-                  "status": "OK"
                 }
               }
             }

@@ -152,10 +152,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/SessionPaginationAnswer"
-                }
+                "$ref": "#/components/schemas/SessionPaginationAnswer"
               }
             }
           }
@@ -266,7 +263,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+                "$ref": "#/components/schemas/SessionAnswer"
               }
             }
           }
@@ -305,7 +302,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+                "$ref": "#/components/schemas/SessionAnswer"
               }
             }
           }
@@ -446,7 +443,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+                "$ref": "#/components/schemas/SessionAnswer"
               }
             }
           }
@@ -520,7 +517,7 @@
                   "schema": {
                       "type": "object",
                       "properties": {
-                          "message": {
+                          "error": {
                               "type": "string",
                               "example": "Invalid start_time format. Expected HH:mm:ss or null"
                           }

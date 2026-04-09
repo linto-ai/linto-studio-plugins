@@ -41,8 +41,8 @@ COPY lib/ /usr/src/app/lib
 COPY Transcriber/ /usr/src/app/transcriber
 COPY .envdefault /usr/src/app/
 
-RUN cd /usr/src/app/lib && npm install
-RUN cd /usr/src/app/transcriber && npm install
+RUN cd /usr/src/app/lib && npm ci
+RUN cd /usr/src/app/transcriber && npm ci
 
 COPY wait-for-it.sh /
 COPY Transcriber/docker-entrypoint.sh /

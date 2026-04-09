@@ -12,8 +12,8 @@ COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/
 COPY Session-API/ /usr/src/app/sessionapi
 
-RUN cd /usr/src/app/lib && npm install
-RUN cd /usr/src/app/sessionapi && npm install && npm cache clean --force
+RUN cd /usr/src/app/lib && npm ci
+RUN cd /usr/src/app/sessionapi && npm ci && npm cache clean --force
 
 COPY wait-for-it.sh /
 COPY Session-API/docker-entrypoint.sh /

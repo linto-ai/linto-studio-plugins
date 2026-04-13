@@ -78,7 +78,7 @@ module.exports = {
 
       // 4. Migrate existing translatedCaptions JSONB data into translated_captions table
       const translatedChannels = await queryInterface.sequelize.query(
-        `SELECT id FROM channels WHERE "translatedCaptions" IS NOT NULL AND "translatedCaptions"::text != '{}'`,
+        `SELECT id FROM channels WHERE "translatedCaptions" IS NOT NULL AND jsonb_typeof("translatedCaptions"::jsonb) = 'object' AND "translatedCaptions"::text != '{}'`,
         { type: Sequelize.QueryTypes.SELECT, transaction }
       );
 

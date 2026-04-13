@@ -152,7 +152,7 @@ async function getSessionResult(sessionId, withCaptions=false) {
         include: {
             model: Model.Channel,
             attributes: {
-                exclude: ['sessionId', 'closedCaptions', 'translatedCaptions']
+                exclude: ['sessionId']
             },
         },
         order: [[Model.Channel, 'id', 'ASC']]
@@ -168,15 +168,17 @@ async function getSessionResult(sessionId, withCaptions=false) {
 
     if (withCaptions) {
         const channelIds = session.channels.map(c => c.id);
-        const allCaptions = await Model.Caption.findAll({
-            where: { channelId: channelIds },
-            order: [['channelId', 'ASC'], ['id', 'ASC']],
-            raw: true,
-        });
-        const allTranslations = await Model.TranslatedCaption.findAll({
-            where: { channelId: channelIds },
-            raw: true,
-        });
+        const [allCaptions, allTranslations] = await Promise.all([
+            Model.Caption.findAll({
+                where: { channelId: channelIds },
+                order: [['channelId', 'ASC'], ['id', 'ASC']],
+                raw: true,
+            }),
+            Model.TranslatedCaption.findAll({
+                where: { channelId: channelIds },
+                raw: true,
+            }),
+        ]);
 
         const captionsByChannel = {};
         for (const c of allCaptions) {
@@ -232,7 +234,7 @@ module.exports = (webserver) => {
 
                 const channel = await Model.Channel.findOne({
                     where: { id: channelId, sessionId },
-                    attributes: { exclude: ['closedCaptions', 'translatedCaptions', 'sessionId'] }
+                    attributes: { exclude: ['sessionId'] }
                 });
                 if (!channel) {
                     return res.status(404).json({ error: 'Channel not found' });
@@ -323,7 +325,7 @@ module.exports = (webserver) => {
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['sessionId', 'closedCaptions', 'translatedCaptions']
+                            exclude: ['sessionId']
                         },
                     },
                     where: where,
@@ -757,18 +759,12 @@ module.exports = (webserver) => {
 
                         const whereClause = conditions.join(' AND ');
 
-                        // Collect segmentIds before deleting
-                        const captionsToDelete = await Model.sequelize.query(
-                            `SELECT "segmentId" FROM captions WHERE ${whereClause}`,
+                        const deletedCaptions = await Model.sequelize.query(
+                            `DELETE FROM captions WHERE ${whereClause} RETURNING "segmentId"`,
                             { replacements, type: Model.Sequelize.QueryTypes.SELECT, transaction }
                         );
 
-                        await Model.sequelize.query(
-                            `DELETE FROM captions WHERE ${whereClause}`,
-                            { replacements, transaction }
-                        );
-
-                        const segIds = new Set(captionsToDelete.map(c => c.segmentId).filter(Boolean));
+                        const segIds = new Set(deletedCaptions.map(c => c.segmentId).filter(Boolean));
                         if (segIds.size > 0) {
                             channelSegmentMap[chId] = segIds;
                         }

@@ -220,20 +220,20 @@ class BrokerClient extends Component {
 
   async saveTranscription(transcription, sessionId, channelId) {
     try {
-      await Model.sequelize.transaction(async (transaction) => {
-        await Model.Caption.create({
-          channelId: channelId,
-          segmentId: transcription.segmentId,
-          start: transcription.start,
-          end: transcription.end,
-          text: transcription.text,
-          astart: transcription.astart,
-          aend: transcription.aend,
-          lang: transcription.lang,
-          locutor: transcription.locutor,
-        }, { transaction });
-        // Update lastSegmentId on channel
-        if (transcription.segmentId !== undefined) {
+      const captionData = {
+        channelId: channelId,
+        segmentId: transcription.segmentId,
+        start: transcription.start,
+        end: transcription.end,
+        text: transcription.text,
+        astart: transcription.astart,
+        aend: transcription.aend,
+        lang: transcription.lang,
+        locutor: transcription.locutor,
+      };
+      if (transcription.segmentId !== undefined) {
+        await Model.sequelize.transaction(async (transaction) => {
+          await Model.Caption.create(captionData, { transaction });
           await Model.Channel.update(
             { lastSegmentId: Model.sequelize.literal(
                 `GREATEST(COALESCE("lastSegmentId", 0), ${parseInt(transcription.segmentId, 10) || 0})`
@@ -241,13 +241,12 @@ class BrokerClient extends Component {
             },
             { where: { sessionId, id: channelId }, transaction }
           );
-        }
-      });
+        });
+      } else {
+        await Model.Caption.create(captionData);
+      }
     } catch (err) {
-      logger.error(
-        `${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`,
-        JSON.stringify(transcription)
-      );
+      logger.error(`[TRANSCRIPTION_SAVE_ERROR]: ${err.message}`, JSON.stringify(transcription));
     }
   }
 
@@ -262,10 +261,7 @@ class BrokerClient extends Component {
         text: translation.text,
       });
     } catch (err) {
-      logger.error(
-        `${new Date().toISOString()} [TRANSLATION_SAVE_ERROR]: ${err.message}`,
-        JSON.stringify(translation)
-      );
+      logger.error(`[TRANSLATION_SAVE_ERROR]: ${err.message}`, JSON.stringify(translation));
     }
   }
 

@@ -220,27 +220,29 @@ class BrokerClient extends Component {
 
   async saveTranscription(transcription, sessionId, channelId) {
     try {
-      await Model.Caption.create({
-        channelId: channelId,
-        segmentId: transcription.segmentId,
-        start: transcription.start,
-        end: transcription.end,
-        text: transcription.text,
-        astart: transcription.astart,
-        aend: transcription.aend,
-        lang: transcription.lang,
-        locutor: transcription.locutor,
+      await Model.sequelize.transaction(async (transaction) => {
+        await Model.Caption.create({
+          channelId: channelId,
+          segmentId: transcription.segmentId,
+          start: transcription.start,
+          end: transcription.end,
+          text: transcription.text,
+          astart: transcription.astart,
+          aend: transcription.aend,
+          lang: transcription.lang,
+          locutor: transcription.locutor,
+        }, { transaction });
+        // Update lastSegmentId on channel
+        if (transcription.segmentId !== undefined) {
+          await Model.Channel.update(
+            { lastSegmentId: Model.sequelize.literal(
+                `GREATEST(COALESCE("lastSegmentId", 0), ${parseInt(transcription.segmentId, 10) || 0})`
+              )
+            },
+            { where: { sessionId, id: channelId }, transaction }
+          );
+        }
       });
-      // Update lastSegmentId on channel
-      if (transcription.segmentId !== undefined) {
-        await Model.Channel.update(
-          { lastSegmentId: Model.sequelize.literal(
-              `GREATEST(COALESCE("lastSegmentId", 0), ${parseInt(transcription.segmentId, 10) || 0})`
-            )
-          },
-          { where: { sessionId, id: channelId } }
-        );
-      }
     } catch (err) {
       logger.error(
         `${new Date().toISOString()} [TRANSCRIPTION_SAVE_ERROR]: ${err.message}`,

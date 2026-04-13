@@ -79,16 +79,18 @@ class ASR extends eventEmitter {
     });
     this.provider.on('error', error => {
       this.logger.error(error);
-      const msg = ASR_ERROR[error]
+      const msg = ASR_ERROR[error] || ASR_ERROR['RUNTIME_ERROR'];
       const final = {
+        "segmentId": this.segmentId,
         "astart": this.provider.startedAt,
         "text": msg,
-        "start": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
-        "end": Math.floor(new Date().getTime() / 1000) - this.startTimestamp,
+        "start": 0,
+        "end": 0,
         "lang": 'EN-en',
         "locutor": process.env.TRANSCRIBER_BOT_NAME
       }
       this.emit('final', final)
+      this.segmentId++;
       this.logger.error(msg);
       this.state = ASR.states.ERROR
     })
@@ -135,6 +137,7 @@ class ASR extends eventEmitter {
       const final = {
         "astart": this.provider.startedAt,
         "aend": new Date().toISOString(),
+        "text": "",
         "locutor": process.env.TRANSCRIBER_BOT_NAME
       }
       this.emit('final', final)

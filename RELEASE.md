@@ -1,3 +1,12 @@
+# 1.3.2-hotfix.1
+
+_2026_04_14_
+
+- Normalize captions and translated captions into dedicated `captions` and `translated_captions` tables (INSERT-only), eliminating JSONB append O(n²) bloat on live sessions (cherry-pick from `next`)
+- Harden transactional safety and fix N+1 queries in session/captions read paths
+- Drop legacy `closedCaptions` and `translatedCaptions` JSONB columns on `channels` (irreversible migration)
+- Fix ASR error handling and stream-stop events in Transcriber
+
 # 1.3.2
 
 _2026_03_26_

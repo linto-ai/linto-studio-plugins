@@ -10,7 +10,7 @@ def notifyLintoDeploy(service_name, tag, commit_sha) {
     }
 }
 
-def buildDockerfile(folder_name, image_name, version, commit_sha, context = '.') {
+def buildDockerfile(folder_name, image_name, version, commit_sha, context = '.', hotfix = false) {
     echo "Building Dockerfile at ${folder_name}/Dockerfile for ${image_name}... with version ${version}"
 
     // Build Docker image using the specified Dockerfile
@@ -22,14 +22,16 @@ def buildDockerfile(folder_name, image_name, version, commit_sha, context = '.')
         docker.withRegistry('https://registry.hub.docker.com', env.DOCKER_HUB_CRED) {
             if (version == 'latest-unstable') {
                 image.push('latest-unstable')
+            } else if (hotfix) {
+                image.push(version)
             } else {
                 image.push('latest')
                 image.push(version)
             }
         }
 
-        // Notify linto-deploy after successful push (only for main branch)
-        if (version != 'latest-unstable') {
+        // Notify linto-deploy after successful push (only for main branch, not hotfix)
+        if (version != 'latest-unstable' && !hotfix) {
             notifyLintoDeploy(image_name, version, commit_sha)
         }
     }
@@ -41,6 +43,14 @@ def buildAllPlugins(version, commit_sha) {
     buildDockerfile('Session-API', 'studio-plugins-sessionapi', version, commit_sha)
     buildDockerfile('migration', 'studio-plugins-migration', version, commit_sha)
     buildDockerfile('TranslatorPython', 'studio-plugins-translator', version, commit_sha, 'TranslatorPython')
+}
+
+def buildAllPluginsHotfix(version, commit_sha) {
+    buildDockerfile('Transcriber', 'studio-plugins-transcriber', version, commit_sha, '.', true)
+    buildDockerfile('Scheduler', 'studio-plugins-scheduler', version, commit_sha, '.', true)
+    buildDockerfile('Session-API', 'studio-plugins-sessionapi', version, commit_sha, '.', true)
+    buildDockerfile('migration', 'studio-plugins-migration', version, commit_sha, '.', true)
+    buildDockerfile('TranslatorPython', 'studio-plugins-translator', version, commit_sha, 'TranslatorPython', true)
 }
 
 pipeline {
@@ -80,6 +90,25 @@ pipeline {
                     def commit_sha = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
 
                     buildAllPlugins('latest-unstable', commit_sha)
+                }
+            }
+        }
+
+        stage('Docker build for main-hotfix branch') {
+            when {
+                branch 'main-hotfix'
+            }
+            steps {
+                echo 'Publishing hotfix version (no latest tag)'
+                script {
+                    def commit_sha = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
+
+                    def version = sh(
+                        returnStdout: true,
+                        script: "awk -v RS='' '/#/ {print; exit}' RELEASE.md | head -1 | sed 's/#//' | sed 's/ //'"
+                    ).trim()
+
+                    buildAllPluginsHotfix(version, commit_sha)
                 }
             }
         }

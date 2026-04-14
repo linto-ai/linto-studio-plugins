@@ -188,13 +188,16 @@ async function getSessionResult(sessionId, withCaptions=false) {
         const translationsByChannel = {};
         for (const t of allTranslations) {
             if (!translationsByChannel[t.channelId]) translationsByChannel[t.channelId] = [];
-            translationsByChannel[t.channelId].push(t);
+            translationsByChannel[t.channelId].push({
+                segmentId: t.segmentId,
+                targetLang: t.targetLang,
+                text: t.text,
+            });
         }
 
         for (const channel of session.channels) {
             channel.setDataValue('closedCaptions', captionsByChannel[channel.id] || []);
-            channel.setDataValue('translatedCaptions',
-                Model.groupTranslatedCaptions(translationsByChannel[channel.id] || []));
+            channel.setDataValue('translatedCaptions', translationsByChannel[channel.id] || []);
         }
     }
 

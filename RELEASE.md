@@ -1,3 +1,10 @@
+# 1.3.2-hotfix.2
+
+_2026_04_14_
+
+- Downgrade MQTT QoS from 2 to 1 on all publishes, fixing translated caption loss under high target-language fan-out caused by broker in-flight window saturation (cherry-pick from `next`)
+- Return `translatedCaptions` as a flat array on `GET /sessions/:id`, restoring compatibility with `studio-frontend:1.8.3`
+
 # 1.3.2-hotfix.1
 
 _2026_04_14_

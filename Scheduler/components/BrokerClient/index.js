@@ -72,6 +72,7 @@ class BrokerClient extends Component {
 
   async autoEnd() {
     let isUpdated = false;
+    let endedSessionIds = [];
 
     await Model.sequelize.transaction(async (transaction) => {
       const [updatedCount, updatedSessions] = await Model.Session.update(
@@ -97,6 +98,7 @@ class BrokerClient extends Component {
       if (sessionIds.length > 0) {
         logger.debug(`Auto end sessions ${sessionIds}`);
         isUpdated = true;
+        endedSessionIds = sessionIds;
         await Model.Channel.update(
           { streamStatus: 'inactive' },
           {
@@ -110,6 +112,30 @@ class BrokerClient extends Component {
         );
       }
     });
+
+    // Publish one terminal notification per auto-ended session so consumers
+    // (e.g. studio-api) can react via a load-balanced shared subscription
+    // without having to diff the statuses snapshot. The payload is kept
+    // intentionally minimal — consumers re-fetch the full session from the
+    // Session API when they need the details.
+    for (const sessionId of endedSessionIds) {
+      try {
+        const endedSession = await Model.Session.findByPk(sessionId, {
+          attributes: ['id', 'organizationId']
+        });
+        if (endedSession) {
+          this.client.publish(
+            'system/out/sessions/ended',
+            { id: endedSession.id, organizationId: endedSession.organizationId },
+            1,
+            false,
+            true
+          );
+        }
+      } catch (err) {
+        logger.error(`Failed to publish sessions/ended for ${sessionId}: ${err?.message || err}`);
+      }
+    }
 
     return isUpdated;
   }

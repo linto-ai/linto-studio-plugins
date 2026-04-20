@@ -1,3 +1,30 @@
+# 1.4.0
+
+_2026_04_20_
+
+- Captions storage refactor
+  - Introduce dedicated `captions` and `translated_captions` tables (new migration)
+  - Migrate Scheduler and Session-API read/write paths to the new tables
+  - Drop legacy JSONB caption columns and optimize related queries
+  - Harden transactional safety, fix N+1 queries, deduplicate caption formatting
+  - Add `jsonb_typeof` guard for the `translatedCaptions` migration
+- Translation payload changes
+  - Refactor `translatedCaptions` from a flat array to a `segmentId`-keyed mapping
+  - Strip translations from the main transcription MQTT payload
+  - Add `mode` field to translation MQTT payloads (Transcriber and TranslatorPython)
+  - Add final information on translation event (#27)
+- MQTT
+  - Downgrade QoS from 2 to 1 across all publish calls
+- Swagger / API
+  - Fix schema inconsistencies and document caption types
+  - Move `translatedCaptions` next to `closedCaptions` in Session-API schema
+- Tooling
+  - Add mock MQTT message producer
+  - Replace `npm install` with `npm ci` in Dockerfiles for deterministic builds
+- Bug fixes
+  - Fix error handling and stream stop in the ASR event emitter
+  - Fix `TypeError` when iterating `targetLanguages` with external-only translations
+
 # 1.3.2
 
 _2026_03_26_

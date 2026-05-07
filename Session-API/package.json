@@ -7,7 +7,8 @@
     "start": "node Session-API.js",
     "start-live": "npx -y nodemon Session-API.js",
     "encrypt-keys": "node encrypt-keys.js",
-    "migrate-keys": "node migrate-keys.js"
+    "migrate-keys": "node migrate-keys.js",
+    "test": "./node_modules/.bin/mocha --recursive tests/"
   },
   "author": "European Commission - DGSCIC",
   "contributors": [
@@ -38,5 +39,9 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "uuid": "13.0.0"
+  },
+  "devDependencies": {
+    "mocha": "^11.7.5",
+    "supertest": "^7.0.0"
   }
 }

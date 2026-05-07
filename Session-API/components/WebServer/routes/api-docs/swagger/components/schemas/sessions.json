@@ -149,6 +149,7 @@
                     "on_schedule",
                     "ready",
                     "active",
+                    "paused",
                     "terminated"
                 ]
             },
@@ -190,6 +191,12 @@
             "erroredOn": {
                 "type": "string",
                 "format": "date-time"
+            },
+            "pausedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true,
+                "description": "Timestamp at which the session was last paused. Null when the session is not paused."
             },
             "autoStart": {
                 "type": "boolean"

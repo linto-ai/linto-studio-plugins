@@ -510,7 +510,10 @@ module.exports = (webserver) => {
                 return res.status(404).json({ "error": `Session ${sessionId} not found` });
             }
 
-            const { ...sessionAttributes } = req.body;
+            const ALLOWED_PATCH_FIELDS = ['name', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'visibility', 'owner', 'organizationId', 'meta'];
+            const sessionAttributes = Object.fromEntries(
+                Object.entries(req.body).filter(([k]) => ALLOWED_PATCH_FIELDS.includes(k))
+            );
 
             const transaction = await Model.sequelize.transaction();
             try {
@@ -541,9 +544,9 @@ module.exports = (webserver) => {
                 if (!session) {
                     return res.status(404).send('Session not found');
                 }
-                // Check if session is active and "force" parameter is not true
-                if (session.status === 'active' && req.query.force !== 'true') {
-                    throw new ApiError(400, "Active sessions cannot be deleted without force parameter");
+                // Check if session is active or paused and "force" parameter is not true
+                if (['active', 'paused'].includes(session.status) && req.query.force !== 'true') {
+                    throw new ApiError(400, "Active or paused sessions cannot be deleted without force parameter");
                 }
                 await session.destroy();
                 logger.debug('Session deleted', session.id);
@@ -587,6 +590,76 @@ module.exports = (webserver) => {
                 webserver.emit('session-update');
 
                 const result = await getSessionResult(session.id);
+                res.json(result);
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
+        path: '/sessions/:id/pause',
+        method: 'put',
+        controller: async (req, res, next) => {
+            try {
+                const sessionId = req.params.id;
+                const session = await Model.Session.findByPk(sessionId);
+                if (!session) {
+                    throw new ApiError(404, `Session ${sessionId} not found`);
+                }
+
+                // Idempotence: already paused
+                if (session.status === 'paused') {
+                    const result = await getSessionResult(session.id);
+                    return res.json(result);
+                }
+
+                // Only active sessions can be paused
+                if (session.status !== 'active') {
+                    throw new ApiError(400, `Cannot pause session in status '${session.status}'. Only active sessions can be paused.`);
+                }
+
+                logger.info(`Pausing session ${sessionId} (org=${session.organizationId}, fromStatus=${session.status})`);
+
+                await session.update({ status: 'paused', pausedAt: new Date() });
+
+                webserver.emit('session-update');
+                webserver.emit('session-paused', session);
+
+                const result = await getSessionResult(sessionId);
+                res.json(result);
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
+        path: '/sessions/:id/resume',
+        method: 'put',
+        controller: async (req, res, next) => {
+            try {
+                const sessionId = req.params.id;
+                const session = await Model.Session.findByPk(sessionId);
+                if (!session) {
+                    throw new ApiError(404, `Session ${sessionId} not found`);
+                }
+
+                // Idempotence: already active
+                if (session.status === 'active') {
+                    const result = await getSessionResult(session.id);
+                    return res.json(result);
+                }
+
+                // Only paused sessions can be resumed
+                if (session.status !== 'paused') {
+                    throw new ApiError(400, `Cannot resume session in status '${session.status}'. Only paused sessions can be resumed.`);
+                }
+
+                logger.info(`Resuming session ${sessionId} (org=${session.organizationId})`);
+
+                await session.update({ status: 'active', pausedAt: null });
+
+                webserver.emit('session-update');
+                webserver.emit('session-resumed', session);
+
+                const result = await getSessionResult(sessionId);
                 res.json(result);
             } catch (err) {
                 next(err);

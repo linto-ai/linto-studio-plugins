@@ -454,6 +454,82 @@
       }
     }
   },
+  "/sessions/{id}/pause": {
+    "put": {
+      "tags": [
+        "sessions"
+      ],
+      "summary": "Pause an active session",
+      "description": "Transitions the session status from 'active' to 'paused'. The audio stream stays open and is drained, but ASR is fully stopped to release resources. Idempotent: re-issuing on a paused session returns 200 unchanged.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Session paused (or already paused, idempotent)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionAnswer"
+              }
+            }
+          }
+        },
+        "400": {
+          "description": "Session not in a state that allows pausing (must be 'active')"
+        },
+        "404": {
+          "description": "Session not found"
+        }
+      }
+    }
+  },
+  "/sessions/{id}/resume": {
+    "put": {
+      "tags": [
+        "sessions"
+      ],
+      "summary": "Resume a paused session",
+      "description": "Transitions the session status from 'paused' back to 'active'. ASR is restarted. Idempotent: re-issuing on an active session returns 200 unchanged.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Session resumed (or already active, idempotent)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionAnswer"
+              }
+            }
+          }
+        },
+        "400": {
+          "description": "Session not in a state that allows resuming (must be 'paused')"
+        },
+        "404": {
+          "description": "Session not found"
+        }
+      }
+    }
+  },
   "/sessions/{id}/delete-captions": {
     "delete": {
       "tags": [

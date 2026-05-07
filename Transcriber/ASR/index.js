@@ -36,7 +36,49 @@ class ASR extends eventEmitter {
     this.state = ASR.states.CLOSED;
     this.segmentId = options.initialSegmentId || 1;
     this._dualFinalCount = 0;
+    this.paused = false;
+    this._transitionLock = Promise.resolve();
     this.init();
+  }
+
+  async pause() {
+    this._transitionLock = this._transitionLock.then(async () => {
+      if (this.paused) return;
+      this.paused = true;
+      if (this.audioBuffer) {
+        this.audioBuffer.flush();
+      }
+      if (this.provider && (this.state === ASR.states.READY || this.state === ASR.states.TRANSCRIBING || this.state === ASR.states.CONNECTING)) {
+        try {
+          await this.provider.stop();
+        } catch (e) {
+          this.logger.warn(`ASR pause: provider.stop() error: ${e.message}`);
+        }
+      }
+      this.logger.info(`ASR paused for session=${this.session?.id} channel=${this.channel?.id}`);
+    });
+    return this._transitionLock;
+  }
+
+  async resume() {
+    this._transitionLock = this._transitionLock.then(async () => {
+      if (!this.paused) return;
+      this.paused = false;
+      if (this.audioBuffer) {
+        this.audioBuffer.flush();
+      }
+      this.state = ASR.states.CONNECTING;
+      if (this.provider) {
+        try {
+          await this.provider.start();
+        } catch (e) {
+          this.logger.error(`ASR resume: provider.start() error: ${e.message}`);
+          this.state = ASR.states.ERROR;
+        }
+      }
+      this.logger.info(`ASR resumed for session=${this.session?.id} channel=${this.channel?.id}`);
+    });
+    return this._transitionLock;
   }
 
   async init() {
@@ -217,6 +259,7 @@ class ASR extends eventEmitter {
 
   async dispose() {
     try {
+      await this._transitionLock;
       if (this.audioFile) {
         this.audioFile.close();
         await this.saveAudio();
@@ -237,6 +280,9 @@ class ASR extends eventEmitter {
   }
 
   transcribe(buffer) {
+    // While paused, drop audio synchronously so the GStreamer pipeline keeps flowing.
+    // The buffer was already flushed by pause(), no need to flush again per packet.
+    if (this.paused) return;
     this.audioBuffer.add(buffer);
     if (!(this.state === ASR.states.READY || this.state === ASR.states.TRANSCRIBING)) return;
     const audioBuffer = this.audioBuffer.getAudioBuffer();

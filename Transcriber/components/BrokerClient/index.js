@@ -16,6 +16,7 @@ class BrokerClient extends Component {
     this._state = BrokerClient.states.DISCONNECTED;
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.sessions = []; //sessions will be updated by the system/out/sessions/statuses messages (see controllers/MqttMessages.js)
+    this._sessionStatusSnapshot = new Map(); // sessionId -> previous status, used to detect status transitions across snapshots
     this.uniqueId = getAppId(); //unique ID for this instance / path for MQTT
     this.serversStarted = false; // Track if streaming servers have been started (to handle MQTT reconnection)
 
@@ -39,7 +40,28 @@ class BrokerClient extends Component {
   handleSessions(sessions) {
     // Create a set of incoming session IDs for easy lookup
     // called by controllers/MqttMessages.js uppon receiving system/out/sessions/statuses message
-    // only ready and active sessions are present in the incoming sessions (broker retained message only holds ready and active sessions)
+    // only ready, active and paused sessions are present in the incoming sessions (broker retained message only holds those statuses)
+
+    // Detect session status transitions (active <-> paused) by comparing with the previous snapshot.
+    // These per-session events MUST be emitted before the generic 'sessions' event so that the
+    // StreamingServer applies pause/resume before any ASR (re)configuration happens.
+    const newSnapshot = new Map();
+    for (const session of sessions) {
+      newSnapshot.set(session.id, session.status);
+      const prevStatus = this._sessionStatusSnapshot.get(session.id);
+
+      // Transition (anything || undefined) -> paused
+      if (session.status === 'paused' && prevStatus !== 'paused') {
+        this.emit('session-paused', session);
+      }
+      // Transition paused -> non-paused (e.g. active)
+      else if (prevStatus === 'paused' && session.status !== 'paused') {
+        this.emit('session-resumed', session);
+      }
+    }
+    // Sessions that disappeared from the snapshot (e.g. terminated) do not yield a specific event here.
+    this._sessionStatusSnapshot = newSnapshot;
+
     const incomingSessionIds = new Set(sessions.map(session => session.id));
 
     // Filter out sessions that are not present in the incoming sessions

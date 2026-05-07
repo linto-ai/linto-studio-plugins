@@ -247,6 +247,32 @@ class StreamingServer extends Component {
     }
   }
 
+  async _applyToSessionASRs(sessionId, action) {
+    const promises = [];
+    for (const [key, asr] of this.ASRs) {
+      if (key.startsWith(`${sessionId}_`)) {
+        promises.push(
+          asr[action]().catch(e => logger.error(`Error ${action}ing ASR ${key}: ${e.message}`))
+        );
+      }
+    }
+    if (promises.length === 0) {
+      logger.debug(`${action}Session(${sessionId}): no active ASR`);
+      return;
+    }
+    await Promise.allSettled(promises);
+    const verb = action === 'pause' ? 'Paused' : 'Resumed';
+    logger.info(`${verb} ${promises.length} ASR(s) for session ${sessionId}`);
+  }
+
+  pauseSession(sessionId) {
+    return this._applyToSessionASRs(sessionId, 'pause');
+  }
+
+  resumeSession(sessionId) {
+    return this._applyToSessionASRs(sessionId, 'resume');
+  }
+
   resolveInitialSegmentId(sessionId, channelId, channel) {
     const key = `${sessionId}_${channelId}`;
     const memorySegmentId = this.lastSegmentIds.get(key);

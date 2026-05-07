@@ -75,6 +75,26 @@ class BrokerClient extends Component {
     let endedSessionIds = [];
 
     await Model.sequelize.transaction(async (transaction) => {
+      // Fetch sessions about to be auto-ended so we can log per-session context
+      // (notably warn for paused sessions) before mutating their status.
+      const sessionsToEnd = await Model.Session.findAll({
+        where: {
+          status: { [Model.Op.in]: ['ready', 'paused'] },
+          autoEnd: true,
+          endOn: {
+            [Model.Op.lt]: new Date()
+          }
+        },
+        attributes: ['id', 'status'],
+        transaction
+      });
+
+      for (const session of sessionsToEnd) {
+        if (session.status === 'paused') {
+          logger.warn(`Auto-ending paused session ${session.id} due to endOn expiry`);
+        }
+      }
+
       const [updatedCount, updatedSessions] = await Model.Session.update(
         {
           status: 'terminated',
@@ -82,7 +102,7 @@ class BrokerClient extends Component {
         },
         {
           where: {
-            status: 'ready',
+            status: { [Model.Op.in]: ['ready', 'paused'] },
             autoEnd: true,
             endOn: {
               [Model.Op.lt]: new Date()
@@ -331,6 +351,9 @@ class BrokerClient extends Component {
         });
 
         if (activeChannelsCount === 0) {
+          if (session.status === 'paused') {
+            logger.warn(`Paused session ${session.id} downgraded to 'ready': transcriber ${transcriber.uniqueId} disconnected`);
+          }
           session.status = 'ready';
           await session.save();
         }
@@ -392,6 +415,7 @@ class BrokerClient extends Component {
         {
           status: Model.sequelize.literal(`
             CASE
+              WHEN "status" = 'paused' THEN "status"
               WHEN "status" = 'terminated' THEN "status"
               WHEN (SELECT COUNT(*)
                     FROM "channels"
@@ -436,6 +460,7 @@ class BrokerClient extends Component {
         }]
       }
     );
+    // Note: paused sessions intentionally preserved across scheduler restart
     await Model.Session.update(
       { status: 'ready' },
       {
@@ -447,7 +472,7 @@ class BrokerClient extends Component {
   async publishSessions() {
     const sessions = await Model.Session.findAll({
       attributes: ['id', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'name'],
-      where: { status: ['active', 'ready'] },
+      where: { status: ['active', 'ready', 'paused'] },
       include: [
         {
           model: Model.Channel,
@@ -462,7 +487,7 @@ class BrokerClient extends Component {
       ],
       order: [[Model.Channel, 'id', 'ASC']]
     });
-    logger.debug('Publishing all ACTIVE and READY sessions on broker: ', sessions.length);
+    logger.debug('Publishing all ACTIVE, READY and PAUSED sessions on broker: ', sessions.length);
     // Publish the sessions to the broker
     this.client.publish('system/out/sessions/statuses', sessions, 1, true, true);
   }

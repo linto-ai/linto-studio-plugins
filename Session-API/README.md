@@ -11,3 +11,4 @@ This API allows for the following actions:
 - CRUD for sessions
 - Retrieval of active and completed sessions
 - Starting and stopping a session
+- Pausing and resuming a session

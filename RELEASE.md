@@ -1,3 +1,26 @@
+# 1.5.0
+
+_2026_05_07_
+
+## Features
+
+- API: Add `PUT /v1/sessions/:id/pause` and `PUT /v1/sessions/:id/resume` endpoints to temporarily suspend ASR while keeping the audio stream alive
+- API: Add `pausedAt` field on Session resource
+- MQTT: Publish `system/out/sessions/paused` and `system/out/sessions/resumed` events on transitions
+- Database: Add `paused` value to session status enum + new `pausedAt` column
+
+## Bug fixes
+
+- Lib: Fix CircularBuffer wrap-around bug (subarray was receiving Uint8Array instead of integer indices)
+- Transcriber: Microsoft ASR clears `_startupTimeout` in `stop()` to prevent spurious STARTUP_TIMEOUT events 15s after pause
+- Transcriber: Microsoft ASR resets `recognizers` and `pushStreams` arrays before awaiting `stopRecognizer` to close the race window with concurrent `transcribe()` calls
+- Transcriber: Amazon ASR guards `reconnect()` against `_stopping` state
+
+## Security
+
+- Session-API: PATCH /sessions/:id now uses an attribute whitelist, preventing direct status manipulation through the generic update endpoint
+- Session-API: DELETE /sessions/:id refuses paused sessions without `force=true` (was only refusing active)
+
 # 1.4.1
 
 _2026_05_07_

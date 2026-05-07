@@ -142,6 +142,16 @@ gst-launch-1.0 -v filesrc location=./fr.mp3 ! decodebin ! audioconvert ! audiore
 
 You should now see the transcriptions appearing in real time in the log and they are now accessible in the broker.
 
+### Pausing/resuming a session
+
+```
+# Pause an active session (audio keeps streaming, but ASR is stopped)
+curl -X PUT http://localhost:8000/v1/sessions/{sessionId}/pause
+
+# Resume the paused session (ASR is restarted)
+curl -X PUT http://localhost:8000/v1/sessions/{sessionId}/resume
+```
+
 
 ## Routes
 
@@ -372,6 +382,8 @@ class MyASRTranscriber extends EventEmitter {
 | `transcriber/out/{sessionId}/{channelId}/{partial\|final}/translations` | Transcriber (discrete), Translator (external) | Scheduler, Frontend | Translation results. Both discrete and external converge here. Stored in `translatedCaptions`. |
 | `transcriber/out/{uniqueId}/status` | Transcriber | Scheduler | Transcriber online/offline status |
 | `transcriber/out/{uniqueId}/session` | Transcriber | Scheduler | Stream status updates per session/channel |
+| `system/out/sessions/paused` | Session-API | Studio-API, others | Notification when a session is paused, payload: `{id, organizationId}` |
+| `system/out/sessions/resumed` | Session-API | Studio-API, others | Notification when a session is resumed, payload: `{id, organizationId}` |
 | `translator/out/{translatorName}/status` | Translator | Scheduler | Translator presence (retained + LWT for automatic deregistration) |
 
 ### MQTT Packet Reference

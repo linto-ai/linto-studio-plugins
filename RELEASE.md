@@ -1,3 +1,12 @@
+# 1.4.1
+
+_2026_05_07_
+
+- Fix Microsoft ASR returning pt-BR for pt-PT target
+  - Map BCP47 codes to Azure-canonical locales (pt-pt, fr-ca, zh-Hans) at the SDK boundary
+  - Preserve user-requested tags in MQTT payload keys
+  - Extract translation helpers and add unit tests for Azure locale mapping, Microsoft transcriber, route controllers, and translation helpers
+
 # 1.4.0
 
 _2026_04_20_

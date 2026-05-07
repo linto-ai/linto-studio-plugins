@@ -219,7 +219,8 @@ class AmazonTranscriber extends EventEmitter {
     }
 
     async reconnect() {
-        if (!this.isStreaming) {
+        if (!this.isStreaming || this._stopping) {
+            this.logger.debug('Reconnect aborted: not streaming or stopping');
             return;
         }
 
@@ -291,6 +292,8 @@ class AmazonTranscriber extends EventEmitter {
 
         this.logger.info(msg);
         this.startedAt = new Date().toISOString();
+        this._stopping = false;
+        this.lastPartialResult = null;
         this.isStreaming = true;
         this.audioQueue = [];
 
@@ -351,6 +354,7 @@ class AmazonTranscriber extends EventEmitter {
 
     async stop() {
         this.logger.info('Amazon ASR: Stopping transcription');
+        this._stopping = true;
 
         // Flush any pending partial result as a final transcription
         if (this.lastPartialResult) {
@@ -381,6 +385,8 @@ class AmazonTranscriber extends EventEmitter {
             this.client = null;
         }
 
+        // Note: _stopping stays true until start() resets it. Resetting here would
+        // re-open the reconnect() race window between stop() returning and a new start().
         this.emit('closed');
     }
 }

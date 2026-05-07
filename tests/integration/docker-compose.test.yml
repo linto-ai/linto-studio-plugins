@@ -1,0 +1,248 @@
+# Integration test stack for E-Meeting.
+#
+# Goals:
+#   * Fully isolated from `compose.yml` / `compose.override.yml` (different
+#     network name, different container names, different host ports).
+#   * Uses the FAKE ASR provider by default (no Azure/AWS keys required).
+#   * Postgres lives on tmpfs => fast and ephemeral.
+#   * Each service has a healthcheck so the harness can wait for `healthy`.
+#
+# Host ports (so they don't collide with the dev compose):
+#   * Mosquitto       : 1884       (dev: 1883)
+#   * Postgres        : 54320      (dev: 5433)
+#   * Session-API     : 8001       (dev: 8005)
+#   * Transcriber SRT : 18889/udp  (dev: 8889)
+#   * Transcriber RTMP: 11935/tcp  (dev: 1935)
+#   * Transcriber WS  : 18890/tcp  (dev: 8890)
+
+name: emeeting-integration-test
+
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    container_name: emeeting-it-broker
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports:
+      - "1884:1883"
+    networks:
+      - it-net
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "mosquitto_sub -h 127.0.0.1 -p 1883 -t '$$SYS/#' -C 1 -W 2 >/dev/null 2>&1 || exit 1"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  database:
+    image: postgres:16-alpine
+    container_name: emeeting-it-db
+    environment:
+      POSTGRES_USER: emeeting
+      POSTGRES_PASSWORD: emeeting
+      POSTGRES_DB: emeeting_test
+    command: -p 5432
+    ports:
+      - "54320:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      - it-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emeeting -d emeeting_test -p 5432"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  migration:
+    build:
+      context: ../..
+      dockerfile: migration/Dockerfile
+    container_name: emeeting-it-migration
+    environment:
+      NODE_ENV: production
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_USER: emeeting
+      DB_PASSWORD: emeeting
+      DB_NAME: emeeting_test
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - it-net
+    restart: "no"
+
+  sessionapi:
+    build:
+      context: ../..
+      dockerfile: Session-API/Dockerfile
+    container_name: emeeting-it-sessionapi
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DEBUG: ""
+      # DB
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_USER: emeeting
+      DB_PASSWORD: emeeting
+      DB_NAME: emeeting_test
+      # MQTT
+      BROKER_HOST: broker
+      BROKER_PORT: 1883
+      BROKER_PROTOCOL: mqtt
+      BROKER_USE_TLS: "false"
+      BROKER_KEEPALIVE: "60"
+      BROKER_REJECT_UNAUTHORIZED: "true"
+      # Web server
+      SESSION_API_WEBSERVER_HTTP_PORT: "8000"
+      SESSION_API_HOST: "http://sessionapi:8000"
+      SESSION_API_COMPONENTS: "WebServer,BrokerClient"
+      # Streaming endpoints exposed to clients
+      STREAMING_PROTOCOLS: "SRT,RTMP,WS"
+      STREAMING_HOST: "0.0.0.0"
+      STREAMING_PASSPHRASE: "testpassphrase"
+      STREAMING_SRT_UDP_PORT: "8889"
+      STREAMING_RTMP_TCP_PORT: "1935"
+      STREAMING_WS_TCP_PORT: "8890"
+      STREAMING_PROXY_SRT_HOST: "127.0.0.1"
+      STREAMING_PROXY_RTMP_HOST: "127.0.0.1"
+      STREAMING_PROXY_WS_HOST: "127.0.0.1"
+      STREAMING_PROXY_SRT_UDP_PORT: "18889"
+      STREAMING_PROXY_RTMP_TCP_PORT: "11935"
+      STREAMING_PROXY_WS_TCP_PORT: "18890"
+      STREAMING_WS_SECURE: "false"
+      STREAMING_WS_ENDPOINT: "transcriber-ws"
+      STREAMING_RTMP_SECURE: "false"
+      STREAMING_HEALTHCHECK_TCP: "9999"
+      # Audio
+      MAX_AUDIO_BUFFER: "10"
+      MIN_AUDIO_BUFFER: "200"
+      SAMPLE_RATE: "16000"
+      BYTES_PER_SAMPLE: "2"
+      # Security
+      SECURITY_CRYPT_KEY: "testtesttesttesttesttesttesttest"
+      # ASR
+      TRANSCRIBER_BOT_NAME: "bot"
+      TRANSCRIBER_RESET_MESSAGE: "Channel reset."
+      ASR_AVAILABLE_TRANSLATIONS_MICROSOFT: "fr,en,de,es,it"
+      ASR_HAS_DIARIZATION_MICROSOFT: "true"
+    ports:
+      - "8001:8000"
+    depends_on:
+      broker:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    networks:
+      - it-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8000/healthcheck || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: Scheduler/Dockerfile
+    container_name: emeeting-it-scheduler
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DEBUG: ""
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_USER: emeeting
+      DB_PASSWORD: emeeting
+      DB_NAME: emeeting_test
+      BROKER_HOST: broker
+      BROKER_PORT: 1883
+      BROKER_PROTOCOL: mqtt
+      BROKER_USE_TLS: "false"
+      BROKER_KEEPALIVE: "60"
+      BROKER_REJECT_UNAUTHORIZED: "true"
+      SCHEDULER_COMPONENTS: "BrokerClient"
+      SESSION_API_HOST: "http://sessionapi:8000"
+      SECURITY_CRYPT_KEY: "testtesttesttesttesttesttesttest"
+    depends_on:
+      broker:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    networks:
+      - it-net
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h broker -p 1883 -t scheduler/status -C 1 -W 5 | grep -q '\"online\":true' || exit 1"]
+      interval: 5s
+      timeout: 8s
+      retries: 30
+      start_period: 15s
+
+  transcriber:
+    build:
+      context: ../..
+      dockerfile: Transcriber/Dockerfile
+    container_name: emeeting-it-transcriber
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DEBUG: ""
+      BROKER_HOST: broker
+      BROKER_PORT: 1883
+      BROKER_PROTOCOL: mqtt
+      BROKER_USE_TLS: "false"
+      BROKER_KEEPALIVE: "60"
+      BROKER_REJECT_UNAUTHORIZED: "true"
+      TRANSCRIBER_COMPONENTS: "BrokerClient,StreamingServer,Healthcheck"
+      STREAMING_HOST: "0.0.0.0"
+      STREAMING_PROTOCOLS: "SRT,RTMP,WS"
+      STREAMING_PASSPHRASE: "testpassphrase"
+      STREAMING_SRT_MODE: "listener"
+      STREAMING_SRT_UDP_PORT: "8889"
+      STREAMING_RTMP_TCP_PORT: "1935"
+      STREAMING_WS_TCP_PORT: "8890"
+      STREAMING_HEALTHCHECK_TCP: "9999"
+      STREAMING_PROXY_SRT_HOST: "127.0.0.1"
+      STREAMING_PROXY_RTMP_HOST: "127.0.0.1"
+      STREAMING_PROXY_WS_HOST: "127.0.0.1"
+      STREAMING_PROXY_SRT_UDP_PORT: "18889"
+      STREAMING_PROXY_RTMP_TCP_PORT: "11935"
+      STREAMING_PROXY_WS_TCP_PORT: "18890"
+      STREAMING_WS_ENDPOINT: "transcriber-ws"
+      MAX_AUDIO_BUFFER: "10"
+      MIN_AUDIO_BUFFER: "200"
+      SAMPLE_RATE: "16000"
+      BYTES_PER_SAMPLE: "2"
+      AUDIO_STORAGE_PATH: "/audio-storage/"
+      TRANSCRIBER_BOT_NAME: "bot"
+      TRANSCRIBER_RESET_MESSAGE: "Channel reset."
+      # Force the FAKE ASR provider so we don't need any external API key.
+      # The transcriber uses TRANSCRIBER_DEFAULT_PROVIDER as a fallback when
+      # the channel does not specify a provider, but the smoke scenario also
+      # creates profiles with type=fake explicitly.
+      ASR_PROVIDER: "fake"
+      TRANSCRIBER_DEFAULT_PROVIDER: "fake"
+    ports:
+      - "18889:8889/udp"
+      - "11935:1935/tcp"
+      - "18890:8890/tcp"
+    depends_on:
+      broker:
+        condition: service_healthy
+    networks:
+      - it-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -w 1 localhost 9999 | grep -q OK || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+networks:
+  it-net:
+    driver: bridge

@@ -6,6 +6,11 @@ process.env.SAMPLE_RATE = 1;
 process.env.BYTES_PER_SAMPLE = 1;
 process.env.MAX_AUDIO_BUFFER = 6;
 
+require('./tests/test_azure_locale');
+require('./tests/test_microsoft_transcriber');
+require('./tests/test_translation_helpers');
+require('./tests/test_route_controllers');
+
 
 describe('CircularBuffer', () => {
   describe('#add()', () => {

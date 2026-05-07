@@ -1,11 +1,4 @@
 const { Model } = require("live-srt-lib")
-const bcp47 = require('language-tags');
-class ApiError extends Error {
-    constructor(status, message) {
-        super(message);
-        this.status = status;
-    }
-}
 
 module.exports = (webserver) => {
     return [

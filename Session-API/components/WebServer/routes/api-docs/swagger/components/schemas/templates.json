@@ -91,9 +91,17 @@
             },
             "translations": {
                 "type": "array",
-                "description": "List of bcp47 strings.",
+                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or TranslationEntry objects. Validation rejects mixing a bare primary subtag with a regional variant in the same channel (e.g. `pt` + `pt-PT`) or duplicate targets.",
                 "items": {
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "description": "BCP47 language tag (legacy format, converted to discrete mode)"
+                        },
+                        {
+                            "$ref": "#/components/schemas/TranslationEntry"
+                        }
+                    ]
                 },
                 "default": []
             },

@@ -1,11 +1,5 @@
 const { Model, logger } = require("live-srt-lib")
-const bcp47 = require('language-tags');
-class ApiError extends Error {
-    constructor(status, message) {
-        super(message);
-        this.status = status;
-    }
-}
+const { ApiError, validateTranslations } = require('./translationHelpers');
 
 function parseBoolean(v) {
     if (v === "true" || v === true) {
@@ -118,17 +112,12 @@ module.exports = (webserver) => {
                 }, { transaction });
                 // Create channel templates
                 for (const channel of channels) {
-                    if (channel.translations) {
-                        if (!Array.isArray(channel.translations) || !channel.translations.every(bcp47.check)) {
-                            throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
-                        }
-                    }
+                    const translations = validateTranslations(channel.translations);
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
                     if (!transcriberProfile) {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
                     }
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
-                    const translations = channel.translations
                     await Model.ChannelTemplate.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
@@ -194,17 +183,12 @@ module.exports = (webserver) => {
 
                 // Recreate channels
                 for (const channel of channels) {
-                    if (channel.translations) {
-                        if (!Array.isArray(channel.translations) || !channel.translations.every(bcp47.check)) {
-                            throw new ApiError(400, "Channel translations must be an array of bcp47 strings");
-                        }
-                    }
+                    const translations = validateTranslations(channel.translations);
                     let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
                     if (!transcriberProfile) {
                         throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
                     }
                     const languages = transcriberProfile.config.languages.map(language => language.candidate)
-                    const translations = channel.translations
                     await Model.ChannelTemplate.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,

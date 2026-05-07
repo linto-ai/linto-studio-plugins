@@ -2,6 +2,7 @@ const { AudioConfig, ConversationTranscriber, PropertyId, AudioInputStream, Spee
 const { Security } = require('live-srt-lib')
 const logger = require('../../logger')
 const EventEmitter = require('eventemitter3');
+const { toAzureCode, isAzureValid } = require('./azureLocale');
 
 
 class PrimaryRecognizerListener {
@@ -170,42 +171,52 @@ class MicrosoftTranscriber extends EventEmitter {
         this.pushStream = AudioInputStream.createPushStream();
         this.pushStream2 = null;
         this._stopping = false;
+        this._translationKeyMap = null;
         this.emit('closed');
     }
 
-    getTargetLanguages() {
+    // Map<azureCode, originalUserKey> — built once from channel.translations.
+    // azureCode is the canonical form Azure expects (e.g. 'pt-pt', 'fr-ca', 'zh-Hans').
+    // originalUserKey is the user-supplied BCP47 tag preserved for the MQTT payload.
+    getTranslationKeyMap() {
+        if (this._translationKeyMap) return this._translationKeyMap;
+        const map = new Map();
         const { translations } = this.channel;
-        if (!translations || !translations.length) {
-            return [];
+        if (!Array.isArray(translations) || translations.length === 0) {
+            this._translationKeyMap = map;
+            return map;
         }
-
-        // Filter for discrete translations only (external translations are handled by TranslationBus)
-        const discreteTranslations = translations.filter(entry =>
-            typeof entry === 'object' ? entry.mode === 'discrete' : true
-        );
-
-        return discreteTranslations.map(entry =>
-            typeof entry === 'object' ? entry.target.split('-')[0] : entry.split('-')[0]
-        );
+        for (const entry of translations) {
+            if (typeof entry === 'object' && entry.mode !== 'discrete') continue;
+            const originalKey = typeof entry === 'object' ? entry.target : entry;
+            const azureCode = toAzureCode(originalKey);
+            if (!isAzureValid(azureCode)) {
+                this.logger.warn(`Microsoft ASR: unsupported target language ${originalKey} (resolved to ${azureCode}) — Azure may reject or fall back`);
+            }
+            // First entry wins on collision (validation upstream should prevent this).
+            if (!map.has(azureCode)) map.set(azureCode, originalKey);
+        }
+        this._translationKeyMap = map;
+        return map;
     }
 
-    getOriginalTargetLanguages() {
-        const { translations } = this.channel;
-        if (!translations || !translations.length) return [];
-        const discreteTranslations = translations.filter(entry =>
-            typeof entry === 'object' ? entry.mode === 'discrete' : true
-        );
-        return discreteTranslations.map(entry =>
-            typeof entry === 'object' ? entry.target : entry
-        );
+    getTargetLanguages() {
+        return Array.from(this.getTranslationKeyMap().keys());
     }
 
     formatResult(result) {
-        let translations = {};
-        const targetLanguages = this.getTargetLanguages();
-        if (result.translations && targetLanguages.length > 0) {
-            const originalKeys = this.getOriginalTargetLanguages();
-            translations = Object.fromEntries(targetLanguages.map((azureKey, i) => [originalKeys[i], result.translations.get(azureKey)]));
+        const translations = {};
+        const keyMap = this.getTranslationKeyMap();
+        if (result.translations && keyMap.size > 0) {
+            const returnedKeys = result.translations.languages || [];
+            for (const [azureCode, originalKey] of keyMap.entries()) {
+                let value = result.translations.get(azureCode);
+                if (value === undefined) {
+                    const matched = returnedKeys.find(k => k.toLowerCase() === azureCode.toLowerCase());
+                    if (matched) value = result.translations.get(matched);
+                }
+                if (value !== undefined) translations[originalKey] = value;
+            }
         }
         const lang = result.language ? result.language : this.channel.transcriberProfile.config.languages[0].candidate;
         return {
@@ -239,6 +250,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
         this._stopping = false;
+        this._translationKeyMap = null;
         this.startedAt = new Date().toISOString();
 
         // If translation and diarization are enabled, we use two recognizers

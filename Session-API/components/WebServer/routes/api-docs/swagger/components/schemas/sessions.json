@@ -237,15 +237,16 @@
     },
     "TranslationEntry": {
         "type": "object",
+        "description": "A translation target. The `target` is a BCP47 tag preserved verbatim in MQTT payload keys (e.g. `pt-PT`). For Microsoft ASR `discrete` mode, the regional variant is mapped to Azure's canonical form internally (`pt-PT` → `pt-pt`, `fr-CA` → `fr-ca`, `zh-Hans` → `zh-Hans`). Variants Azure does not distinguish (e.g. `fr-FR`, `en-US`) collapse to their primary subtag at the SDK boundary while the user-facing key is preserved.",
         "properties": {
             "target": {
                 "type": "string",
-                "description": "BCP47 language tag"
+                "description": "BCP47 language tag (e.g. `pt-PT`, `fr-CA`, `zh-Hans`)"
             },
             "mode": {
                 "type": "string",
                 "enum": ["discrete", "external"],
-                "description": "Translation mode"
+                "description": "Translation mode. `discrete` uses the ASR provider's native translation; `external` routes through a configured translator service."
             },
             "translator": {
                 "type": "string",
@@ -267,7 +268,7 @@
             },
             "translations": {
                 "type": "array",
-                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or objects with target, mode, and optional translator.",
+                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or TranslationEntry objects. Validation rejects: mixing a bare primary subtag with a regional variant in the same channel (e.g. `pt` + `pt-PT`, since Azure resolves `pt` → Brazilian and would collide); duplicate targets that canonicalize to the same tag (e.g. `pt-PT` + `pt-pt`). Returns HTTP 400 with a descriptive error in those cases.",
                 "items": {
                     "oneOf": [
                         {
@@ -324,7 +325,7 @@
             },
             "translations": {
                 "type": "array",
-                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or objects with target, mode, and optional translator.",
+                "description": "List of translation targets. Accepts BCP47 strings (legacy, converted to discrete mode) or TranslationEntry objects. Validation rejects: mixing a bare primary subtag with a regional variant in the same channel (e.g. `pt` + `pt-PT`, since Azure resolves `pt` → Brazilian and would collide); duplicate targets that canonicalize to the same tag (e.g. `pt-PT` + `pt-pt`). Returns HTTP 400 with a descriptive error in those cases.",
                 "items": {
                     "oneOf": [
                         {

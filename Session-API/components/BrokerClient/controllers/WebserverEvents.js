@@ -11,4 +11,12 @@ module.exports = function () {
         await this.scheduleStopBot(botId);
     });
 
+    this.app.components['WebServer'].on('session-paused', async (session) => {
+        await this.publishSessionPaused(session);
+    });
+
+    this.app.components['WebServer'].on('session-resumed', async (session) => {
+        await this.publishSessionResumed(session);
+    });
+
 }

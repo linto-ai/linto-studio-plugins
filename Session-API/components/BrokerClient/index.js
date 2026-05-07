@@ -34,7 +34,7 @@ class BrokerClient extends Component {
   async publishSessions() {
     const sessions = await Model.Session.findAll({
       attributes: ['id', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'name'],
-      where: { status: ['active', 'ready'] },
+      where: { status: ['active', 'ready', 'paused'] },
       include: [
         {
           model: Model.Channel,
@@ -70,6 +70,38 @@ class BrokerClient extends Component {
    */
   async scheduleStopBot(botId) {
     this.client.publish('scheduler/in/schedule/stopbot', { botId }, 1, false, true);
+  }
+
+  /**
+   * Publishes a session lifecycle notification on the broker (e.g. paused, resumed).
+   * Payload is intentionally minimal — consumers (e.g. studio-api) re-fetch the full session
+   * via the Session API when they need the details. Wrapped in try/catch so a broker hiccup
+   * never breaks the main HTTP flow that emitted the internal event.
+   *
+   * @param {string} action - Lifecycle action ('paused', 'resumed', etc.). Used as topic suffix.
+   * @param {object} session - Sequelize session instance (must expose id and organizationId).
+   */
+  async publishSessionLifecycle(action, session) {
+    try {
+      this.client.publish(
+        `system/out/sessions/${action}`,
+        { id: session.id, organizationId: session.organizationId },
+        1,
+        false,
+        true
+      );
+      logger.debug(`Published sessions/${action} for ${session.id}`);
+    } catch (err) {
+      logger.error(`Failed to publish sessions/${action}: ${err?.message || err}`);
+    }
+  }
+
+  publishSessionPaused(session) {
+    return this.publishSessionLifecycle('paused', session);
+  }
+
+  publishSessionResumed(session) {
+    return this.publishSessionLifecycle('resumed', session);
   }
 }
 

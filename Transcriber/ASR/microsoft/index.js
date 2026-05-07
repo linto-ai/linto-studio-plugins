@@ -168,6 +168,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.logger = logger.getChannelLogger(session.id, channel.id);
         this.recognizers = [];
         this.pushStreams = [];
+        this._listeners = [];
         this.pushStream = AudioInputStream.createPushStream();
         this.pushStream2 = null;
         this._stopping = false;
@@ -249,6 +250,7 @@ class MicrosoftTranscriber extends EventEmitter {
         this.logger.info(msg);
         this.pushStreams = [AudioInputStream.createPushStream()];
         this.recognizers = [];
+        this._listeners = [];
         this._stopping = false;
         this._translationKeyMap = null;
         this.startedAt = new Date().toISOString();
@@ -391,6 +393,7 @@ class MicrosoftTranscriber extends EventEmitter {
         const speechConfig = this.createSpeechConfig(config, translations);
         const audioConfig = AudioConfig.fromStreamInput(pushStream);
         const recognizer = this.createRecognizer(config, translations, diarization, speechConfig, audioConfig);
+        this._listeners.push(listener);
         listener.attachTo(recognizer);
         return recognizer;
     }
@@ -428,11 +431,28 @@ class MicrosoftTranscriber extends EventEmitter {
     }
 
     async stop() {
-        for (const recognizer of this.recognizers) {
-            await this.stopRecognizer(recognizer);
-        }
+        // Snapshot current resources and reset instance state synchronously BEFORE
+        // awaiting any async cleanup. This prevents transcribe() from writing to
+        // pushStreams that are in the process of being closed (race condition).
+        const recognizersToClose = this.recognizers;
+        const listenersToClear = this._listeners;
         this.recognizers = [];
         this.pushStreams = [];
+        this._listeners = [];
+        this._stopping = true;
+
+        // Clear any pending startup timeouts so they don't fire a spurious
+        // STARTUP_TIMEOUT error after the transcriber has been stopped.
+        for (const listener of listenersToClear) {
+            if (listener && listener._startupTimeout) {
+                clearTimeout(listener._startupTimeout);
+                listener._startupTimeout = null;
+            }
+        }
+
+        for (const recognizer of recognizersToClose) {
+            await this.stopRecognizer(recognizer);
+        }
         this.emit('closed');
     }
 }

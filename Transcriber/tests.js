@@ -10,6 +10,8 @@ require('./tests/test_azure_locale');
 require('./tests/test_microsoft_transcriber');
 require('./tests/test_translation_helpers');
 require('./tests/test_route_controllers');
+require('./tests/test_circular_buffer_overflow.js');
+require('./tests/test_asr_pause_resume.js');
 
 
 describe('CircularBuffer', () => {

@@ -9,13 +9,8 @@
 #   4. Exit non-zero if any scenario failed.
 #
 # Env:
-#   KEEP_STACK=1     Don't tear the stack down on exit (useful for debugging).
-#   ONLY=<glob>      Run only scenarios whose basename matches the glob.
-#   INCLUDE_SLOW=1   Also run scenarios in scenarios-slow/ (Microsoft/Amazon/Linto
-#                    integration with real backends, long pause memory probe,
-#                    auto-end during pause, transcriber crash, MQTT reconnect).
-#                    Default OFF so the standard test loop stays under a minute.
-#   SLOW_ONLY=1      Run ONLY the slow scenarios.
+#   KEEP_STACK=1   Don't tear the stack down on exit (useful for debugging).
+#   ONLY=<glob>    Run only scenarios whose basename matches the glob.
 
 set -uo pipefail
 
@@ -38,17 +33,8 @@ trap cleanup EXIT
 
 harness::up || { harness::err "stack failed to come up"; exit 1; }
 
-INCLUDE_SLOW="${INCLUDE_SLOW:-0}"
-SLOW_ONLY="${SLOW_ONLY:-0}"
-
 shopt -s nullglob
-scenarios=()
-if [[ "${SLOW_ONLY}" != "1" ]]; then
-    scenarios+=("${SCRIPT_DIR}"/scenarios/*.sh)
-fi
-if [[ "${INCLUDE_SLOW}" == "1" || "${SLOW_ONLY}" == "1" ]]; then
-    scenarios+=("${SCRIPT_DIR}"/scenarios-slow/*.sh)
-fi
+scenarios=("${SCRIPT_DIR}"/scenarios/*.sh)
 shopt -u nullglob
 
 if [[ ${#scenarios[@]} -eq 0 ]]; then

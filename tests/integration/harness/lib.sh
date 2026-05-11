@@ -60,17 +60,9 @@ harness::_compose() {
 # Bring the stack up and wait until every service reports healthy.
 # Services without a healthcheck (e.g. migration which is run-once) are
 # skipped after we make sure they at least exited successfully.
-#
-# Skips rebuild if HARNESS_SKIP_BUILD=1 — useful when the stack is already
-# up from a previous run and we just want to (re)attach. Default rebuilds
-# so that code changes are picked up.
 harness::up() {
     harness::log "Starting integration stack (${HARNESS_COMPOSE_FILE})"
-    local build_flag="--build"
-    if [[ "${HARNESS_SKIP_BUILD:-0}" == "1" ]]; then
-        build_flag=""
-    fi
-    harness::_compose up -d ${build_flag} --remove-orphans
+    harness::_compose up -d --build --remove-orphans
 
     harness::log "Waiting for services to become healthy (timeout=${HARNESS_HEALTHY_TIMEOUT}s)"
     local deadline=$(( $(date +%s) + HARNESS_HEALTHY_TIMEOUT ))

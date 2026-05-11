@@ -68,6 +68,22 @@ INTEGRATION_PROJECT := emeeting-integration-test
 test-integration:
 	bash tests/integration/run.sh
 
+# Fast scenarios assuming images are already built and stack is fresh.
+# Skips the docker build step — pair with test-integration-up after code
+# changes if you want to keep the dev loop under a minute.
+test-integration-fast:
+	HARNESS_SKIP_BUILD=1 bash tests/integration/run.sh
+
+# Full suite: fast scenarios + slow scenarios (Microsoft/Amazon/Linto, long
+# pause memory, auto-end during pause, transcriber crash, MQTT reconnect).
+# Expect several minutes of runtime when slow scenarios are enabled.
+test-integration-all:
+	INCLUDE_SLOW=1 bash tests/integration/run.sh
+
+# Slow scenarios only — useful for nightly CI or post-deploy validation.
+test-integration-slow:
+	SLOW_ONLY=1 bash tests/integration/run.sh
+
 test-integration-up:
 	docker compose -p $(INTEGRATION_PROJECT) -f $(INTEGRATION_COMPOSE) up -d --build
 
@@ -82,4 +98,4 @@ test-integration-smoke:
 
 .PHONY: run-docker-dev run-dev down-docker-dev run-docker-prod clean-node-modules clean-docker-node-modules check-linto-studio
 .PHONY: install-local $(PACKAGE_DIRS)
-.PHONY: test-integration test-integration-up test-integration-down test-integration-logs test-integration-smoke
+.PHONY: test-integration test-integration-fast test-integration-all test-integration-slow test-integration-up test-integration-down test-integration-logs test-integration-smoke

@@ -9,8 +9,13 @@
 #   4. Exit non-zero if any scenario failed.
 #
 # Env:
-#   KEEP_STACK=1   Don't tear the stack down on exit (useful for debugging).
-#   ONLY=<glob>    Run only scenarios whose basename matches the glob.
+#   KEEP_STACK=1     Don't tear the stack down on exit (useful for debugging).
+#   ONLY=<glob>      Run only scenarios whose basename matches the glob.
+#   INCLUDE_SLOW=1   Also run scenarios in scenarios-slow/ (Microsoft/Amazon/Linto
+#                    integration with real backends, long pause memory probe,
+#                    auto-end during pause, transcriber crash, MQTT reconnect).
+#                    Default OFF so the standard test loop stays under a minute.
+#   SLOW_ONLY=1      Run ONLY the slow scenarios.
 
 set -uo pipefail
 
@@ -33,8 +38,17 @@ trap cleanup EXIT
 
 harness::up || { harness::err "stack failed to come up"; exit 1; }
 
+INCLUDE_SLOW="${INCLUDE_SLOW:-0}"
+SLOW_ONLY="${SLOW_ONLY:-0}"
+
 shopt -s nullglob
-scenarios=("${SCRIPT_DIR}"/scenarios/*.sh)
+scenarios=()
+if [[ "${SLOW_ONLY}" != "1" ]]; then
+    scenarios+=("${SCRIPT_DIR}"/scenarios/*.sh)
+fi
+if [[ "${INCLUDE_SLOW}" == "1" || "${SLOW_ONLY}" == "1" ]]; then
+    scenarios+=("${SCRIPT_DIR}"/scenarios-slow/*.sh)
+fi
 shopt -u nullglob
 
 if [[ ${#scenarios[@]} -eq 0 ]]; then
@@ -47,6 +61,22 @@ IFS=$'\n' scenarios=($(printf '%s\n' "${scenarios[@]}" | sort))
 unset IFS
 
 failures=()
+
+# Between scenarios, kill leftover client-side processes (streamers,
+# subscribers) so that a misbehaving scenario does not pollute the next
+# one's MQTT topics or saturate the transcriber with zombie streams.
+between_scenarios_cleanup() {
+    pkill -9 -f "gst-launch-1.0" 2>/dev/null || true
+    pkill -9 -f "ffmpeg.*sine=" 2>/dev/null || true
+    pkill -9 -f "ffmpeg.*lavfi" 2>/dev/null || true
+    pkill -9 -f "mosquitto_sub" 2>/dev/null || true
+    pkill -9 -f "ws-stream.js" 2>/dev/null || true
+    # Drop terminated sessions so retained snapshots stay slim
+    # (the DB cleanup runs inside each scenario via DELETE; this is a
+    # belt-and-braces measure for cases where a scenario crashed midway).
+    sleep 1
+}
+
 for s in "${scenarios[@]}"; do
     name=$(basename "${s}")
     if [[ -n "${ONLY}" ]]; then
@@ -60,6 +90,7 @@ for s in "${scenarios[@]}"; do
         harness::err "${name} FAILED"
         failures+=("${name}")
     fi
+    between_scenarios_cleanup
 done
 
 if [[ ${#failures[@]} -gt 0 ]]; then

@@ -60,9 +60,17 @@ harness::_compose() {
 # Bring the stack up and wait until every service reports healthy.
 # Services without a healthcheck (e.g. migration which is run-once) are
 # skipped after we make sure they at least exited successfully.
+#
+# Skips rebuild if HARNESS_SKIP_BUILD=1 — useful when the stack is already
+# up from a previous run and we just want to (re)attach. Default rebuilds
+# so that code changes are picked up.
 harness::up() {
     harness::log "Starting integration stack (${HARNESS_COMPOSE_FILE})"
-    harness::_compose up -d --build --remove-orphans
+    local build_flag="--build"
+    if [[ "${HARNESS_SKIP_BUILD:-0}" == "1" ]]; then
+        build_flag=""
+    fi
+    harness::_compose up -d ${build_flag} --remove-orphans
 
     harness::log "Waiting for services to become healthy (timeout=${HARNESS_HEALTHY_TIMEOUT}s)"
     local deadline=$(( $(date +%s) + HARNESS_HEALTHY_TIMEOUT ))
@@ -299,6 +307,152 @@ harness::create_microsoft_profile() {
     echo "${id}"
 }
 
+# Create a LinTO ASR transcriber profile, prints the new profile id.
+# Args: NAME WS_ENDPOINT [LANG_CANDIDATE]
+#
+# LinTO is unusual among providers: the WebSocket endpoint lives per-language
+# inside languages[i].endpoint (see Transcriber/ASR/linto/index.js, which reads
+# transcriberProfile.config.languages[0].endpoint at start()). Session-API
+# validation also requires every language to carry both `candidate` and
+# `endpoint` (see Session-API/components/WebServer/routes/api/transcriber_profiles.js).
+harness::create_linto_profile() {
+    local name="$1"
+    local endpoint="$2"
+    local lang="${3:-fr-FR}"
+
+    local payload
+    payload=$(jq -nc \
+        --arg name "${name}" \
+        --arg endpoint "${endpoint}" \
+        --arg lang "${lang}" \
+        '{config: {
+            type: "linto",
+            name: $name,
+            description: "linto provider for integration tests",
+            languages: [{candidate: $lang, endpoint: $endpoint}]
+        }}')
+
+    local resp
+    resp=$(harness::post "/transcriber_profiles" "${payload}") || return 1
+    local id
+    id=$(jq -r '.id // .profileId // .data.id // empty' <<< "${resp}")
+    if [[ -z "${id}" ]]; then
+        id=$(harness::get "/transcriber_profiles" \
+            | jq -r --arg n "${name}" '[.[] | select(.config.name==$n)] | last | .id // empty')
+    fi
+    if [[ -z "${id}" ]]; then
+        harness::err "Could not extract linto transcriber profile id from response: ${resp}"
+        return 1
+    fi
+    echo "${id}"
+}
+
+# Create an Amazon (AWS Transcribe Streaming) transcriber profile, prints the
+# new profile id.
+# Args: NAME REGION TRUST_ANCHOR_ARN PROFILE_ARN ROLE_ARN CERT_PATH KEY_PATH [PASSPHRASE] [LANGUAGES_CSV]
+#
+# Amazon uses IAM Roles Anywhere: the Transcriber decrypts a bundle containing
+# the X.509 certificate + private key, then calls the aws_signing_helper binary
+# to exchange them for short-lived STS credentials (see Transcriber/ASR/amazon/
+# index.js getCredentialsFromHelper()).
+#
+# Session-API (Session-API/components/WebServer/routes/api/transcriber_profiles.js)
+# expects this profile to be POSTed as multipart/form-data with:
+#   - 'config' part: JSON string containing type/name/description/languages/
+#     region/trustAnchorArn/profileArn/roleArn (+ optional passphrase)
+#   - 'certificate' file part
+#   - 'privateKey' file part
+# Session-API bundles cert+key+passphrase into config.credentials and encrypts
+# it via Security.encrypt() before persisting.
+harness::create_amazon_profile() {
+    local name="$1"
+    local region="$2"
+    local trust_anchor_arn="$3"
+    local profile_arn="$4"
+    local role_arn="$5"
+    local cert_path="$6"
+    local key_path="$7"
+    local passphrase="${8:-}"
+    local langs_csv="${9:-fr-FR}"
+
+    if [[ ! -f "${cert_path}" ]]; then
+        harness::err "create_amazon_profile: certificate file not found: ${cert_path}"
+        return 1
+    fi
+    if [[ ! -f "${key_path}" ]]; then
+        harness::err "create_amazon_profile: private key file not found: ${key_path}"
+        return 1
+    fi
+
+    # Build the JSON array of language candidates from a comma-separated list.
+    local langs_json
+    langs_json=$(jq -nc --arg csv "${langs_csv}" \
+        '$csv | split(",") | map({candidate: (. | gsub("^\\s+|\\s+$"; ""))})')
+
+    local config_json
+    config_json=$(jq -nc \
+        --arg name "${name}" \
+        --arg region "${region}" \
+        --arg trust "${trust_anchor_arn}" \
+        --arg prof "${profile_arn}" \
+        --arg role "${role_arn}" \
+        --argjson langs "${langs_json}" \
+        '{
+            type: "amazon",
+            name: $name,
+            description: "amazon provider for integration tests",
+            languages: $langs,
+            region: $region,
+            trustAnchorArn: $trust,
+            profileArn: $prof,
+            roleArn: $role
+        }')
+
+    # Inject the passphrase into the config JSON (Session-API reads it from
+    # req.body.config.passphrase after parsing the multipart 'config' field).
+    if [[ -n "${passphrase}" ]]; then
+        config_json=$(jq -nc \
+            --argjson base "${config_json}" \
+            --arg pass "${passphrase}" \
+            '$base + {passphrase: $pass}')
+    fi
+
+    local url="${HARNESS_API_BASE}${HARNESS_API_PREFIX}/transcriber_profiles"
+    local tmp
+    tmp=$(mktemp)
+    local code
+    code=$(curl -sS -o "${tmp}" -w '%{http_code}' \
+        --max-time "${HARNESS_HTTP_TIMEOUT}" \
+        -X POST \
+        -F "config=${config_json}" \
+        -F "certificate=@${cert_path}" \
+        -F "privateKey=@${key_path}" \
+        "${url}")
+
+    if [[ ! "${code}" =~ ^2 ]]; then
+        harness::err "POST ${url} -> ${code}"
+        cat "${tmp}" >&2 || true
+        rm -f "${tmp}"
+        return 1
+    fi
+
+    local resp
+    resp=$(cat "${tmp}")
+    rm -f "${tmp}"
+
+    local id
+    id=$(jq -r '.id // .profileId // .data.id // empty' <<< "${resp}")
+    if [[ -z "${id}" ]]; then
+        id=$(harness::get "/transcriber_profiles" \
+            | jq -r --arg n "${name}" '[.[] | select(.config.name==$n)] | last | .id // empty')
+    fi
+    if [[ -z "${id}" ]]; then
+        harness::err "Could not extract amazon transcriber profile id from response: ${resp}"
+        return 1
+    fi
+    echo "${id}"
+}
+
 # Create a session with one channel bound to the given profile id.
 # Args: PROFILE_ID [SESSION_NAME]
 # Prints the session id.
@@ -330,6 +484,87 @@ EOF
     fi
     if [[ -z "${id}" ]]; then
         harness::err "Could not extract session id from response: ${resp}"
+        return 1
+    fi
+    echo "${id}"
+}
+
+# Create a session with autoEnd=true and a specific endOn timestamp.
+# Used by auto-end / scheduler-tick scenarios where the scheduler must
+# terminate the session once the deadline elapses.
+# Args: PROFILE_ID ENDON_ISO [SESSION_NAME]
+# Prints the session id.
+harness::create_session_autoend() {
+    local profile_id="$1"
+    local endon="$2"
+    local name="${3:-it_session_autoend_$(date +%s%N)}"
+
+    local payload
+    payload=$(jq -nc \
+        --arg name "${name}" \
+        --argjson pid "${profile_id}" \
+        --arg endon "${endon}" \
+        '{
+            name: $name,
+            autoEnd: true,
+            endOn: $endon,
+            channels: [{
+                name: "ch0",
+                transcriberProfileId: $pid
+            }]
+        }')
+
+    local resp
+    resp=$(harness::post "/sessions" "${payload}") || return 1
+    local id
+    id=$(jq -r '.id // .session.id // empty' <<< "${resp}")
+    if [[ -z "${id}" ]]; then
+        id=$(harness::get "/sessions?searchName=${name}" \
+            | jq -r '.sessions[0].id // empty')
+    fi
+    if [[ -z "${id}" ]]; then
+        harness::err "Could not extract autoEnd session id from response: ${resp}"
+        return 1
+    fi
+    echo "${id}"
+}
+
+# Create a session with N channels bound to the given profile id.
+# Args: PROFILE_ID NUM_CHANNELS [SESSION_NAME]
+# Prints the session id.
+harness::create_session_multi() {
+    local profile_id="$1"
+    local num_channels="${2:-2}"
+    local name="${3:-it_session_multi_$(date +%s%N)}"
+
+    # Build a channels array of size N, each bound to the same profile.
+    # The POST /sessions controller (Session-API/components/WebServer/routes/api/sessions.js)
+    # expects: { name, channels: [{ name, transcriberProfileId }] }.
+    local channels_json
+    channels_json=$(jq -nc \
+        --argjson pid "${profile_id}" \
+        --argjson n "${num_channels}" \
+        '[range($n) | {
+            name: ("ch" + (. | tostring)),
+            transcriberProfileId: $pid
+        }]')
+
+    local payload
+    payload=$(jq -nc \
+        --arg name "${name}" \
+        --argjson channels "${channels_json}" \
+        '{name: $name, channels: $channels}')
+
+    local resp
+    resp=$(harness::post "/sessions" "${payload}") || return 1
+    local id
+    id=$(jq -r '.id // .session.id // empty' <<< "${resp}")
+    if [[ -z "${id}" ]]; then
+        id=$(harness::get "/sessions?searchName=${name}" \
+            | jq -r '.sessions[0].id // empty')
+    fi
+    if [[ -z "${id}" ]]; then
+        harness::err "Could not extract multi-channel session id from response: ${resp}"
         return 1
     fi
     echo "${id}"
@@ -555,6 +790,28 @@ harness::stream_ws_loop() {
 }
 
 # ---------------------------------------------------------------------------
+# Container metrics helpers
+# ---------------------------------------------------------------------------
+
+# Returns the resident memory in MB of a service container (rounded down).
+harness::container_mem_mb() {
+    local svc="$1"
+    local container
+    container=$(harness::_compose ps -q "${svc}" 2>/dev/null | head -1)
+    [[ -z "${container}" ]] && { echo "0"; return; }
+    # docker stats output e.g. "123.4MiB / 1.5GiB" — keep first number, convert KiB→MB if needed
+    local mem
+    mem=$(docker stats --no-stream --format "{{.MemUsage}}" "${container}" | awk '{print $1}')
+    # Strip MiB/GiB/KiB suffix
+    case "${mem}" in
+        *GiB) echo "$(awk -v m="${mem%GiB}" 'BEGIN{printf "%d", m * 1024}')" ;;
+        *MiB) echo "${mem%MiB}" | awk '{printf "%d", $1}' ;;
+        *KiB) echo "$(awk -v m="${mem%KiB}" 'BEGIN{printf "%d", m / 1024}')" ;;
+        *) echo "0" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # MQTT helpers
 # ---------------------------------------------------------------------------
 
@@ -623,6 +880,23 @@ harness::mqtt_assert_received() {
         fi
         sleep 0.5
     done
+}
+
+# ---------------------------------------------------------------------------
+# Scheduler log helper
+# ---------------------------------------------------------------------------
+
+# harness::scheduler_log_contains PATTERN
+# Returns 0 if the running scheduler container logs match the given egrep
+# pattern, 1 otherwise. Reads via `docker logs` (not `compose logs`) so it
+# remains scoped to the current container only — useful for assertions that
+# the pattern was emitted during this test run.
+harness::scheduler_log_contains() {
+    local pattern="$1"
+    local container
+    container=$(harness::_compose ps -q scheduler 2>/dev/null | head -1)
+    [[ -z "${container}" ]] && return 1
+    docker logs "${container}" 2>&1 | grep -qE "${pattern}"
 }
 
 # ---------------------------------------------------------------------------

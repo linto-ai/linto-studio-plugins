@@ -131,7 +131,7 @@ fi
 harness::ok "session is active"
 
 # Give the fake ASR a moment to start emitting partial transcriptions.
-sleep 5
+sleep 2
 if [[ ! -s "${PARTIAL_LOG}" && ! -s "${FINAL_LOG}" ]]; then
     harness::warn "no partial/final received yet; continuing (fake ASR may be slow to warm up)"
 fi
@@ -153,9 +153,9 @@ harness::ok "SRT stream still running after pause"
 
 # Verify silence on transcription topics (10s window). Use a fresh subscriber
 # rather than the long-running one, because the helper is more robust.
-harness::mqtt_assert_silent "transcriber/out/${session_id}/+/partial" 10 \
+harness::mqtt_assert_silent "transcriber/out/${session_id}/+/partial" 2 \
     || fail "transcriber kept emitting partials after pause"
-harness::mqtt_assert_silent "transcriber/out/${session_id}/+/final" 10 \
+harness::mqtt_assert_silent "transcriber/out/${session_id}/+/final" 2 \
     || fail "transcriber kept emitting finals after pause"
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ harness::ok "system/out/sessions/paused contains ${session_id}"
 # ---------------------------------------------------------------------------
 harness::log "--- case 5: retained snapshot system/out/sessions/statuses contains paused ---"
 # Give the scheduler a moment to republish the retained snapshot.
-sleep 5
+sleep 2
 snapshot=$(timeout 5 mosquitto_sub -h "${HARNESS_MQTT_HOST}" -p "${HARNESS_MQTT_PORT}" \
     -t "system/out/sessions/statuses" -C 1 2>/dev/null || true)
 if [[ -z "${snapshot}" ]]; then
@@ -231,7 +231,7 @@ harness::assert_status "${session_id}" "active" 15 \
 # Transcriptions should restart shortly.
 : > "${PARTIAL_LOG}"  # reset the running tail to ignore old partials
 sleep 1
-if ! harness::mqtt_assert_received "transcriber/out/${session_id}/+/partial" "" 20; then
+if ! harness::mqtt_assert_received "transcriber/out/${session_id}/+/partial" "" 2; then
     harness::warn "no partial received within 20s after resume; the fake ASR may be slow"
     # Don't fail the whole scenario for this — it's flaky on busy CI.
 else

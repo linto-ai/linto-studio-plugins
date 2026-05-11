@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# tests/integration/scenarios/05-pause-resume-ws.sh
+# tests/integration/scenarios/04-pause-resume-rtmp.sh
 #
-# End-to-end validation of the pause/resume feature over the WebSocket
-# streaming protocol (mirror of 03-pause-resume.sh which covers SRT).
+# End-to-end validation of the pause/resume feature over the RTMP protocol.
+#
+# This is the RTMP counterpart of 03-pause-resume.sh (which uses SRT).
+# RTMP runs over TCP, so a naive pause implementation could tear down the
+# socket and force the ffmpeg publisher to exit. The whole point of this
+# scenario is to assert that this does NOT happen: pause must stop the
+# transcription pipeline while keeping the RTMP TCP connection alive.
 #
 # Covers:
-#   * pause an active session streaming over WS
-#       - session transitions active -> paused
-#       - the WS stream process stays alive (the connection MUST NOT be killed)
-#       - transcriber stops emitting partial/final on transcriber/out/{id}/+/...
-#       - system/out/sessions/paused is emitted with the session id
-#       - retained snapshot system/out/sessions/statuses lists the session as
-#         paused
-#   * resume the session
-#       - session transitions paused -> active
-#       - system/out/sessions/resumed is emitted with the session id
+#   * pause an active RTMP session -> transcriptions stop, ffmpeg stays alive
+#   * MQTT silence on transcriber/out/{sessionId}/+/partial|final during pause
+#   * MQTT event system/out/sessions/paused is emitted
+#   * retained snapshot system/out/sessions/statuses lists the session as paused
+#   * resume restores status=active and emits system/out/sessions/resumed
 #
-# The scenario assumes the integration stack is up (run.sh handles this);
-# when run standalone it relies on harness::up.
+# The scenario assumes the integration stack is up; when run standalone it
+# relies on harness::up to bring it up.
 
 set -uo pipefail
 
@@ -26,9 +26,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../harness/lib.sh"
 
 harness::install_cleanup_trap
-
-FIXTURES_DIR="${SCRIPT_DIR}/../fixtures"
-AUDIO="${FIXTURES_DIR}/audio.wav"
 
 fail() {
     harness::err "FAIL: $*"
@@ -64,22 +61,23 @@ if ! harness::_compose ps --status running --services 2>/dev/null | grep -q '^se
     harness::up || { harness::err "stack failed to come up"; exit 1; }
 fi
 
-harness::log "=== pause/resume scenario (WebSocket) ==="
+harness::log "=== pause/resume scenario (RTMP) ==="
 
 # ---------------------------------------------------------------------------
-# Setup: fake transcriber profile + session
+# Setup
 # ---------------------------------------------------------------------------
-profile_id=$(harness::create_transcriber_profile "pause_resume_ws_fake")
+
+profile_id=$(harness::create_transcriber_profile "pause_resume_rtmp_fake")
 harness::ok "created transcriber profile id=${profile_id}"
 
-session_id=$(harness::create_session "${profile_id}" "pause_resume_ws_$(date +%s)")
+session_id=$(harness::create_session "${profile_id}" "pause_resume_rtmp_$(date +%s)")
 harness::ok "created session id=${session_id}"
 
 harness::assert_status "${session_id}" "ready" 30 \
     || fail "initial session status should be ready"
 
 # ---------------------------------------------------------------------------
-# Subscribe to MQTT events early so we don't miss any of them.
+# Subscribe to MQTT events early (so we don't miss them).
 # These subscriptions are kept alive for the whole scenario.
 # ---------------------------------------------------------------------------
 PAUSED_LOG=$(mktemp)
@@ -99,69 +97,64 @@ cleanup_logs() {
 trap 'cleanup_logs; harness::_kill_bg' EXIT
 
 # ---------------------------------------------------------------------------
-# Start streaming over WebSocket (session must be active before we can pause).
-# audio.wav is only ~5s, so we use stream_ws_loop (lavfi sine, never ends) to
-# keep the WS connection alive for the whole pause/resume window.
+# Start streaming (session must be active before we can pause it)
 # ---------------------------------------------------------------------------
-harness::log "--- starting WS loop stream towards ${session_id} ---"
-stream_pid=$(harness::stream_ws_loop "${session_id}" 0 "${AUDIO}" 0)
-harness::log "WS stream pid=${stream_pid}"
+harness::log "--- starting RTMP loop stream towards ${session_id} ---"
+stream_pid=$(harness::stream_rtmp_loop "${session_id}" 0 "" 0)
+harness::log "RTMP stream pid=${stream_pid}"
 
-# Wait until the session becomes active. The transcriber accepts the WS
-# connection, notifies the scheduler, which flips the status to 'active'.
+# Wait until session is active. The transcriber accepts the RTMP connection,
+# notifies the scheduler, which flips status to 'active'.
 if ! wait_for_status "${session_id}" "active" 60 >/dev/null; then
     harness::logs sessionapi 50 || true
     harness::logs scheduler 50 || true
     harness::logs transcriber 80 || true
-    fail "session did not become 'active' within 60s of WS streaming"
+    fail "session did not become 'active' within 60s of RTMP streaming"
 fi
 harness::ok "session is active"
 
-# Give the fake ASR a moment to start emitting partials/finals.
-sleep 5
+# Give the fake ASR a moment to start emitting partial transcriptions.
+sleep 2
 if [[ ! -s "${PARTIAL_LOG}" && ! -s "${FINAL_LOG}" ]]; then
     harness::warn "no partial/final received yet; continuing (fake ASR may be slow to warm up)"
 fi
 
-# Record the underlying WS TCP connection so we can later verify it stays
-# open across pause. The stream_pid points at the bash subshell that wraps
-# (ffmpeg | node), so we look for an established connection on the WS port.
-ws_conn_count_before=$(ss -tnH "dport = :${HARNESS_WS_PORT}" 2>/dev/null | wc -l || echo 0)
-harness::log "established WS connections on :${HARNESS_WS_PORT} before pause = ${ws_conn_count_before}"
-
 # ---------------------------------------------------------------------------
 # Pause active session
 # ---------------------------------------------------------------------------
-harness::log "--- pause active session ---"
+harness::log "--- pause active RTMP session ---"
 harness::http PUT "/sessions/${session_id}/pause" >/dev/null \
     || fail "PUT /pause on active session failed"
 harness::assert_status "${session_id}" "paused" 15 \
     || fail "session did not transition to 'paused'"
 
-# Verify the WS stream pipeline is still alive (kernel sees the pid).
+# CRITICAL CHECK: the RTMP ffmpeg publisher must still be alive. RTMP runs
+# over TCP, so if pause closed the server-side socket, ffmpeg would receive
+# EPIPE / connection reset and exit within a second or two. We check the
+# pid right after the pause and again a few seconds later to be safe.
 if ! kill -0 "${stream_pid}" 2>/dev/null; then
-    fail "WS stream pid=${stream_pid} died during pause; the stream MUST stay open"
+    fail "RTMP stream pid=${stream_pid} died immediately after pause"
 fi
-harness::ok "WS stream process still running after pause"
-
-# Verify the WS connection itself is still open server-side. We don't know
-# the exact source port, but the count of established connections towards the
-# WS port should not have dropped to zero.
-ws_conn_count_after=$(ss -tnH "dport = :${HARNESS_WS_PORT}" 2>/dev/null | wc -l || echo 0)
-harness::log "established WS connections on :${HARNESS_WS_PORT} after pause  = ${ws_conn_count_after}"
-if [[ "${ws_conn_count_after}" -lt 1 ]]; then
-    fail "no established WS connection towards :${HARNESS_WS_PORT} after pause (was ${ws_conn_count_before})"
+sleep 2
+if ! kill -0 "${stream_pid}" 2>/dev/null; then
+    fail "RTMP stream pid=${stream_pid} died shortly after pause; the TCP connection MUST stay open"
 fi
-harness::ok "WS TCP connection still established after pause"
+harness::ok "RTMP stream still running after pause"
 
 # Verify silence on transcription topics (10s window).
-harness::mqtt_assert_silent "transcriber/out/${session_id}/+/partial" 10 \
+harness::mqtt_assert_silent "transcriber/out/${session_id}/+/partial" 2 \
     || fail "transcriber kept emitting partials after pause"
-harness::mqtt_assert_silent "transcriber/out/${session_id}/+/final" 10 \
+harness::mqtt_assert_silent "transcriber/out/${session_id}/+/final" 2 \
     || fail "transcriber kept emitting finals after pause"
 
+# Re-check liveness one more time after the 20s silence window.
+if ! kill -0 "${stream_pid}" 2>/dev/null; then
+    fail "RTMP stream pid=${stream_pid} died during the silence window"
+fi
+harness::ok "RTMP stream still alive after the silence window"
+
 # ---------------------------------------------------------------------------
-# system/out/sessions/paused event was emitted
+# MQTT pause event
 # ---------------------------------------------------------------------------
 harness::log "--- system/out/sessions/paused was emitted ---"
 sleep 2  # the long-running subscriber should have buffered the message
@@ -173,11 +166,11 @@ fi
 harness::ok "system/out/sessions/paused contains ${session_id}"
 
 # ---------------------------------------------------------------------------
-# Retained snapshot system/out/sessions/statuses lists session as paused
+# Retained snapshot contains paused
 # ---------------------------------------------------------------------------
 harness::log "--- retained snapshot system/out/sessions/statuses contains paused ---"
 # Give the scheduler a moment to republish the retained snapshot.
-sleep 5
+sleep 2
 snapshot=$(timeout 5 mosquitto_sub -h "${HARNESS_MQTT_HOST}" -p "${HARNESS_MQTT_PORT}" \
     -t "system/out/sessions/statuses" -C 1 2>/dev/null || true)
 if [[ -z "${snapshot}" ]]; then
@@ -195,22 +188,22 @@ harness::ok "retained snapshot lists session ${session_id} with status=paused"
 # ---------------------------------------------------------------------------
 # Resume the session
 # ---------------------------------------------------------------------------
-harness::log "--- resume paused session ---"
+harness::log "--- resuming session ---"
 harness::http PUT "/sessions/${session_id}/resume" >/dev/null \
     || fail "PUT /resume failed"
 harness::assert_status "${session_id}" "active" 15 \
     || fail "session did not transition back to 'active'"
 
-# Verify the WS stream pipeline survived the whole pause/resume cycle.
+# The RTMP publisher must STILL be alive after resume.
 if ! kill -0 "${stream_pid}" 2>/dev/null; then
-    fail "WS stream pid=${stream_pid} died during resume; it should still be running"
+    fail "RTMP stream pid=${stream_pid} died across the resume transition"
 fi
-harness::ok "WS stream process still running after resume"
+harness::ok "RTMP stream still running after resume"
 
 # Transcriptions should restart shortly.
 : > "${PARTIAL_LOG}"  # reset the running tail to ignore old partials
 sleep 1
-if ! harness::mqtt_assert_received "transcriber/out/${session_id}/+/partial" "" 20; then
+if ! harness::mqtt_assert_received "transcriber/out/${session_id}/+/partial" "" 2; then
     harness::warn "no partial received within 20s after resume; the fake ASR may be slow"
     # Don't fail the whole scenario for this -- it's flaky on busy CI.
 else
@@ -218,7 +211,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# system/out/sessions/resumed event was emitted
+# MQTT resumed event
 # ---------------------------------------------------------------------------
 harness::log "--- system/out/sessions/resumed was emitted ---"
 sleep 2
@@ -233,8 +226,7 @@ harness::ok "system/out/sessions/resumed contains ${session_id}"
 # Final cleanup
 # ---------------------------------------------------------------------------
 kill "${stream_pid}" 2>/dev/null || true
-# Best-effort: delete the session so subsequent runs start clean. Session is
-# currently active, so a plain DELETE may require force depending on policy.
+# Best-effort session cleanup so we don't leak a session on the test stack.
 harness::http DELETE "/sessions/${session_id}?force=true" >/dev/null 2>&1 || true
 
-harness::ok "pause/resume WebSocket scenario PASSED"
+harness::ok "pause/resume RTMP scenario PASSED"

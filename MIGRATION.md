@@ -110,4 +110,4 @@ Les consommateurs qui s'abonnent via shared subscriptions (cf. pattern existant 
 ## Section 6 — Risques connus
 
 - **Race condition résiduelle** si un `pause` arrive exactement en concurrence avec un `updateSession` côté Scheduler. Atténuée par la clause `WHERE status NOT IN ('paused', 'terminated')` dans `updateSession`, mais pas formellement éliminée. À surveiller dans les logs lors de la première semaine en prod.
-- **Failsafe `MAX_PAUSE_DURATION_MIN` non implémenté en MVP** : une session peut rester `paused` indéfiniment et squatter un slot Transcriber. À monitorer manuellement (alerte sur durée de pause > seuil) pendant la première itération, et planifier l'implémentation du failsafe en V2.
+- **Failsafe `MAX_PAUSE_DURATION_MIN` non implémenté** : une session peut rester `paused` indéfiniment et squatter un slot Transcriber. À monitorer via alerte sur `pausedAt < NOW() - N hours` (requête DB ou dashboard sur le snapshot retained `system/out/sessions/statuses`). Implémentation de l'auto-termination à planifier comme suite directe de cette feature.

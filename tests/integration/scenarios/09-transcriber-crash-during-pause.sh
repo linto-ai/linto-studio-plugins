@@ -230,37 +230,55 @@ fi
 harness::ok "all channels of ${session_id} are streamStatus='inactive'"
 
 # ---------------------------------------------------------------------------
-# Restart the transcriber. The SRT client (gst-launch) was almost certainly
-# killed when the broker / ingress went away; that is expected, we do not
-# assert on its pid. Restarting the transcriber is required so the next
-# scenario in the suite starts from a clean state.
+# Restore the stack so subsequent scenarios start from a clean state.
+# Restart BOTH the transcriber (which we explicitly stopped) and the
+# scheduler (whose in-memory transcribers map still references the dead
+# transcriberId). Without the scheduler restart, the next session created
+# in this run gets no transcriber assigned and times out at 60s waiting
+# for status=active.
+# The SRT client (gst-launch) was almost certainly killed by the ingress
+# going away; we do not assert on its pid.
 # ---------------------------------------------------------------------------
-harness::log "--- restarting transcriber ---"
+harness::log "--- restarting transcriber and scheduler ---"
 harness::_compose start transcriber >/dev/null 2>&1 \
     || fail "could not restart transcriber container"
+harness::_compose restart scheduler >/dev/null 2>&1 \
+    || fail "could not restart scheduler container"
 wait_transcriber_healthy 90 || fail "transcriber did not come back healthy"
 
-# Wait until the Scheduler has actually re-registered the transcriber via
-# MQTT. Without this, subsequent scenarios that create sessions and stream
-# audio may see "session did not become active" because the Scheduler has
-# no transcriber to assign to the new channels yet.
-harness::log "--- waiting for Scheduler to re-register the transcriber ---"
-deadline=$(( $(date +%s) + 30 ))
-while :; do
-    if harness::scheduler_log_contains "registering transcriber|transcriber registered|new transcriber"; then
-        harness::ok "Scheduler re-registered the transcriber"
+# Validate the stack is actually functional again by creating a probe
+# session, streaming SRT, and waiting for status=active. This proves the
+# scheduler has assigned the new transcriber to fresh channels and the
+# end-to-end ingress is back. Without this check, scenarios that follow
+# (10-autoend, 11-mqtt-reconnect) can fail spuriously at "session did not
+# become active within 60s" because the scheduler hasn't yet processed
+# the new transcriber registration.
+harness::log "--- probing stack with a smoke session ---"
+probe_profile_id=$(harness::create_transcriber_profile "post_crash_probe") \
+    || fail "could not create probe profile after restart"
+probe_session_id=$(harness::create_session "${probe_profile_id}" "post_crash_probe") \
+    || fail "could not create probe session after restart"
+probe_stream_pid=$(harness::stream_srt_loop "${probe_session_id}" 0 "${AUDIO}" 0)
+probe_deadline=$(( $(date +%s) + 60 ))
+probe_active=0
+while [[ $(date +%s) -lt ${probe_deadline} ]]; do
+    cur=$(harness::get_session "${probe_session_id}" | jq -r '.status // empty' 2>/dev/null || echo "")
+    if [[ "${cur}" == "active" ]]; then
+        probe_active=1
         break
     fi
-    if [[ $(date +%s) -ge ${deadline} ]]; then
-        harness::warn "timeout waiting for Scheduler re-registration log (continuing anyway)"
-        break
-    fi
-    sleep 1
+    sleep 2
 done
-# Small grace period for MQTT subscriptions and transcriber slots to settle.
-sleep 5
+kill "${probe_stream_pid}" 2>/dev/null || true
+harness::http DELETE "/sessions/${probe_session_id}?force=true" >/dev/null 2>&1 || true
+if [[ "${probe_active}" -ne 1 ]]; then
+    harness::logs scheduler 50 || true
+    harness::logs transcriber 50 || true
+    fail "stack did not recover after restart (probe session never became active)"
+fi
+harness::ok "stack recovered (probe session reached active)"
 
-# Best-effort cleanup of the SRT gst-launch process if still alive.
+# Best-effort cleanup of the original SRT gst-launch process if still alive.
 kill "${stream_pid}" 2>/dev/null || true
 
 # Force-delete the test session so it doesn't linger.

@@ -227,6 +227,11 @@ services:
       # creates profiles with type=fake explicitly.
       ASR_PROVIDER: "fake"
       TRANSCRIBER_DEFAULT_PROVIDER: "fake"
+      # Must match Session-API's SECURITY_CRYPT_KEY so the Transcriber can
+      # decrypt ASR API keys that Session-API encrypted before storing in DB.
+      # Without this, encrypted keys are forwarded verbatim to the ASR backend
+      # which then silently fails (e.g. Azure SDK times out with no error).
+      SECURITY_CRYPT_KEY: "testtesttesttesttesttesttesttest"
     ports:
       - "18889:8889/udp"
       - "11935:1935/tcp"

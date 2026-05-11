@@ -260,6 +260,7 @@ harness::create_microsoft_profile() {
     local key="$2"
     local region="$3"
     local langs_csv="${4:-fr-FR}"
+    local diarization="${5:-false}"
 
     # Build the JSON array of language candidates from a comma-separated list.
     local langs_json
@@ -272,13 +273,15 @@ harness::create_microsoft_profile() {
         --arg key "${key}" \
         --arg region "${region}" \
         --argjson langs "${langs_json}" \
+        --argjson diar "${diarization}" \
         '{config: {
             type: "microsoft",
             name: $name,
             description: "microsoft provider for integration tests",
             languages: $langs,
             region: $region,
-            key: $key
+            key: $key,
+            hasDiarization: $diar
         }}')
 
     local resp

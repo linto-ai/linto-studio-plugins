@@ -131,7 +131,8 @@ profile_id=$(harness::create_microsoft_profile \
     "pause_resume_microsoft_$(date +%s)" \
     "${AZURE_SPEECH_KEY}" \
     "${AZURE_SPEECH_REGION}" \
-    "fr-FR")
+    "en-GB,fr-FR" \
+    "true")
 harness::ok "created Microsoft transcriber profile id=${profile_id}"
 
 session_id=$(harness::create_session "${profile_id}" "pr_microsoft_$(date +%s)")

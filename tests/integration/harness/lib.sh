@@ -247,6 +247,55 @@ EOF
     echo "${id}"
 }
 
+# Create a Microsoft (Azure) ASR transcriber profile, prints the new profile id.
+# Args: NAME KEY REGION [LANGUAGES_CSV]
+#
+# LANGUAGES_CSV defaults to "fr-FR". Multiple BCP47 candidates can be passed
+# as a comma-separated list (e.g. "fr-FR,en-US"). Each candidate is wrapped in
+# the {"candidate": "..."} shape expected by Session-API.
+#
+# Session-API encrypts the key at rest (Security.encrypt) before storing it.
+harness::create_microsoft_profile() {
+    local name="$1"
+    local key="$2"
+    local region="$3"
+    local langs_csv="${4:-fr-FR}"
+
+    # Build the JSON array of language candidates from a comma-separated list.
+    local langs_json
+    langs_json=$(jq -nc --arg csv "${langs_csv}" \
+        '$csv | split(",") | map({candidate: (. | gsub("^\\s+|\\s+$"; ""))})')
+
+    local payload
+    payload=$(jq -nc \
+        --arg name "${name}" \
+        --arg key "${key}" \
+        --arg region "${region}" \
+        --argjson langs "${langs_json}" \
+        '{config: {
+            type: "microsoft",
+            name: $name,
+            description: "microsoft provider for integration tests",
+            languages: $langs,
+            region: $region,
+            key: $key
+        }}')
+
+    local resp
+    resp=$(harness::post "/transcriber_profiles" "${payload}") || return 1
+    local id
+    id=$(jq -r '.id // .profileId // .data.id // empty' <<< "${resp}")
+    if [[ -z "${id}" ]]; then
+        id=$(harness::get "/transcriber_profiles" \
+            | jq -r --arg n "${name}" '[.[] | select(.config.name==$n)] | last | .id // empty')
+    fi
+    if [[ -z "${id}" ]]; then
+        harness::err "Could not extract microsoft transcriber profile id from response: ${resp}"
+        return 1
+    fi
+    echo "${id}"
+}
+
 # Create a session with one channel bound to the given profile id.
 # Args: PROFILE_ID [SESSION_NAME]
 # Prints the session id.
@@ -408,6 +457,37 @@ harness::stream_rtmp() {
     echo "${pid}"
 }
 
+# harness::stream_rtmp_loop SESSION_ID CHANNEL_INDEX [DURATION]
+#
+# Continuous RTMP stream backed by ffmpeg's lavfi sine generator (never emits
+# EOS). Useful for long-running scenarios (pause/resume) where we need a
+# persistent audio source over RTMP. The third positional arg (audio file) is
+# kept for forward compatibility with stream_rtmp's signature but ignored.
+harness::stream_rtmp_loop() {
+    local session_id="$1"
+    local channel_index="${2:-0}"
+    # Optional 3rd arg (audio file) is intentionally ignored: lavfi sine has
+    # no EOS so we don't need a real file. Keeping the slot lets callers pass
+    # the same args as stream_rtmp without surprises.
+    local _ignored_audio="${3:-}"
+    local duration="${4:-0}"
+
+    local uri="rtmp://${HARNESS_RTMP_HOST}:${HARNESS_RTMP_PORT}/${session_id}/${channel_index}"
+    harness::log "stream_rtmp_loop (lavfi sine) -> ${uri}"
+    # duration=0 in lavfi sine means infinite. AAC + FLV is the canonical
+    # RTMP container expected by the transcriber's rtmp ingress.
+    ffmpeg -hide_banner -loglevel error -re \
+        -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=0" \
+        -ar 16000 -ac 1 -c:a aac -f flv "${uri}" >/dev/null 2>&1 &
+    local pid=$!
+    harness::_track_bg "${pid}"
+    if [[ "${duration}" -gt 0 ]]; then
+        ( sleep "${duration}" && kill "${pid}" 2>/dev/null ) &
+        harness::_track_bg "$!"
+    fi
+    echo "${pid}"
+}
+
 # harness::stream_ws SESSION_ID CHANNEL_INDEX AUDIO_FILE [DURATION]
 #
 # Uses the bundled node helper so we don't need an external nodejs program.
@@ -424,6 +504,42 @@ harness::stream_ws() {
     # Convert/decode anything to s16le mono 16k via ffmpeg, pipe to node which
     # forwards 200ms PCM chunks to the WebSocket.
     ( ffmpeg -hide_banner -loglevel error -re -i "${audio}" \
+        -ar 16000 -ac 1 -f s16le pipe:1 \
+        | node "${helper}" "${url}" ) >/dev/null 2>&1 &
+    local pid=$!
+    harness::_track_bg "${pid}"
+    if [[ "${duration}" -gt 0 ]]; then
+        ( sleep "${duration}" && kill "${pid}" 2>/dev/null ) &
+        harness::_track_bg "$!"
+    fi
+    echo "${pid}"
+}
+
+# harness::stream_ws_loop SESSION_ID CHANNEL_INDEX [AUDIO_IGNORED] [DURATION]
+#
+# Continuous WebSocket stream backed by ffmpeg's lavfi sine generator (never
+# emits EOS). Useful for long-running scenarios (pause/resume) where we need a
+# persistent audio source over WS. The third positional arg (audio file) is
+# kept for forward compatibility with stream_ws's signature but ignored.
+harness::stream_ws_loop() {
+    local session_id="$1"
+    local channel_index="${2:-0}"
+    # Optional 3rd arg (audio file) is intentionally ignored: lavfi sine has
+    # no EOS so we don't need a real file. Keeping the slot lets callers pass
+    # the same args as stream_ws without surprises.
+    local _ignored_audio="${3:-}"
+    local duration="${4:-0}"
+
+    local helper="${HARNESS_LIB_DIR}/ws-stream.js"
+    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/${session_id},${channel_index}"
+    harness::log "stream_ws_loop (lavfi sine) -> ${url}"
+
+    # duration=0 in lavfi sine means infinite. ffmpeg outputs raw s16le mono
+    # 16kHz PCM on stdout, which the node helper forwards as 200ms binary
+    # chunks over the WebSocket. stdin never closes so the node helper keeps
+    # running until killed.
+    ( ffmpeg -hide_banner -loglevel error -re \
+        -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=0" \
         -ar 16000 -ac 1 -f s16le pipe:1 \
         | node "${helper}" "${url}" ) >/dev/null 2>&1 &
     local pid=$!

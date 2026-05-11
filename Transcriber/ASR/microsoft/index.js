@@ -9,6 +9,16 @@ class PrimaryRecognizerListener {
     constructor(transcriber, name) {
         this.transcriber = transcriber;
         this.name = name;
+        // Track the last SDK event observed for this recognizer, so that on
+        // STARTUP_TIMEOUT we can surface what (if anything) Azure replied with.
+        this._lastSdkEvent = null;
+    }
+
+    _recordSdkEvent(type, extra) {
+        this._lastSdkEvent = Object.assign(
+            { type, at: new Date().toISOString() },
+            extra || {}
+        );
     }
 
     emitTranscribing(payload) {
@@ -22,10 +32,12 @@ class PrimaryRecognizerListener {
     }
 
     handleRecognizing(s, e) {
+        this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
         this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
 
     handleRecognized(s, e) {
+        this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
             this.emitTranscribed(this.transcriber.formatResult(e.result))
         }
@@ -43,6 +55,10 @@ class PrimaryRecognizerListener {
     }
 
     async handleCanceled(s, e) {
+        this._recordSdkEvent('canceled', {
+            error: e && e.errorDetails,
+            code: e && e.errorCode,
+        });
         // Guard: ignore subsequent canceled events while already stopping
         if (this.transcriber._stopping) return;
         this.transcriber._stopping = true;
@@ -58,6 +74,7 @@ class PrimaryRecognizerListener {
     };
 
     handleSessionStopped(s, e) {
+        this._recordSdkEvent('sessionStopped', { reason: e && e.reason });
         this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
         this.transcriber.emit('closed', e.reason);
     };
@@ -110,10 +127,29 @@ class PrimaryRecognizerListener {
             this.onStartError.bind(this)
         );
 
-        // Startup timeout: if Azure doesn't respond within 15s, emit error
+        // Startup timeout: if Azure doesn't respond within 15s, emit error.
+        // Surface diagnostic hints to spare operators the typical hour-long
+        // hunt — most timeouts are caused by either an encrypted key being
+        // forwarded verbatim (SECURITY_CRYPT_KEY missing on the Transcriber)
+        // or an invalid/wrong-region subscription.
         this._startupTimeout = setTimeout(() => {
             this._startupTimeout = null;
-            this.transcriber.logger.error(`${this.name}: Microsoft ASR startup timeout (15s)`);
+            const region = (this.transcriber.channel
+                && this.transcriber.channel.transcriberProfile
+                && this.transcriber.channel.transcriberProfile.config
+                && this.transcriber.channel.transcriberProfile.config.region) || '<region>';
+            const hints = [
+                'Possible causes:',
+                `  - Invalid API key (verify by issuing a token: curl -X POST https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken -H "Ocp-Apim-Subscription-Key: <key>" -H "Content-Length: 0")`,
+                '  - SECURITY_CRYPT_KEY mismatch: if Session-API encrypts keys at rest, the Transcriber MUST share the same SECURITY_CRYPT_KEY to decrypt them (without this, an encrypted key is forwarded verbatim and Azure rejects it silently)',
+                '  - Wrong region (verify the region matches the Azure Speech resource)',
+                '  - Network/firewall blocking outbound HTTPS/WSS to *.api.cognitive.microsoft.com and *.stt.speech.microsoft.com',
+                '  - Azure service degraded (check Azure status page)',
+            ].join('\n');
+            const lastEvt = this._lastSdkEvent
+                ? ` Last SDK event: ${JSON.stringify(this._lastSdkEvent)}`
+                : ' (no SDK event received)';
+            this.transcriber.logger.error(`${this.name}: Microsoft ASR startup timeout (15s).${lastEvt}\n${hints}`);
             this.transcriber.emit('error', 'STARTUP_TIMEOUT');
         }, 15000);
     }
@@ -122,20 +158,27 @@ class PrimaryRecognizerListener {
 
 class SecondaryRecognizerListener extends PrimaryRecognizerListener {
     handleRecognizing(s, e) {
+        this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
         this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
 
     handleRecognized(s, e) {
+        this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
             this.emitTranscribed(this.transcriber.formatResult(e.result))
         }
     }
 
     handleCanceled(s, e) {
+        this._recordSdkEvent('canceled', {
+            error: e && e.errorDetails,
+            code: e && e.errorCode,
+        });
         this.transcriber.logger.info(`${this.formatErrorMsg(e)}`);
     };
 
     handleSessionStopped(s, e) {
+        this._recordSdkEvent('sessionStopped', { reason: e && e.reason });
         const reason = e.reason ? `: ${e.reason}` : '';
         this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
     };

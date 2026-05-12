@@ -6,12 +6,24 @@ const { toAzureCode, isAzureValid } = require('./azureLocale');
 
 
 class PrimaryRecognizerListener {
-    constructor(transcriber, name) {
+    constructor(transcriber, name, epoch) {
         this.transcriber = transcriber;
         this.name = name;
+        // Captured at listener creation. The Azure SDK keeps invoking listener
+        // callbacks asynchronously after stopRecognizer() returns (close+ack
+        // round-trip is racy). Comparing this.epoch to transcriber._epoch lets
+        // every handler short-circuit when it belongs to a previous start()
+        // generation, so a stale `canceled` cannot reset _stopping and mark
+        // the *new* recognizer as failed (root cause of the spurious
+        // STARTUP_TIMEOUT errors observed after pause/resume).
+        this.epoch = epoch;
         // Track the last SDK event observed for this recognizer, so that on
         // STARTUP_TIMEOUT we can surface what (if anything) Azure replied with.
         this._lastSdkEvent = null;
+    }
+
+    _isStale() {
+        return this.epoch !== this.transcriber._epoch;
     }
 
     _recordSdkEvent(type, extra) {
@@ -32,11 +44,13 @@ class PrimaryRecognizerListener {
     }
 
     handleRecognizing(s, e) {
+        if (this._isStale()) return;
         this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
         this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
 
     handleRecognized(s, e) {
+        if (this._isStale()) return;
         this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
             this.emitTranscribed(this.transcriber.formatResult(e.result))
@@ -55,6 +69,16 @@ class PrimaryRecognizerListener {
     }
 
     async handleCanceled(s, e) {
+        if (this._isStale()) {
+            this.transcriber.logger.debug(`${this.name}: ignoring stale canceled (epoch ${this.epoch} != ${this.transcriber._epoch})`);
+            // Always clear our own startup timeout so it cannot fire after
+            // the listener has been retired.
+            if (this._startupTimeout) {
+                clearTimeout(this._startupTimeout);
+                this._startupTimeout = null;
+            }
+            return;
+        }
         this._recordSdkEvent('canceled', {
             error: e && e.errorDetails,
             code: e && e.errorCode,
@@ -74,6 +98,7 @@ class PrimaryRecognizerListener {
     };
 
     handleSessionStopped(s, e) {
+        if (this._isStale()) return;
         this._recordSdkEvent('sessionStopped', { reason: e && e.reason });
         this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
         this.transcriber.emit('closed', e.reason);
@@ -84,6 +109,7 @@ class PrimaryRecognizerListener {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
         }
+        if (this._isStale()) return;
         this.transcriber.logger.info(`${this.name}: Microsoft ASR recognition started`);
         this.transcriber.emit('ready');
     };
@@ -93,6 +119,7 @@ class PrimaryRecognizerListener {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
         }
+        if (this._isStale()) return;
         this.transcriber.logger.error(`${this.name}: Microsoft ASR recognition error during startup: ${error}`);
         this.transcriber.emit('error', 'STARTUP_ERROR');
     };
@@ -134,6 +161,9 @@ class PrimaryRecognizerListener {
         // or an invalid/wrong-region subscription.
         this._startupTimeout = setTimeout(() => {
             this._startupTimeout = null;
+            // A stale listener's timeout fires for an old recognizer that the
+            // new generation has nothing to do with — never report it.
+            if (this._isStale()) return;
             const region = (this.transcriber.channel
                 && this.transcriber.channel.transcriberProfile
                 && this.transcriber.channel.transcriberProfile.config
@@ -158,11 +188,13 @@ class PrimaryRecognizerListener {
 
 class SecondaryRecognizerListener extends PrimaryRecognizerListener {
     handleRecognizing(s, e) {
+        if (this._isStale()) return;
         this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
         this.emitTranscribing(this.transcriber.formatResult(e.result))
     }
 
     handleRecognized(s, e) {
+        if (this._isStale()) return;
         this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
             this.emitTranscribed(this.transcriber.formatResult(e.result))
@@ -170,6 +202,13 @@ class SecondaryRecognizerListener extends PrimaryRecognizerListener {
     }
 
     handleCanceled(s, e) {
+        if (this._isStale()) {
+            if (this._startupTimeout) {
+                clearTimeout(this._startupTimeout);
+                this._startupTimeout = null;
+            }
+            return;
+        }
         this._recordSdkEvent('canceled', {
             error: e && e.errorDetails,
             code: e && e.errorCode,
@@ -178,6 +217,7 @@ class SecondaryRecognizerListener extends PrimaryRecognizerListener {
     };
 
     handleSessionStopped(s, e) {
+        if (this._isStale()) return;
         this._recordSdkEvent('sessionStopped', { reason: e && e.reason });
         const reason = e.reason ? `: ${e.reason}` : '';
         this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
@@ -188,6 +228,7 @@ class SecondaryRecognizerListener extends PrimaryRecognizerListener {
             clearTimeout(this._startupTimeout);
             this._startupTimeout = null;
         }
+        if (this._isStale()) return;
         this.transcriber.logger.info(`${this.name}: Microsoft ASR recognition started`);
     };
 }
@@ -216,6 +257,10 @@ class MicrosoftTranscriber extends EventEmitter {
         this.pushStream2 = null;
         this._stopping = false;
         this._translationKeyMap = null;
+        // Generation counter bumped on every start(). Any listener created in
+        // a previous generation compares this to its captured value and
+        // becomes a no-op once they differ. See PrimaryRecognizerListener.
+        this._epoch = 0;
         this.emit('closed');
     }
 
@@ -297,6 +342,10 @@ class MicrosoftTranscriber extends EventEmitter {
         this._stopping = false;
         this._translationKeyMap = null;
         this.startedAt = new Date().toISOString();
+        // Bump epoch BEFORE creating new listeners so any stale callback from
+        // a previous generation is reliably classified as such by _isStale().
+        this._epoch += 1;
+        const epoch = this._epoch;
 
         // If translation and diarization are enabled, we use two recognizers
         if (this.getTargetLanguages().length > 0 && diarization) {
@@ -307,14 +356,14 @@ class MicrosoftTranscriber extends EventEmitter {
                 null,
                 true,
                 this.pushStreams[0],
-                new PrimaryRecognizerListener(this, "[Diarization ASR]")
+                new PrimaryRecognizerListener(this, "[Diarization ASR]", epoch)
             ));
             this.recognizers.push(this.setupRecognizer(
                 transcriberProfile.config,
                 translations,
                 false,
                 this.pushStreams[1],
-                new SecondaryRecognizerListener(this, "[Translation ASR]")
+                new SecondaryRecognizerListener(this, "[Translation ASR]", epoch)
             ));
 
             return;
@@ -325,7 +374,7 @@ class MicrosoftTranscriber extends EventEmitter {
             translations,
             diarization,
             this.pushStreams[0],
-            new PrimaryRecognizerListener(this, "[ASR]")
+            new PrimaryRecognizerListener(this, "[ASR]", epoch)
         ));
     }
 

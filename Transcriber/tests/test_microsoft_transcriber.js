@@ -473,4 +473,99 @@ describe('MicrosoftTranscriber', () => {
             assert.strictEqual(t.pushStreams.length, 0);
         });
     });
+
+    describe('listener epoch (B2 — stale callback isolation)', () => {
+        it('start() bumps _epoch each call', () => {
+            const channel = makeChannel([]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            const initial = t._epoch;
+            t.start();
+            assert.strictEqual(t._epoch, initial + 1);
+            t.start();
+            assert.strictEqual(t._epoch, initial + 2);
+        });
+
+        it('a listener captured before stop()+start() reports stale and skips emit', async () => {
+            const channel = makeChannel([]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            t.start();
+            const oldListener = t._listeners[0];
+            const epochBefore = oldListener.epoch;
+
+            await t.stop();
+            t.start();
+
+            const newListener = t._listeners[0];
+            assert.notStrictEqual(oldListener, newListener);
+            assert.strictEqual(oldListener._isStale(), true,
+                'listener from previous generation must report stale');
+            assert.strictEqual(newListener._isStale(), false);
+            assert.strictEqual(t._epoch, epochBefore + 1);
+
+            await t.stop();
+        });
+
+        it('a stale listener.handleCanceled is a no-op (does not toggle _stopping)', async () => {
+            const channel = makeChannel([]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            t.start();
+            const oldListener = t._listeners[0];
+            await t.stop();
+            t.start();
+
+            // Re-arm: _stopping is false again after start().
+            t._stopping = false;
+            const errors = [];
+            t.on('error', (e) => errors.push(e));
+
+            // Simulate an Azure SDK 'canceled' callback for the OLD recognizer
+            // arriving after we've already torn it down and restarted.
+            await oldListener.handleCanceled({}, { errorDetails: 'late cancel', errorCode: 1 });
+
+            assert.strictEqual(t._stopping, false,
+                'stale canceled must NOT set _stopping=true on the new generation');
+            assert.strictEqual(errors.length, 0,
+                'stale canceled must NOT surface as an error event');
+
+            await t.stop();
+        });
+
+        it('a stale listener.handleSessionStopped does not emit closed', async () => {
+            const channel = makeChannel([]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            t.start();
+            const oldListener = t._listeners[0];
+            await t.stop();
+            t.start();
+
+            const closedEvents = [];
+            t.on('closed', (reason) => closedEvents.push(reason));
+
+            oldListener.handleSessionStopped({}, { reason: 'late stop' });
+
+            assert.strictEqual(closedEvents.length, 0,
+                'stale sessionStopped must NOT re-emit closed on the new generation');
+
+            await t.stop();
+        });
+
+        it('a stale listener.onStartSuccess does not emit ready', async () => {
+            const channel = makeChannel([]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            t.start();
+            const oldListener = t._listeners[0];
+            await t.stop();
+            t.start();
+
+            const readyEvents = [];
+            t.on('ready', () => readyEvents.push(true));
+
+            oldListener.onStartSuccess();
+
+            assert.strictEqual(readyEvents.length, 0,
+                'stale onStartSuccess must NOT mark the new generation as ready');
+
+            await t.stop();
+        });
+    });
 });

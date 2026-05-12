@@ -10,7 +10,7 @@ module.exports = (webserver) => {
             try {
                 const bot = await Model.Bot.findByPk(id);
                 if (!bot) {
-                    return res.status(404).send('Bot not found');
+                    return res.status(404).json({ error: 'Bot not found' });
                 }
                 res.json(bot);
             } catch (err) {

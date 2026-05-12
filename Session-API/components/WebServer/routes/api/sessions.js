@@ -151,7 +151,7 @@ module.exports = (webserver) => {
                 const withCaptions = req.query.withCaptions !== 'false';
                 const session = await getSessionResult(req.params.id, withCaptions);
                 if (!session) {
-                    return res.status(404).send('Session not found');
+                    return res.status(404).json({ error: 'Session not found' });
                 }
                 res.json(session);
             } catch (err) {
@@ -550,7 +550,7 @@ module.exports = (webserver) => {
             try {
                 const session = await Model.Session.findByPk(req.params.id);
                 if (!session) {
-                    return res.status(404).send('Session not found');
+                    return res.status(404).json({ error: 'Session not found' });
                 }
                 // Check if session is active or paused and "force" parameter is not true
                 if (['active', 'paused'].includes(session.status) && req.query.force !== 'true') {

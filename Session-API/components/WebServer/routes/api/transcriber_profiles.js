@@ -170,7 +170,7 @@ module.exports = (webserver) => {
             try {
                 const config = await Model.TranscriberProfile.findByPk(req.params.id);
                 if (!config) {
-                    return res.status(404).send('Transcriber config not found');
+                    return res.status(404).json({ error: 'Transcriber config not found' });
                 }
                 const obfuscated = obfuscateTranscriberProfileKey(config.toJSON());
                 const onlineTranslators = await Model.Translator.findAll({ where: { online: true } });
@@ -194,19 +194,19 @@ module.exports = (webserver) => {
                     try {
                         req.body.config = JSON.parse(req.body.config);
                     } catch (parseErr) {
-                        return res.status(400).send(`Invalid JSON in config field: ${parseErr.message}`);
+                        return res.status(400).json({ error: `Invalid JSON in config field: ${parseErr.message}` });
                     }
                 }
 
                 // Ensure req.body has the expected structure for validation
                 if (!req.body.config) {
-                    return res.status(400).send(`Config field is required. Received body: ${JSON.stringify(req.body)}`);
+                    return res.status(400).json({ error: `Config field is required. Received body: ${JSON.stringify(req.body)}` });
                 }
 
                 if (req.body.config.type === 'amazon') {
                     // Validate certificate and privateKey files
                     if (!req.files || !req.files.certificate || !req.files.privateKey) {
-                        return res.status(400).send('Amazon profiles require certificate and privateKey files');
+                        return res.status(400).json({ error: 'Amazon profiles require certificate and privateKey files' });
                     }
 
                     // Bundle credentials
@@ -224,7 +224,7 @@ module.exports = (webserver) => {
 
                 const validationResult = validateTranscriberProfile(req.body);
                 if (validationResult) {
-                    return res.status(validationResult.status).send(validationResult.error);
+                    return res.status(validationResult.status).json({ error: validationResult.error });
                 }
                 const config = await Model.TranscriberProfile.create({
                         ...extendTranscriberProfile(cryptTranscriberProfileKey(req.body)),
@@ -244,12 +244,12 @@ module.exports = (webserver) => {
             try {
                 const config = await Model.TranscriberProfile.findByPk(req.params.id);
                 if (!config) {
-                    return res.status(404).send('Transcriber config not found');
+                    return res.status(404).json({ error: 'Transcriber config not found' });
                 }
 
                 // Check if config is provided in the request body
                 if (!req.body.config) {
-                    return res.status(400).send('Config object is required');
+                    return res.status(400).json({ error: 'Config object is required' });
                 }
 
                 // Handle Amazon profile with file uploads
@@ -312,7 +312,7 @@ module.exports = (webserver) => {
             try {
                 const config = await Model.TranscriberProfile.findByPk(req.params.id);
                 if (!config) {
-                    return res.status(404).send('Transcriber config not found');
+                    return res.status(404).json({ error: 'Transcriber config not found' });
                 }
                 await config.destroy();
                 res.json(config);

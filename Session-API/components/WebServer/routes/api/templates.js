@@ -28,7 +28,7 @@ module.exports = (webserver) => {
                     order: [[Model.ChannelTemplate, 'id', 'ASC']]
                 });
                 if (!sessionTemplate) {
-                    return res.status(404).send('Session template not found');
+                    return res.status(404).json({ error: 'Session template not found' });
                 }
                 res.json(sessionTemplate);
             } catch (err) {
@@ -228,7 +228,7 @@ module.exports = (webserver) => {
             try {
                 const sessionTemplate = await Model.SessionTemplate.findByPk(req.params.id);
                 if (!sessionTemplate) {
-                    return res.status(404).send('Session template not found');
+                    return res.status(404).json({ error: 'Session template not found' });
                 }
                 await sessionTemplate.destroy();
                 logger.debug('Session template deleted', sessionTemplate.id);

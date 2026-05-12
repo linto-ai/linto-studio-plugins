@@ -259,7 +259,6 @@ class MicrosoftTranscriber extends EventEmitter {
         // a previous generation compares this to its captured value and
         // becomes a no-op once they differ. See PrimaryRecognizerListener.
         this._epoch = 0;
-        this.emit('closed');
     }
 
     // Map<azureCode, originalUserKey> — built once from channel.translations.

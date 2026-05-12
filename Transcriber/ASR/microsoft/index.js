@@ -519,6 +519,15 @@ class MicrosoftTranscriber extends EventEmitter {
         })
     }
 
+    _clearListenerTimeouts(listeners) {
+        for (const listener of listeners) {
+            if (listener && listener._startupTimeout) {
+                clearTimeout(listener._startupTimeout);
+                listener._startupTimeout = null;
+            }
+        }
+    }
+
     async stop() {
         // Snapshot current resources and reset instance state synchronously BEFORE
         // awaiting any async cleanup. This prevents transcribe() from writing to
@@ -531,18 +540,20 @@ class MicrosoftTranscriber extends EventEmitter {
         this._stopping = true;
 
         // Clear any pending startup timeouts so they don't fire a spurious
-        // STARTUP_TIMEOUT error after the transcriber has been stopped.
-        for (const listener of listenersToClear) {
-            if (listener && listener._startupTimeout) {
-                clearTimeout(listener._startupTimeout);
-                listener._startupTimeout = null;
-            }
-        }
+        // STARTUP_TIMEOUT error after the transcriber has been stopped. The
+        // try/finally re-runs the clear after the recognizer-close loop in
+        // case anything in stopRecognizer() managed to re-arm a timeout (the
+        // SDK does not, but the guard is cheap and covers any future drift).
+        this._clearListenerTimeouts(listenersToClear);
 
-        for (const recognizer of recognizersToClose) {
-            await this.stopRecognizer(recognizer);
+        try {
+            for (const recognizer of recognizersToClose) {
+                await this.stopRecognizer(recognizer);
+            }
+            this.emit('closed');
+        } finally {
+            this._clearListenerTimeouts(listenersToClear);
         }
-        this.emit('closed');
     }
 }
 

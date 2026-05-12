@@ -1,0 +1,14 @@
+{
+    "ErrorResponse": {
+        "type": "object",
+        "description": "JSON shape returned by the API for every 4xx/5xx response. The global error handler in WebServer/index.js produces {error: err.message}; inline 4xx responses follow the same shape after the 4xx-uniformization patch.",
+        "required": ["error"],
+        "properties": {
+            "error": {
+                "type": "string",
+                "description": "Human-readable error message. Stable enough for log search but not part of any contract — clients must rely on the HTTP status code for branching.",
+                "example": "Session test-id not found"
+            }
+        }
+    }
+}

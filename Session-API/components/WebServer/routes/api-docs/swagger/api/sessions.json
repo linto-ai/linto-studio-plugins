@@ -4,6 +4,7 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "purgeSessions",
       "summary": "Purge terminated sessions or all sessions if force is true",
       "parameters": [
         {
@@ -28,6 +29,7 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "listSessions",
       "summary": "Get all sessions",
       "parameters": [
         {
@@ -163,6 +165,7 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "createSession",
       "summary": "Create a new session",
       "requestBody": {
         "content": {
@@ -183,6 +186,9 @@
               }
             }
           }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
         }
       }
     }
@@ -192,6 +198,7 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "getSession",
       "summary": "Get a session by ID",
       "parameters": [
         {
@@ -235,7 +242,9 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "updateSession",
       "summary": "Update a session and its channels",
+      "description": "Replaces the session and its channels. Only the fields exposed by SessionUpdateRequestWithChannels are honored — system-managed fields (status, startTime, endTime, pausedAt, erroredOn, id, createdAt, updatedAt) are silently dropped to prevent clients from bypassing the dedicated lifecycle endpoints (/pause, /resume, /stop). Refused with 400 if startTime is in the past.",
       "parameters": [
         {
           "name": "id",
@@ -267,6 +276,12 @@
               }
             }
           }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
         }
       }
     },
@@ -274,7 +289,9 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "patchSession",
       "summary": "Update a session",
+      "description": "Partial update. Only the fields exposed by SessionUpdateRequest are honored — system-managed fields (status, startTime, endTime, pausedAt, erroredOn, id, createdAt, updatedAt) are silently dropped.",
       "parameters": [
         {
           "name": "id",
@@ -306,6 +323,9 @@
               }
             }
           }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
         }
       }
     },
@@ -313,7 +333,9 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "deleteSession",
       "summary": "Delete a session by ID",
+      "description": "Deletes the session row and cascades to its channels. Active and paused sessions are refused with 400 unless ?force=true is set, to prevent accidental loss of an in-flight session.",
       "parameters": [
         {
           "name": "id",
@@ -339,6 +361,9 @@
         "200": {
           "description": "Session successfully deleted"
         },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
         "404": {
           "$ref": "#/components/responses/NotFound"
         }
@@ -350,6 +375,7 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "getSessionChannel",
       "summary": "Get a single channel of a session with paginated captions",
       "description": "Returns a single channel with reverse-paginated closedCaptions and translatedCaptions. offset=0 returns the N most recent turns, offset=50 returns the 50 before that, etc. Within a page, turns are in chronological order (oldest first).",
       "parameters": [
@@ -415,7 +441,9 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "stopSession",
       "summary": "Stop a session by ID",
+      "description": "Terminates the session and marks all its channels inactive. Active and paused sessions are refused with 400 unless ?force=true is set (so that an operator who issues a stop on a live session has to confirm the data-loss intent).",
       "parameters": [
         {
           "name": "id",
@@ -448,6 +476,9 @@
             }
           }
         },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
         "404": {
           "$ref": "#/components/responses/NotFound"
         }
@@ -459,8 +490,9 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "pauseSession",
       "summary": "Pause an active session",
-      "description": "Transitions the session status from 'active' to 'paused'. The audio stream stays open and is drained, but ASR is fully stopped to release resources. Idempotent: re-issuing on a paused session returns 200 unchanged.",
+      "description": "Transitions the session status from 'active' to 'paused'. The audio stream stays open and is drained, but ASR is fully stopped to release resources. Idempotent: re-issuing on a paused session returns 200 unchanged and does not republish the sessions/paused MQTT event.",
       "parameters": [
         {
           "name": "id",
@@ -484,10 +516,10 @@
           }
         },
         "400": {
-          "description": "Session not in a state that allows pausing (must be 'active')"
+          "$ref": "#/components/responses/BadRequest"
         },
         "404": {
-          "description": "Session not found"
+          "$ref": "#/components/responses/NotFound"
         }
       }
     }
@@ -497,8 +529,9 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "resumeSession",
       "summary": "Resume a paused session",
-      "description": "Transitions the session status from 'paused' back to 'active'. ASR is restarted. Idempotent: re-issuing on an active session returns 200 unchanged.",
+      "description": "Transitions the session status from 'paused' back to 'active'. ASR is restarted. Idempotent: re-issuing on an active session returns 200 unchanged and does not republish the sessions/resumed MQTT event.",
       "parameters": [
         {
           "name": "id",
@@ -522,10 +555,10 @@
           }
         },
         "400": {
-          "description": "Session not in a state that allows resuming (must be 'paused')"
+          "$ref": "#/components/responses/BadRequest"
         },
         "404": {
-          "description": "Session not found"
+          "$ref": "#/components/responses/NotFound"
         }
       }
     }
@@ -535,6 +568,7 @@
       "tags": [
         "sessions"
       ],
+      "operationId": "deleteSessionCaptions",
       "summary": "Delete captions of a session by ID",
       "parameters": [
         {

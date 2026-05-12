@@ -1,33 +1,19 @@
 {
     "NotFound": {
-        "description": "Not Found",
+        "description": "The requested resource does not exist.",
         "content": {
             "application/json": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "example": "Ressource not found"
-                        }
-                    }
-                }
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Session abc-123 not found" }
             }
         }
     },
     "BadRequest": {
-        "description": "Bad Request",
+        "description": "The request is malformed or violates a business rule (e.g. invalid state transition, missing required parameter, refused without ?force=true).",
         "content": {
             "application/json": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "example": "Invalid request parameters"
-                        }
-                    }
-                }
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Cannot pause session in status 'ready'. Only active sessions can be paused." }
             }
         }
     }

@@ -28,6 +28,12 @@ class AmazonTranscriber extends EventEmitter {
         this.isStreaming = false;
         this.streamingPromise = null;
         this.lastPartialResult = null; // Track last partial result
+        // Generation counter bumped on every start()/stop(). Long-running async
+        // work (start, reconnect) captures the epoch at entry and re-checks it
+        // after every await so a stop()+start() cycle aborts in-flight calls
+        // before they can install a zombie AWS client (root cause of the
+        // double-streaming + double-billing observed during pause/resume).
+        this._epoch = 0;
         this.emit('closed');
     }
 
@@ -218,12 +224,22 @@ class AmazonTranscriber extends EventEmitter {
         }
     }
 
+    // Aborts when the transcriber has been stopped or restarted while we were
+    // awaiting (credentials helper alone takes 200-1000ms). Without this guard
+    // a reconnect() that crossed a stop() boundary would install a fresh
+    // TranscribeStreamingClient AFTER stop() set this.client = null, leaving a
+    // zombie client streaming audio and incurring AWS bill until process exit.
+    _isStaleReconnect(epoch) {
+        return !this.isStreaming || this._stopping || epoch !== this._epoch;
+    }
+
     async reconnect() {
         if (!this.isStreaming || this._stopping) {
             this.logger.debug('Reconnect aborted: not streaming or stopping');
             return;
         }
 
+        const epoch = this._epoch;
         this.logger.info('Amazon ASR: Reconnecting...');
 
         // Don't emit error, just reconnect silently
@@ -236,15 +252,28 @@ class AmazonTranscriber extends EventEmitter {
 
             // Get new credentials (they might have expired)
             const credentials = await this.getCredentialsFromHelper();
+            if (this._isStaleReconnect(epoch)) {
+                this.logger.warn('Amazon ASR: reconnect aborted after credentials fetch (stop or restart in flight)');
+                return;
+            }
 
             // Create new Transcribe client
             const { transcriberProfile, diarization } = this.channel;
             const { config } = transcriberProfile;
 
-            this.client = new TranscribeStreamingClient({
+            const newClient = new TranscribeStreamingClient({
                 region: config.region,
                 credentials: credentials
             });
+            // Re-check before publishing the client to this.client so a stop()
+            // racing with us does not lose the reference (and the ability to
+            // .destroy() the new client).
+            if (this._isStaleReconnect(epoch)) {
+                try { newClient.destroy(); } catch (_) {}
+                this.logger.warn('Amazon ASR: reconnect aborted before client install');
+                return;
+            }
+            this.client = newClient;
 
             const languageCode = config.languages[0].candidate;
 
@@ -267,12 +296,25 @@ class AmazonTranscriber extends EventEmitter {
 
             const command = new StartStreamTranscriptionCommand(commandParams);
             const response = await this.client.send(command);
+            if (this._isStaleReconnect(epoch)) {
+                try { this.client && this.client.destroy(); } catch (_) {}
+                this.client = null;
+                this.logger.warn('Amazon ASR: reconnect aborted after stream start');
+                return;
+            }
 
             // Continue processing the transcription stream
             this.streamingPromise = this.processTranscriptionStream(response.TranscriptResultStream);
             await this.streamingPromise;
 
         } catch (err) {
+            // If a stale reconnect raced its way to a real error after stop()
+            // already reported 'closed', do not surface a misleading 'error'
+            // event for the new generation.
+            if (this._isStaleReconnect(epoch)) {
+                this.logger.debug(`Amazon ASR: ignoring reconnect error in stale generation: ${err.message}`);
+                return;
+            }
             this.logger.error(`Amazon ASR: Reconnection failed: ${err.message}`);
             const errorCode = AmazonTranscriber.ERROR_MAP[err.name] || 'RUNTIME_ERROR';
             this.emit('error', errorCode);
@@ -296,16 +338,30 @@ class AmazonTranscriber extends EventEmitter {
         this.lastPartialResult = null;
         this.isStreaming = true;
         this.audioQueue = [];
+        // Bump epoch BEFORE any await so an in-flight reconnect()/start() from
+        // the previous generation observes the change after its next await.
+        this._epoch += 1;
+        const epoch = this._epoch;
 
         try {
             // Get temporary AWS credentials
             const credentials = await this.getCredentialsFromHelper();
+            if (this._isStaleReconnect(epoch)) {
+                this.logger.warn('Amazon ASR: start aborted after credentials fetch');
+                return;
+            }
 
             // Create Transcribe client
-            this.client = new TranscribeStreamingClient({
+            const newClient = new TranscribeStreamingClient({
                 region: config.region,
                 credentials: credentials
             });
+            if (this._isStaleReconnect(epoch)) {
+                try { newClient.destroy(); } catch (_) {}
+                this.logger.warn('Amazon ASR: start aborted before client install');
+                return;
+            }
+            this.client = newClient;
 
             const languageCode = config.languages[0].candidate;
 
@@ -328,6 +384,12 @@ class AmazonTranscriber extends EventEmitter {
 
             const command = new StartStreamTranscriptionCommand(commandParams);
             const response = await this.client.send(command);
+            if (this._isStaleReconnect(epoch)) {
+                try { this.client && this.client.destroy(); } catch (_) {}
+                this.client = null;
+                this.logger.warn('Amazon ASR: start aborted after stream start');
+                return;
+            }
 
             // Emit ready immediately after connection is established
             this.emit('ready');
@@ -337,6 +399,10 @@ class AmazonTranscriber extends EventEmitter {
             await this.streamingPromise;
 
         } catch (err) {
+            if (this._isStaleReconnect(epoch)) {
+                this.logger.debug(`Amazon ASR: ignoring start error in stale generation: ${err.message}`);
+                return;
+            }
             this.logger.error(`Amazon ASR: Failed to start: ${err.message}`);
             const errorCode = AmazonTranscriber.ERROR_MAP[err.name] || 'RUNTIME_ERROR';
             this.emit('error', errorCode);
@@ -355,6 +421,10 @@ class AmazonTranscriber extends EventEmitter {
     async stop() {
         this.logger.info('Amazon ASR: Stopping transcription');
         this._stopping = true;
+        // Bump epoch on stop too: if no start() follows (pure stop, dispose),
+        // an in-flight reconnect with the old epoch still observes a mismatch
+        // and aborts cleanly instead of falling through to install a client.
+        this._epoch += 1;
 
         // Flush any pending partial result as a final transcription
         if (this.lastPartialResult) {

@@ -37,6 +37,24 @@ describe('CircularBuffer overflow / wrap-around', () => {
     );
   });
 
+  it('keeps only the trailing buffer.length bytes when packet is bigger than the buffer (no RangeError)', () => {
+    const buffer = new CircularBuffer();
+    // Fill some bytes first so we also exercise the pointer-reset path.
+    buffer.add(new Uint8Array([99, 99]));
+    assert.strictEqual(buffer.pointer, 2);
+
+    // 10-byte packet into a 6-byte buffer would otherwise throw RangeError
+    // on Uint8Array.set when tail.length > buffer.length.
+    const huge = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert.doesNotThrow(() => buffer.add(huge));
+
+    // Buffer must contain the LAST buffer.length bytes of the oversize packet.
+    assert.deepStrictEqual(buffer.buffer, new Uint8Array([5, 6, 7, 8, 9, 10]));
+    // Pointer is reset to 0 — the buffer is exactly full and the next write
+    // wraps from the start, matching the rest of the wrap-around semantics.
+    assert.strictEqual(buffer.pointer, 0);
+  });
+
   it('should not corrupt the buffer when wrap exactly fills the tail', () => {
     const buffer = new CircularBuffer();
 

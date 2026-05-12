@@ -19,7 +19,7 @@
 # The scenario assumes the integration stack is up; when run standalone it
 # relies on harness::up to bring it up.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

@@ -29,7 +29,7 @@
 # The stack must be up before this scenario runs. When invoked standalone,
 # it brings the stack up by itself.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

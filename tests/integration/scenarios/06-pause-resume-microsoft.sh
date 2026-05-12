@@ -32,7 +32,7 @@
 # transcriber's own log lines (ASR ready / session stopped) are emitted
 # directly by the Microsoft SDK callbacks and are deterministic.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

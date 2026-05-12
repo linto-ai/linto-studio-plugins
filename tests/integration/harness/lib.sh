@@ -10,7 +10,7 @@
 # Configuration is exposed via HARNESS_* env vars; defaults match
 # tests/integration/docker-compose.test.yml.
 
-set -uo pipefail
+set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Resolve repo root (the directory containing this file is .../tests/integration/harness)

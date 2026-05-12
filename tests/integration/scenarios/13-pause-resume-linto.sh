@@ -36,7 +36,7 @@
 # The "Starting linto ASR" log is deterministic: it fires once per call to
 # ASR.start() regardless of whether the upstream WS later transcribes.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

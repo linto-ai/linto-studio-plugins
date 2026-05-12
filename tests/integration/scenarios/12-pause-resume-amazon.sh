@@ -50,7 +50,7 @@
 # succeeded or failed. The transcriber's own log lines emitted in start()
 # right after `client.send(command)` resolves are deterministic markers.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

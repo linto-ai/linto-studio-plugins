@@ -18,7 +18,7 @@
 # The scenario must restart the transcriber on its way out so the rest of the
 # integration suite remains usable.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

@@ -29,7 +29,7 @@
 #   - This scenario focuses on the BACKEND reconnection behavior, not on the
 #     stream resilience.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness/lib.sh

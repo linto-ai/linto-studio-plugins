@@ -12,7 +12,7 @@
 #   KEEP_STACK=1   Don't tear the stack down on exit (useful for debugging).
 #   ONLY=<glob>    Run only scenarios whose basename matches the glob.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness/lib.sh

@@ -65,6 +65,13 @@ class ASR extends eventEmitter {
           this.logger.warn(`ASR pause: provider.stop() error: ${e.message}`);
         }
       }
+      // Set state synchronously after stop() so external readers don't see
+      // state=READY during the (potentially long, on Amazon) interval between
+      // provider.stop() returning and the asynchronous 'closed' event firing.
+      // The provider's own 'closed' handler will still set state=CLOSED later;
+      // this is a no-op convergence for the live path and a safety net for
+      // providers whose stop() does not emit closed (or emits it racily).
+      this.state = ASR.states.CLOSED;
       this.logger.info(`ASR paused for session=${this.session?.id} channel=${this.channel?.id}`);
     });
   }

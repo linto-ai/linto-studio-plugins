@@ -278,6 +278,20 @@ describe('ASR pause/resume', () => {
         });
     });
 
+    // -------- Suite 4b — State after pause -------------------------------
+
+    describe('state after pause()', () => {
+        it('state becomes CLOSED synchronously after pause() resolves', async () => {
+            const asr = await makeReadyAsr();
+            assert.notStrictEqual(asr.state, ASR.states.CLOSED, 'precondition: not closed');
+
+            await asr.pause();
+
+            assert.strictEqual(asr.state, ASR.states.CLOSED,
+                'state must be CLOSED right after pause() completes — external readers should never see READY while paused');
+        });
+    });
+
     // -------- Suite 5b — Transition lock robustness ----------------------
 
     describe('transition lock robustness', () => {

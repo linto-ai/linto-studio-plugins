@@ -553,6 +553,90 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
         });
     });
 
+    // -------------------- PUT WHITELIST --------------------
+
+    describe('PUT /sessions/:id whitelist', () => {
+        // Helper that wires a minimal mock so PUT reaches Session.update without
+        // touching channels heavily. Returns the array that captures Session.update calls.
+        function setupMinimalPutMocks(session) {
+            const updateCalls = [];
+            mockModel.Session.findByPk = async () => session;
+            mockModel.Session.update = async (data, opts) => {
+                updateCalls.push({ data, opts });
+                return [1];
+            };
+            mockModel.Channel = {
+                findByPk: async (id) => ({ id }),
+                findAll: async () => [{ id: 1 }],
+                update: async () => [1],
+            };
+            return updateCalls;
+        }
+
+        it('15c. body { status: "paused" } → status NOT forwarded to Session.update', async () => {
+            const route = getRoute(sessionsRoutes, '/sessions/:id', 'put');
+            assert.ok(route, 'PUT route not found');
+
+            const updateCalls = setupMinimalPutMocks(fakeSession({ status: 'ready' }));
+
+            const res = makeRes();
+            let nextErr;
+            await route.controller(
+                makeReq(
+                    { status: 'paused', name: 'kept', channels: [{ id: 1 }] },
+                    { id: 'test-session-id' }
+                ),
+                res,
+                (err) => { nextErr = err; }
+            );
+
+            assert.strictEqual(nextErr, undefined, `unexpected next err: ${nextErr && nextErr.message}`);
+            assert.strictEqual(updateCalls.length, 1);
+            assert.ok(
+                !('status' in updateCalls[0].data),
+                'status must be filtered out by the whitelist'
+            );
+            assert.strictEqual(updateCalls[0].data.name, 'kept');
+        });
+
+        it('15d. body { startTime, pausedAt, erroredOn, id, createdAt } → all filtered out', async () => {
+            const route = getRoute(sessionsRoutes, '/sessions/:id', 'put');
+            const updateCalls = setupMinimalPutMocks(fakeSession({ status: 'ready' }));
+
+            const res = makeRes();
+            let nextErr;
+            await route.controller(
+                makeReq(
+                    {
+                        startTime: new Date('2030-01-01T00:00:00Z'),
+                        endTime: new Date('2030-01-02T00:00:00Z'),
+                        pausedAt: new Date(),
+                        erroredOn: new Date(),
+                        id: 'attacker-id',
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                        name: 'allowed',
+                        channels: [{ id: 1 }],
+                    },
+                    { id: 'test-session-id' }
+                ),
+                res,
+                (err) => { nextErr = err; }
+            );
+
+            assert.strictEqual(nextErr, undefined, `unexpected next err: ${nextErr && nextErr.message}`);
+            assert.strictEqual(updateCalls.length, 1);
+            const forbidden = ['startTime', 'endTime', 'pausedAt', 'erroredOn', 'id', 'createdAt', 'updatedAt', 'status'];
+            for (const field of forbidden) {
+                assert.ok(
+                    !(field in updateCalls[0].data),
+                    `${field} must be filtered out by the PUT whitelist`
+                );
+            }
+            assert.strictEqual(updateCalls[0].data.name, 'allowed');
+        });
+    });
+
     // -------------------- DELETE --------------------
 
     describe('DELETE /sessions/:id (paused protection)', () => {

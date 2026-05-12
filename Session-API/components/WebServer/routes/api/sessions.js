@@ -1,6 +1,12 @@
 const { Model, logger } = require("live-srt-lib")
 const { ApiError, validateTranslations, enrichTranslations } = require('./translationHelpers');
 
+// Fields a client may set via PUT/PATCH on /sessions/:id.
+// System-managed fields (id, status, startTime, endTime, pausedAt, erroredOn,
+// createdAt, updatedAt) are intentionally excluded so HTTP clients cannot
+// bypass the dedicated lifecycle endpoints (/pause, /resume, /stop, ...).
+const ALLOWED_SESSION_FIELDS = ['name', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'visibility', 'owner', 'organizationId', 'meta'];
+
 function getEndpoints(sessionId, channelId) {
     const {
         STREAMING_PASSPHRASE,
@@ -367,7 +373,10 @@ module.exports = (webserver) => {
                 return res.status(400).json({ "error": "Can't update a session after startTime" });
             }
 
-            const { channels: updatedChannels, ...sessionAttributes } = req.body;
+            const { channels: updatedChannels } = req.body;
+            const sessionAttributes = Object.fromEntries(
+                Object.entries(req.body).filter(([k]) => ALLOWED_SESSION_FIELDS.includes(k))
+            );
 
 
             if (!updatedChannels || updatedChannels.length == 0) {
@@ -510,9 +519,8 @@ module.exports = (webserver) => {
                 return res.status(404).json({ "error": `Session ${sessionId} not found` });
             }
 
-            const ALLOWED_PATCH_FIELDS = ['name', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'visibility', 'owner', 'organizationId', 'meta'];
             const sessionAttributes = Object.fromEntries(
-                Object.entries(req.body).filter(([k]) => ALLOWED_PATCH_FIELDS.includes(k))
+                Object.entries(req.body).filter(([k]) => ALLOWED_SESSION_FIELDS.includes(k))
             );
 
             const transaction = await Model.sequelize.transaction();

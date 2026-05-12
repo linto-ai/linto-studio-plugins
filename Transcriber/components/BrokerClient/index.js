@@ -59,7 +59,22 @@ class BrokerClient extends Component {
         this.emit('session-resumed', session);
       }
     }
-    // Sessions that disappeared from the snapshot (e.g. terminated) do not yield a specific event here.
+    // Sessions that disappeared from the snapshot (e.g. terminated) do not yield
+    // a specific event here. However, keep previously-paused sessions in the
+    // snapshot when they disappear so that a later reappearance with a non-
+    // paused status still triggers session-resumed: without this guard, a
+    // transient retained-message republish (or a Scheduler restart that briefly
+    // publishes an empty snapshot) would leave the ASR paused indefinitely
+    // because prevStatus would be undefined and the resume branch never fires.
+    // Terminated paused sessions stop streaming shortly after, so the
+    // StreamingServer disposes the ASR via its own session-stop path; the kept
+    // snapshot entry is a few bytes and is bounded by the number of distinct
+    // paused sessions ever observed by this transcriber instance.
+    for (const [sessionId, prevStatus] of this._sessionStatusSnapshot) {
+      if (prevStatus === 'paused' && !newSnapshot.has(sessionId)) {
+        newSnapshot.set(sessionId, 'paused');
+      }
+    }
     this._sessionStatusSnapshot = newSnapshot;
 
     const incomingSessionIds = new Set(sessions.map(session => session.id));

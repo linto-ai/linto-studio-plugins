@@ -575,8 +575,8 @@ module.exports = (webserver) => {
                 if (!session) {
                     throw new ApiError(404, 'Session not found');
                 }
-                if (session.status === 'active' && req.query.force !== 'true') {
-                    throw new ApiError(400, "Active sessions cannot be stopped without force parameter");
+                if (['active', 'paused'].includes(session.status) && req.query.force !== 'true') {
+                    throw new ApiError(400, "Active or paused sessions cannot be stopped without force parameter");
                 }
 
                 // If session is not active or force is true, proceed with update

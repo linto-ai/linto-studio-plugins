@@ -553,6 +553,78 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
         });
     });
 
+    // -------------------- STOP (paused protection) --------------------
+
+    describe('PUT /sessions/:id/stop (paused protection)', () => {
+        it('17a. paused session without force → 400 via next(err)', async () => {
+            const route = getRoute(sessionsRoutes, '/sessions/:id/stop', 'put');
+            assert.ok(route, 'STOP route not found');
+
+            const updateCalls = [];
+            mockModel.Session.findByPk = async () => fakeSession({ status: 'paused' });
+            mockModel.Session.update = async (...args) => {
+                updateCalls.push(args);
+                return [1];
+            };
+
+            const res = makeRes();
+            let nextErr;
+            await route.controller(
+                makeReq({}, { id: 'test-session-id' }, {}),
+                res,
+                (err) => { nextErr = err; }
+            );
+
+            assert.ok(nextErr, 'expected next(err)');
+            assert.strictEqual(nextErr.status, 400);
+            assert.strictEqual(updateCalls.length, 0, 'Session.update must not be called');
+        });
+
+        it('17b. paused session with force=true → 200, terminated', async () => {
+            const route = getRoute(sessionsRoutes, '/sessions/:id/stop', 'put');
+            const updateCalls = [];
+            mockModel.Session.findByPk = async () => fakeSession({ status: 'paused' });
+            mockModel.Session.update = async (data, opts) => {
+                updateCalls.push({ data, opts });
+                return [1];
+            };
+
+            const res = makeRes();
+            let nextErr;
+            await route.controller(
+                makeReq({}, { id: 'test-session-id' }, { force: 'true' }),
+                res,
+                (err) => { nextErr = err; }
+            );
+
+            assert.strictEqual(nextErr, undefined, `unexpected next err: ${nextErr && nextErr.message}`);
+            assert.strictEqual(updateCalls.length, 1);
+            assert.strictEqual(updateCalls[0].data.status, 'terminated');
+        });
+
+        it('17c. active session without force → 400 (regression: existing behavior preserved)', async () => {
+            const route = getRoute(sessionsRoutes, '/sessions/:id/stop', 'put');
+            const updateCalls = [];
+            mockModel.Session.findByPk = async () => fakeSession({ status: 'active' });
+            mockModel.Session.update = async (...args) => {
+                updateCalls.push(args);
+                return [1];
+            };
+
+            const res = makeRes();
+            let nextErr;
+            await route.controller(
+                makeReq({}, { id: 'test-session-id' }, {}),
+                res,
+                (err) => { nextErr = err; }
+            );
+
+            assert.ok(nextErr, 'expected next(err)');
+            assert.strictEqual(nextErr.status, 400);
+            assert.strictEqual(updateCalls.length, 0);
+        });
+    });
+
     // -------------------- PUT WHITELIST --------------------
 
     describe('PUT /sessions/:id whitelist', () => {

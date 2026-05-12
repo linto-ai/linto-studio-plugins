@@ -38,11 +38,21 @@ class ASR extends eventEmitter {
     this._dualFinalCount = 0;
     this.paused = false;
     this._transitionLock = Promise.resolve();
-    this.init();
+    // Chain init() into the transition lock so any pause()/resume() queued
+    // right after construction runs *after* init() has set up provider/state.
+    this._chainTransition(() => this.init());
+  }
+
+  // Append `fn` to the serialized transition chain. The .catch(()=>{}) guard
+  // ensures a previous transition's rejection (sync throw, missed error in fn)
+  // never breaks the chain — every queued pause()/resume()/dispose() still runs.
+  _chainTransition(fn) {
+    this._transitionLock = this._transitionLock.catch(() => {}).then(fn);
+    return this._transitionLock;
   }
 
   async pause() {
-    this._transitionLock = this._transitionLock.then(async () => {
+    return this._chainTransition(async () => {
       if (this.paused) return;
       this.paused = true;
       if (this.audioBuffer) {
@@ -57,11 +67,10 @@ class ASR extends eventEmitter {
       }
       this.logger.info(`ASR paused for session=${this.session?.id} channel=${this.channel?.id}`);
     });
-    return this._transitionLock;
   }
 
   async resume() {
-    this._transitionLock = this._transitionLock.then(async () => {
+    return this._chainTransition(async () => {
       if (!this.paused) return;
       this.paused = false;
       if (this.audioBuffer) {
@@ -78,7 +87,6 @@ class ASR extends eventEmitter {
       }
       this.logger.info(`ASR resumed for session=${this.session?.id} channel=${this.channel?.id}`);
     });
-    return this._transitionLock;
   }
 
   async init() {

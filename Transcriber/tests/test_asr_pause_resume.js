@@ -278,6 +278,65 @@ describe('ASR pause/resume', () => {
         });
     });
 
+    // -------- Suite 5b — Transition lock robustness ----------------------
+
+    describe('transition lock robustness', () => {
+        it('init() is registered in _transitionLock — pause() right after construction waits for it', async () => {
+            // Build an ASR but slow down provider.start() so we can race a pause()
+            // against an in-flight init(). We monkey-patch FakeTranscriber.start
+            // to await a manually-resolved gate before emitting 'ready'.
+            let releaseStart;
+            const startGate = new Promise((r) => { releaseStart = r; });
+            const origStart = FakeTranscriber.prototype.start;
+            const startOrder = [];
+            FakeTranscriber.prototype.start = async function () {
+                startOrder.push('start-begin');
+                await startGate;
+                startOrder.push('start-end');
+                return origStart.call(this);
+            };
+
+            const asr = new ASR(makeSession(), makeChannel());
+            // Fire pause() immediately — before init() has finished provider.start().
+            const pPause = asr.pause();
+            // Mark when pause "would-have" run independently of init.
+            const pPauseObserved = pPause.then(() => startOrder.push('pause-end'));
+
+            // Release init's start() gate.
+            releaseStart();
+            await pPauseObserved;
+
+            // The chain must serialize init() (start-end) BEFORE pause-end.
+            FakeTranscriber.prototype.start = origStart;
+            assert.deepStrictEqual(
+                startOrder,
+                ['start-begin', 'start-end', 'pause-end'],
+                'pause() must wait for init()/provider.start() to complete'
+            );
+            assert.strictEqual(asr.paused, true);
+        });
+
+        it('_transitionLock survives a synchronous throw inside a queued transition', async () => {
+            const asr = await makeReadyAsr();
+
+            // Inject a transition that throws synchronously inside the chained fn.
+            const broken = asr._chainTransition(async () => {
+                throw new Error('boom');
+            });
+            // Swallow the rejection here so it doesn't escape to the test runner.
+            await broken.catch(() => {});
+
+            // The next transition must still run despite the previous rejection.
+            await asr.pause();
+            assert.strictEqual(asr.paused, true,
+                'pause() after a rejected transition must still execute');
+
+            await asr.resume();
+            assert.strictEqual(asr.paused, false,
+                'resume() after a rejected transition must still execute');
+        });
+    });
+
     // -------- Suite 5 — segmentId preservation ----------------------------
 
     describe('segmentId preservation', () => {

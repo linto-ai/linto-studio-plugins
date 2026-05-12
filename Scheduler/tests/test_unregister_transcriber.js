@@ -10,12 +10,13 @@ describe('BrokerClient.unregisterTranscriber()', () => {
         const channelUpdates = [];
         const sessionSaves = [];
 
-        // Mock session that mimics a Sequelize instance: mutable .status + .save()
+        // Mock session that mimics a Sequelize instance: mutable .status / .pausedAt + .save()
         const pausedSession = {
             id: 'sess-paused-1',
             status: 'paused',
+            pausedAt: new Date('2026-05-12T10:00:00Z'),
             save: async function () {
-                sessionSaves.push({ id: this.id, status: this.status });
+                sessionSaves.push({ id: this.id, status: this.status, pausedAt: this.pausedAt });
             },
         };
 
@@ -46,10 +47,13 @@ describe('BrokerClient.unregisterTranscriber()', () => {
         assert.strictEqual(channelUpdates[0].values.transcriberId, null);
         assert.deepStrictEqual(channelUpdates[0].options.where, { transcriberId: 'transcriber-X' });
 
-        // 2. The paused session is saved as 'ready'.
+        // 2. The paused session is saved as 'ready' and pausedAt is cleared so
+        //    REST consumers don't see the ambiguous combination (ready, pausedAt=date).
         assert.strictEqual(sessionSaves.length, 1);
         assert.strictEqual(sessionSaves[0].status, 'ready',
             'paused session should be downgraded to ready when its transcriber goes offline');
+        assert.strictEqual(sessionSaves[0].pausedAt, null,
+            'pausedAt must be cleared when downgrading paused → ready');
 
         // 3. A warn log is emitted with both the session id and transcriber id.
         const warns = logs.filter(l => l.level === 'warn');

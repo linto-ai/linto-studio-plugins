@@ -353,6 +353,10 @@ class BrokerClient extends Component {
         if (activeChannelsCount === 0) {
           if (session.status === 'paused') {
             logger.warn(`Paused session ${session.id} downgraded to 'ready': transcriber ${transcriber.uniqueId} disconnected`);
+            // pausedAt only has meaning while status='paused'; clear it on
+            // downgrade so REST consumers don't see the ambiguous combination
+            // (status='ready', pausedAt=<date>).
+            session.pausedAt = null;
           }
           session.status = 'ready';
           await session.save();

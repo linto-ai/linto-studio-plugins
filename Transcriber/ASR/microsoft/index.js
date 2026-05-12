@@ -253,8 +253,6 @@ class MicrosoftTranscriber extends EventEmitter {
         this.recognizers = [];
         this.pushStreams = [];
         this._listeners = [];
-        this.pushStream = AudioInputStream.createPushStream();
-        this.pushStream2 = null;
         this._stopping = false;
         this._translationKeyMap = null;
         // Generation counter bumped on every start(). Any listener created in

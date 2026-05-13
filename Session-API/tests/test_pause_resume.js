@@ -152,6 +152,28 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
         };
     });
 
+    // Helper for the new atomic-update pattern: pause/resume now drive the
+    // active↔paused transition with a single conditional UPDATE
+    // (Model.Session.update({...}, { where: { id, status: 'active' } })) and
+    // only call findByPk afterwards — either to load the session for the
+    // event payload (affected > 0) or to distinguish 404/400/idempotent
+    // (affected === 0). The helper wires both mocks in one call.
+    //
+    //   affected: number returned by Model.Session.update (1 = winner of
+    //             the race, 0 = loser / no-op / session not in expected state)
+    //   findByPkResult: what findByPk(id) should return (the session loaded
+    //             after the update — for events, or to determine the loser
+    //             branch). null → 404.
+    function wireAtomicUpdate({ affected, findByPkResult }) {
+        const updateCalls = [];
+        mockModel.Session.update = async (data, opts) => {
+            updateCalls.push({ data, opts });
+            return [affected];
+        };
+        mockModel.Session.findByPk = async () => findByPkResult;
+        return updateCalls;
+    }
+
     // -------------------- PAUSE --------------------
 
     describe('PUT /sessions/:id/pause', () => {
@@ -159,8 +181,12 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
             assert.ok(route, 'route not found');
 
-            const initial = fakeSession({ status: 'active' });
-            mockModel.Session.findByPk = async () => initial;
+            // Winner branch: atomic UPDATE WHERE status='active' affects 1 row.
+            // findByPk then loads the just-updated session for the event payload.
+            const updateCalls = wireAtomicUpdate({
+                affected: 1,
+                findByPkResult: fakeSession({ status: 'paused', pausedAt: new Date() }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -174,20 +200,23 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
             assert.strictEqual(nextErr, undefined, `unexpected next err: ${nextErr && nextErr.message}`);
             assert.strictEqual(res.captured.statusCode, 200);
-            assert.strictEqual(initial.updateCalls.length, 1);
-            assert.strictEqual(initial.updateCalls[0].status, 'paused');
-            assert.ok(initial.updateCalls[0].pausedAt instanceof Date, 'pausedAt should be a Date');
+            assert.strictEqual(updateCalls.length, 1, 'exactly one Model.Session.update call expected');
+            assert.strictEqual(updateCalls[0].data.status, 'paused');
+            assert.ok(updateCalls[0].data.pausedAt instanceof Date, 'pausedAt should be a Date');
+            // The atomicity guarantee — only an 'active' row is transitioned.
+            assert.strictEqual(updateCalls[0].opts.where.id, 'test-session-id');
+            assert.strictEqual(updateCalls[0].opts.where.status, 'active');
         });
 
-        it('2. already paused session → 200 idempotent, no DB update', async () => {
+        it('2. already paused session → 200 idempotent, no event', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            const updateCalls = [];
-            mockModel.Session.findByPk = async () =>
-                fakeSession({ status: 'paused', pausedAt: new Date() });
-            mockModel.Session.update = async (...args) => {
-                updateCalls.push(args);
-                return [1];
-            };
+            // Loser branch: UPDATE WHERE status='active' affected 0 rows
+            // because the session is already 'paused'. findByPk then reveals
+            // the actual current status and the route returns 200 idempotent.
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'paused', pausedAt: new Date() }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -201,12 +230,19 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
             assert.strictEqual(nextErr, undefined);
             assert.strictEqual(res.captured.statusCode, 200);
-            assert.strictEqual(updateCalls.length, 0, 'no DB update expected on idempotent pause');
+            // Idempotent: no session-paused/session-update events.
+            assert.strictEqual(
+                webserverEvents.filter((e) => e[0] === 'session-paused').length, 0,
+                'no session-paused event on idempotent pause'
+            );
         });
 
         it('3. ready session → 400', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            mockModel.Session.findByPk = async () => fakeSession({ status: 'ready' });
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'ready' }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -225,7 +261,10 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('4. terminated session → 400', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            mockModel.Session.findByPk = async () => fakeSession({ status: 'terminated' });
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'terminated' }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -243,7 +282,10 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('5. on_schedule session → 400', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            mockModel.Session.findByPk = async () => fakeSession({ status: 'on_schedule' });
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'on_schedule' }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -261,7 +303,7 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('6. non-existent session → 404', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            mockModel.Session.findByPk = async () => null;
+            wireAtomicUpdate({ affected: 0, findByPkResult: null });
 
             const res = makeRes();
             let nextErr;
@@ -279,12 +321,10 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('7. emits "session-paused" with the updated session', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            let phase = 0;
-            mockModel.Session.findByPk = async () => {
-                phase += 1;
-                if (phase === 1) return fakeSession({ status: 'active' });
-                return fakeSession({ status: 'paused', pausedAt: new Date() });
-            };
+            wireAtomicUpdate({
+                affected: 1,
+                findByPkResult: fakeSession({ status: 'paused', pausedAt: new Date() }),
+            });
 
             const res = makeRes();
             await route.controller(
@@ -301,12 +341,10 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('8. emits "session-update"', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/pause', 'put');
-            let phase = 0;
-            mockModel.Session.findByPk = async () => {
-                phase += 1;
-                if (phase === 1) return fakeSession({ status: 'active' });
-                return fakeSession({ status: 'paused', pausedAt: new Date() });
-            };
+            wireAtomicUpdate({
+                affected: 1,
+                findByPkResult: fakeSession({ status: 'paused', pausedAt: new Date() }),
+            });
 
             const res = makeRes();
             await route.controller(
@@ -325,8 +363,11 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
     describe('PUT /sessions/:id/resume', () => {
         it('9. paused session → 200, status=active, pausedAt=null', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
-            const initial = fakeSession({ status: 'paused', pausedAt: new Date() });
-            mockModel.Session.findByPk = async () => initial;
+            // Winner branch: atomic UPDATE WHERE status='paused' affects 1 row.
+            const updateCalls = wireAtomicUpdate({
+                affected: 1,
+                findByPkResult: fakeSession({ status: 'active', pausedAt: null }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -340,19 +381,19 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
             assert.strictEqual(nextErr, undefined, `unexpected next err: ${nextErr && nextErr.message}`);
             assert.strictEqual(res.captured.statusCode, 200);
-            assert.strictEqual(initial.updateCalls.length, 1);
-            assert.strictEqual(initial.updateCalls[0].status, 'active');
-            assert.strictEqual(initial.updateCalls[0].pausedAt, null);
+            assert.strictEqual(updateCalls.length, 1);
+            assert.strictEqual(updateCalls[0].data.status, 'active');
+            assert.strictEqual(updateCalls[0].data.pausedAt, null);
+            assert.strictEqual(updateCalls[0].opts.where.id, 'test-session-id');
+            assert.strictEqual(updateCalls[0].opts.where.status, 'paused');
         });
 
-        it('10. already active session → 200 idempotent, no DB update', async () => {
+        it('10. already active session → 200 idempotent, no event', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
-            const updateCalls = [];
-            mockModel.Session.findByPk = async () => fakeSession({ status: 'active' });
-            mockModel.Session.update = async (...args) => {
-                updateCalls.push(args);
-                return [1];
-            };
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'active', pausedAt: null }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -366,12 +407,18 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
             assert.strictEqual(nextErr, undefined);
             assert.strictEqual(res.captured.statusCode, 200);
-            assert.strictEqual(updateCalls.length, 0);
+            assert.strictEqual(
+                webserverEvents.filter((e) => e[0] === 'session-resumed').length, 0,
+                'no session-resumed event on idempotent resume'
+            );
         });
 
         it('11. ready session → 400 (cannot resume)', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
-            mockModel.Session.findByPk = async () => fakeSession({ status: 'ready' });
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'ready' }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -390,7 +437,10 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('11b. terminated session → 400', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
-            mockModel.Session.findByPk = async () => fakeSession({ status: 'terminated' });
+            wireAtomicUpdate({
+                affected: 0,
+                findByPkResult: fakeSession({ status: 'terminated' }),
+            });
 
             const res = makeRes();
             let nextErr;
@@ -408,7 +458,7 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('11c. non-existent session → 404', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
-            mockModel.Session.findByPk = async () => null;
+            wireAtomicUpdate({ affected: 0, findByPkResult: null });
 
             const res = makeRes();
             let nextErr;
@@ -426,12 +476,10 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
 
         it('12. emits "session-resumed" with updated session', async () => {
             const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
-            let phase = 0;
-            mockModel.Session.findByPk = async () => {
-                phase += 1;
-                if (phase === 1) return fakeSession({ status: 'paused', pausedAt: new Date() });
-                return fakeSession({ status: 'active', pausedAt: null });
-            };
+            wireAtomicUpdate({
+                affected: 1,
+                findByPkResult: fakeSession({ status: 'active', pausedAt: null }),
+            });
 
             const res = makeRes();
             await route.controller(
@@ -444,6 +492,33 @@ describe('Session-API pause/resume + PATCH whitelist + DELETE force', () => {
             assert.ok(resumed, 'session-resumed event should be emitted');
             assert.ok(resumed[1], 'session-resumed should carry the session');
             assert.strictEqual(resumed[1].status, 'active');
+        });
+
+        it('12b. concurrent resume requests emit at most one session-resumed event (atomicity)', async () => {
+            // Regression for the TOCTOU race the atomic-update fix is meant
+            // to close: two parallel PUT /resume on the same paused session.
+            // The first request wins (affected=1 → emits event), the second
+            // sees affected=0 + status=='active' → idempotent (no event).
+            const route = getRoute(sessionsRoutes, '/sessions/:id/resume', 'put');
+
+            let updateCallIndex = 0;
+            // First call returns [1] (transition succeeded). Second call
+            // returns [0] (the row is no longer in 'paused' status because
+            // the first call already flipped it).
+            mockModel.Session.update = async () => {
+                updateCallIndex += 1;
+                return updateCallIndex === 1 ? [1] : [0];
+            };
+            mockModel.Session.findByPk = async () => fakeSession({ status: 'active', pausedAt: null });
+
+            await Promise.all([
+                route.controller(makeReq({}, { id: 'test-session-id' }), makeRes(), () => {}),
+                route.controller(makeReq({}, { id: 'test-session-id' }), makeRes(), () => {}),
+            ]);
+
+            const resumedEvents = webserverEvents.filter((e) => e[0] === 'session-resumed');
+            assert.strictEqual(resumedEvents.length, 1,
+                `expected exactly one session-resumed event under concurrent requests; got ${resumedEvents.length}`);
         });
     });
 

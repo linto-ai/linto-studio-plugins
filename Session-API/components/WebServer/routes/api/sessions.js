@@ -619,25 +619,39 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             try {
                 const sessionId = req.params.id;
-                const session = await Model.Session.findByPk(sessionId);
-                if (!session) {
-                    throw new ApiError(404, `Session ${sessionId} not found`);
-                }
 
-                // Idempotence: already paused
-                if (session.status === 'paused') {
-                    const result = await getSessionResult(session.id);
-                    return res.json(result);
-                }
+                // Atomic active→paused transition. The previous
+                // "findByPk → check status → update" pattern had a TOCTOU
+                // race when two PUT /pause requests arrived in parallel:
+                // both could observe status='active', both passed the
+                // idempotence guard, both ran update(), and both emitted
+                // session-paused — duplicating the MQTT event.
+                // We move the guard into the UPDATE's WHERE clause so
+                // only one row write actually transitions; the loser
+                // sees affected=0 and re-reads to choose between the
+                // idempotent branch (now-paused) and the 400 branch
+                // (some other invalid status).
+                const [affected] = await Model.Session.update(
+                    { status: 'paused', pausedAt: new Date() },
+                    { where: { id: sessionId, status: 'active' } }
+                );
 
-                // Only active sessions can be paused
-                if (session.status !== 'active') {
+                if (affected === 0) {
+                    const session = await Model.Session.findByPk(sessionId);
+                    if (!session) {
+                        throw new ApiError(404, `Session ${sessionId} not found`);
+                    }
+                    // Idempotent: a concurrent request (or earlier one)
+                    // already paused this session.
+                    if (session.status === 'paused') {
+                        const result = await getSessionResult(session.id);
+                        return res.json(result);
+                    }
                     throw new ApiError(400, `Cannot pause session in status '${session.status}'. Only active sessions can be paused.`);
                 }
 
-                logger.info(`Pausing session ${sessionId} (org=${session.organizationId}, fromStatus=${session.status})`);
-
-                await session.update({ status: 'paused', pausedAt: new Date() });
+                const session = await Model.Session.findByPk(sessionId);
+                logger.info(`Pausing session ${sessionId} (org=${session.organizationId}, fromStatus=active)`);
 
                 webserver.emit('session-update');
                 webserver.emit('session-paused', session);
@@ -654,25 +668,29 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             try {
                 const sessionId = req.params.id;
-                const session = await Model.Session.findByPk(sessionId);
-                if (!session) {
-                    throw new ApiError(404, `Session ${sessionId} not found`);
-                }
 
-                // Idempotence: already active
-                if (session.status === 'active') {
-                    const result = await getSessionResult(session.id);
-                    return res.json(result);
-                }
+                // Symmetric atomic transition with /pause: only one
+                // paused→active write succeeds, so concurrent PUT /resume
+                // requests yield at most one session-resumed MQTT event.
+                const [affected] = await Model.Session.update(
+                    { status: 'active', pausedAt: null },
+                    { where: { id: sessionId, status: 'paused' } }
+                );
 
-                // Only paused sessions can be resumed
-                if (session.status !== 'paused') {
+                if (affected === 0) {
+                    const session = await Model.Session.findByPk(sessionId);
+                    if (!session) {
+                        throw new ApiError(404, `Session ${sessionId} not found`);
+                    }
+                    if (session.status === 'active') {
+                        const result = await getSessionResult(session.id);
+                        return res.json(result);
+                    }
                     throw new ApiError(400, `Cannot resume session in status '${session.status}'. Only paused sessions can be resumed.`);
                 }
 
+                const session = await Model.Session.findByPk(sessionId);
                 logger.info(`Resuming session ${sessionId} (org=${session.organizationId})`);
-
-                await session.update({ status: 'active', pausedAt: null });
 
                 webserver.emit('session-update');
                 webserver.emit('session-resumed', session);

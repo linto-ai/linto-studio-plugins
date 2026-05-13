@@ -131,19 +131,24 @@ describe('Security.safeDecrypt diagnostics', () => {
         assert.strictEqual(Security._looksEncrypted(Security.ENCRYPTION_PREFIX + 'anything'), true);
     });
 
-    it('_looksEncrypted: still true on legacy base64-shaped values', () => {
+    it('_looksEncrypted: false on legacy (unprefixed) base64-shaped values', () => {
+        // The prefix is now the single source of truth. Legacy ciphertext written
+        // before the prefix rollout is treated as opaque plaintext by the
+        // diagnostic; the actual decryption path still handles it transparently.
         const s = new Security({ keyEnv: 'k', saltPath: '' });
         const legacy = s.encrypt('x').slice(Security.ENCRYPTION_PREFIX.length);
-        assert.strictEqual(Security._looksEncrypted(legacy), true);
+        assert.strictEqual(Security._looksEncrypted(legacy), false);
     });
 
-    it('_looksEncrypted: false on plain text', () => {
+    it('_looksEncrypted: false on plain text and on 32-char hex (Azure-key shape)', () => {
         assert.strictEqual(Security._looksEncrypted('fr-FR'), false);
         assert.strictEqual(Security._looksEncrypted('hello'), false);
         assert.strictEqual(Security._looksEncrypted(''), false);
         assert.strictEqual(Security._looksEncrypted(null), false);
         assert.strictEqual(Security._looksEncrypted(undefined), false);
         assert.strictEqual(Security._looksEncrypted(42), false);
+        // Regression: a plain 32-char hex Azure Speech key must not be flagged.
+        assert.strictEqual(Security._looksEncrypted('a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'), false);
     });
 
     it('logs an explicit error mentioning wrong key / corrupted data when decryption fails despite a key being set', () => {

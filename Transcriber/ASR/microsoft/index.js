@@ -100,8 +100,9 @@ class PrimaryRecognizerListener {
     handleSessionStopped(s, e) {
         if (this._isStale()) return;
         this._recordSdkEvent('sessionStopped', { reason: e && e.reason });
-        this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped: ${e.reason}`);
-        this.transcriber.emit('closed', e.reason);
+        const reason = e && e.reason ? `: ${e.reason}` : '';
+        this.transcriber.logger.info(`${this.name}: Microsoft ASR session stopped${reason}`);
+        this.transcriber.emit('closed', e && e.reason);
     };
 
     onStartSuccess() {

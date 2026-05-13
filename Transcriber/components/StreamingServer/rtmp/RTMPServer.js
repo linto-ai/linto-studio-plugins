@@ -24,7 +24,7 @@ const {
 //     ASR. Streaming has to start over.
 //   - RTMP pause + publisher dies without FIN → at most 60s later (ping
 //     timeout) the cleanup path runs, same outcome as a clean disconnect.
-// See CLAUDE.md "TCP vs UDP semantics" for the cross-protocol comparison.
+// See doc/streaming-protocols.md for the cross-protocol comparison.
 class MultiplexedRTMPServer extends EventEmitter {
   constructor(app) {
     super();

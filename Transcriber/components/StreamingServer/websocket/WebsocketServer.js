@@ -20,7 +20,7 @@ const {
 //   - WS pause + sender closes the socket → ws.on('close') triggers cleanup,
 //     emits session-stop, ASR is disposed. A subsequent PUT /resume finds
 //     no ASR. Streaming has to start over.
-// See CLAUDE.md "TCP vs UDP semantics" for the cross-protocol comparison.
+// See doc/streaming-protocols.md for the cross-protocol comparison.
 class MultiplexedWebsocketServer extends EventEmitter {
   constructor(app) {
     super();

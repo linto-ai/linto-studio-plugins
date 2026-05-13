@@ -27,7 +27,7 @@ class MultiplexedSRTServer extends EventEmitter {
         //   - too short → benign jitter cuts the stream and forces a new ASR
         //                 (segmentId is preserved via lastSegmentIds map)
         //   - too long  → resources held for a sender that will never return
-        // See CLAUDE.md "TCP vs UDP semantics" for the pause/resume impact.
+        // See doc/streaming-protocols.md for the pause/resume impact.
         this.channelTimeoutSeconds = 5;
         this.isRunning = false;
 

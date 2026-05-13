@@ -19,4 +19,8 @@ module.exports = function () {
         await this.publishSessionResumed(session);
     });
 
+    this.app.components['WebServer'].on('session-cleared', async (session, channelIds) => {
+        await this.publishSessionCleared(session, channelIds || []);
+    });
+
 }

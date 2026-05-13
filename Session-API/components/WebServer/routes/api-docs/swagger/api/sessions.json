@@ -563,6 +563,45 @@
       }
     }
   },
+  "/sessions/{id}/clear": {
+    "put": {
+      "tags": [
+        "sessions"
+      ],
+      "operationId": "clearSession",
+      "summary": "Clear all transcriptions and translations of a session",
+      "description": "Wipes every Caption and TranslatedCaption row attached to the session's channels and resets each channel's lastSegmentId cursor to 0. The session status is left unchanged (the audio stream and ASR keep running on an active session). Intended for the case where a meeting is recorded but only the formal start is meaningful — operators trigger /clear once everyone is settled and the real meeting begins. Allowed in statuses 'ready', 'active' and 'paused'; refused with 400 for 'on_schedule' (nothing to clear) and 'terminated' (immutable archive). Best-effort: captions emitted by an in-flight ASR within a few hundred milliseconds of the call may still land after the wipe. If the ASR is currently running, its in-process segmentId counter is not reset; new captions written after /clear will continue from the previous counter even though channel.lastSegmentId is now 0. Stop and restart the channel (or the session) if a clean restart from segmentId=1 is required.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Session cleared",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionAnswerWithCaptions"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    }
+  },
   "/sessions/{id}/delete-captions": {
     "delete": {
       "tags": [

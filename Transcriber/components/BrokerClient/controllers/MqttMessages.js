@@ -23,7 +23,17 @@ function handleSystemMessage(parts, message) {
     if (action === 'statuses') {
       const sessions = JSON.parse(message);
       this.handleSessions(sessions);
+    } else if (action === 'cleared') {
+      try {
+        const payload = JSON.parse(message);
+        this.emit('session-cleared', payload);
+      } catch (err) {
+        logger.error(`Failed to parse sessions/cleared payload: ${err.message}`);
+      }
     }
+    // Other actions (paused, resumed) are derived from the statuses snapshot
+    // diff in handleSessions(); the discrete topics are emitted for external
+    // consumers (e.g. studio-api) and intentionally ignored here.
   } else {
     logger.warn(`Received message for unknown system type ${systemType}`);
   }

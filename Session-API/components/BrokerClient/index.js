@@ -73,19 +73,20 @@ class BrokerClient extends Component {
   }
 
   /**
-   * Publishes a session lifecycle notification on the broker (e.g. paused, resumed).
-   * Payload is intentionally minimal — consumers (e.g. studio-api) re-fetch the full session
-   * via the Session API when they need the details. Wrapped in try/catch so a broker hiccup
-   * never breaks the main HTTP flow that emitted the internal event.
+   * Publishes a session lifecycle notification on the broker (e.g. paused, resumed, cleared).
+   * Payload defaults to {id, organizationId} — consumers (e.g. studio-api) re-fetch the full
+   * session via the Session API when they need the details. Wrapped in try/catch so a broker
+   * hiccup never breaks the main HTTP flow that emitted the internal event.
    *
-   * @param {string} action - Lifecycle action ('paused', 'resumed', etc.). Used as topic suffix.
+   * @param {string} action - Lifecycle action ('paused', 'resumed', 'cleared'). Used as topic suffix.
    * @param {object} session - Sequelize session instance (must expose id and organizationId).
+   * @param {object} [extraPayload] - Additional fields merged into the payload (e.g. channelIds for 'cleared').
    */
-  async publishSessionLifecycle(action, session) {
+  async publishSessionLifecycle(action, session, extraPayload = {}) {
     try {
       this.client.publish(
         `system/out/sessions/${action}`,
-        { id: session.id, organizationId: session.organizationId },
+        { id: session.id, organizationId: session.organizationId, ...extraPayload },
         1,
         false,
         true
@@ -102,6 +103,10 @@ class BrokerClient extends Component {
 
   publishSessionResumed(session) {
     return this.publishSessionLifecycle('resumed', session);
+  }
+
+  publishSessionCleared(session, channelIds) {
+    return this.publishSessionLifecycle('cleared', session, { channelIds });
   }
 }
 

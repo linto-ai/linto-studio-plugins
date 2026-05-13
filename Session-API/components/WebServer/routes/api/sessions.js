@@ -65,6 +65,16 @@ function getEndpoints(sessionId, channelId) {
     return endpoints;
 }
 
+async function getSessionChannelIds(sessionId, transaction) {
+    const channels = await Model.Channel.findAll({
+        where: { sessionId },
+        attributes: ['id'],
+        raw: true,
+        transaction,
+    });
+    return channels.map(c => c.id);
+}
+
 async function setChannelsEndpoints(sessionId, transaction) {
     const channels = await Model.Channel.findAll({
         where: {
@@ -674,6 +684,51 @@ module.exports = (webserver) => {
             }
         }
     }, {
+        path: '/sessions/:id/clear',
+        method: 'put',
+        controller: async (req, res, next) => {
+            try {
+                const sessionId = req.params.id;
+                const session = await Model.Session.findByPk(sessionId);
+                if (!session) {
+                    throw new ApiError(404, `Session ${sessionId} not found`);
+                }
+
+                // Allowed in pre/in-progress statuses. Terminated/on_schedule
+                // are refused: nothing to clear in on_schedule (no captions yet)
+                // and a terminated session is an immutable archive.
+                const allowed = ['ready', 'active', 'paused'];
+                if (!allowed.includes(session.status)) {
+                    throw new ApiError(400, `Cannot clear session in status '${session.status}'. Only sessions in status ${allowed.join(', ')} can be cleared.`);
+                }
+
+                const channelIds = await getSessionChannelIds(sessionId);
+
+                logger.info(`Clearing session ${sessionId} (org=${session.organizationId}, status=${session.status}, channels=${channelIds.length})`);
+
+                if (channelIds.length > 0) {
+                    await Model.sequelize.transaction(async (transaction) => {
+                        await Promise.all([
+                            Model.Caption.destroy({ where: { channelId: channelIds }, transaction }),
+                            Model.TranslatedCaption.destroy({ where: { channelId: channelIds }, transaction }),
+                            Model.Channel.update(
+                                { lastSegmentId: 0 },
+                                { where: { id: channelIds }, transaction }
+                            ),
+                        ]);
+                    });
+                }
+
+                webserver.emit('session-update');
+                webserver.emit('session-cleared', session, channelIds);
+
+                const result = await getSessionResult(sessionId);
+                res.json(result);
+            } catch (err) {
+                next(err);
+            }
+        }
+    }, {
         path: '/sessions/purge',
         method: 'post',
         controller: async (req, res, next) => {
@@ -728,12 +783,7 @@ module.exports = (webserver) => {
                     return res.json(result);
                 }
 
-                // Get all channel IDs for this session
-                const channelIds = (await Model.Channel.findAll({
-                    where: { sessionId },
-                    attributes: ['id'],
-                    raw: true,
-                })).map(c => c.id);
+                const channelIds = await getSessionChannelIds(sessionId);
 
                 if (channelIds.length === 0) {
                     const result = await getSessionResult(session.id, true);

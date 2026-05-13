@@ -273,6 +273,21 @@ class StreamingServer extends Component {
     return this._applyToSessionASRs(sessionId, 'resume');
   }
 
+  // Drop cached segment-id cursors for the given channels. The Session-API
+  // has just reset channel.lastSegmentId to 0 in the DB; without purging this
+  // map, a later ASR restart would resume from a stale in-memory cursor and
+  // produce a discontinuous sequence. Any currently-running ASR keeps its
+  // own counter and will continue from where it is — that's the best-effort
+  // contract documented on the /clear endpoint.
+  clearSession(sessionId, channelIds) {
+    let purged = 0;
+    for (const channelId of channelIds) {
+      const key = `${sessionId}_${channelId}`;
+      if (this.lastSegmentIds.delete(key)) purged += 1;
+    }
+    logger.info(`clearSession ${sessionId}: purged ${purged}/${channelIds.length} cached segmentId(s)`);
+  }
+
   resolveInitialSegmentId(sessionId, channelId, channel) {
     const key = `${sessionId}_${channelId}`;
     const memorySegmentId = this.lastSegmentIds.get(key);

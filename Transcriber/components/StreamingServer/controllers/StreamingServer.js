@@ -23,4 +23,8 @@ module.exports = function () {
       logger.error(`resumeSession failed: ${e.message}`)
     );
   })
+
+  this.app.components['BrokerClient'].on('session-cleared', (payload) => {
+    this.clearSession(payload.id, payload.channelIds || []);
+  })
 }

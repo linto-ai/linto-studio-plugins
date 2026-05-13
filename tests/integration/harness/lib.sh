@@ -150,6 +150,27 @@ harness::_kill_bg() {
     _HARNESS_BG_PIDS=()
 }
 
+# Belt-and-braces cleanup between scenarios. Each scenario installs
+# `trap 'harness::_kill_bg' EXIT` which kills its own tracked PIDs on exit;
+# this function is the second-pass safety net for SIGKILLed scenarios or
+# detached forks. Every pkill pattern is scoped to a harness-specific
+# endpoint (project ports, the bundled ws-stream.js absolute path) so an
+# unrelated mosquitto_sub / ffmpeg / gst-launch the operator happens to be
+# running on the same host is never killed. Lives in lib.sh (not run.sh)
+# so test-cleanup-scoped.sh can source it standalone.
+harness::between_scenarios_cleanup() {
+    local helper="${HARNESS_LIB_DIR}/ws-stream.js"
+    pkill -9 -f "gst-launch-1.0.*srtsink.*:${HARNESS_SRT_PORT}" 2>/dev/null || true
+    pkill -9 -f "ffmpeg.*sine=frequency=440:sample_rate=16000" 2>/dev/null || true
+    pkill -9 -f "ffmpeg.*rtmp://[^ ]*:${HARNESS_RTMP_PORT}" 2>/dev/null || true
+    pkill -9 -f "mosquitto_sub.*-p ${HARNESS_MQTT_PORT}" 2>/dev/null || true
+    pkill -9 -f "node ${helper}" 2>/dev/null || true
+    # Drop terminated sessions so retained snapshots stay slim
+    # (the DB cleanup runs inside each scenario via DELETE; this is a
+    # belt-and-braces measure for cases where a scenario crashed midway).
+    sleep 1
+}
+
 # ---------------------------------------------------------------------------
 # HTTP helper: harness::http METHOD URL [BODY]
 #

@@ -48,30 +48,6 @@ unset IFS
 
 failures=()
 
-# Between scenarios, kill leftover client-side processes (streamers,
-# subscribers) so that a misbehaving scenario does not pollute the next
-# one's MQTT topics or saturate the transcriber with zombie streams.
-#
-# Each scenario installs `trap 'harness::_kill_bg' EXIT` (see helpers in
-# lib.sh) which kills its own tracked PIDs on exit. This function is a
-# belt-and-braces second pass for the case where a scenario was SIGKILLed
-# or forked something detached. We scope every pkill pattern to harness-
-# specific endpoints (project ports, the bundled ws-stream.js path) so we
-# never kill an unrelated mosquitto_sub / ffmpeg / gst-launch the operator
-# happens to be running on the same host.
-between_scenarios_cleanup() {
-    local helper="${SCRIPT_DIR}/harness/ws-stream.js"
-    pkill -9 -f "gst-launch-1.0.*srtsink.*:${HARNESS_SRT_PORT}" 2>/dev/null || true
-    pkill -9 -f "ffmpeg.*sine=frequency=440:sample_rate=16000" 2>/dev/null || true
-    pkill -9 -f "ffmpeg.*rtmp://[^ ]*:${HARNESS_RTMP_PORT}" 2>/dev/null || true
-    pkill -9 -f "mosquitto_sub.*-p ${HARNESS_MQTT_PORT}" 2>/dev/null || true
-    pkill -9 -f "node ${helper}" 2>/dev/null || true
-    # Drop terminated sessions so retained snapshots stay slim
-    # (the DB cleanup runs inside each scenario via DELETE; this is a
-    # belt-and-braces measure for cases where a scenario crashed midway).
-    sleep 1
-}
-
 for s in "${scenarios[@]}"; do
     name=$(basename "${s}")
     if [[ -n "${ONLY}" ]]; then
@@ -85,7 +61,7 @@ for s in "${scenarios[@]}"; do
         harness::err "${name} FAILED"
         failures+=("${name}")
     fi
-    between_scenarios_cleanup
+    harness::between_scenarios_cleanup
 done
 
 if [[ ${#failures[@]} -gt 0 ]]; then

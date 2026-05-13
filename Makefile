@@ -80,6 +80,10 @@ test-integration-logs:
 test-integration-smoke:
 	bash tests/integration/scenarios/00-smoke.sh
 
+# Standalone harness self-tests (no Docker, no stack required).
+test-integration-harness:
+	bash tests/integration/harness/test-cleanup-scoped.sh
+
 .PHONY: run-docker-dev run-dev down-docker-dev run-docker-prod clean-node-modules clean-docker-node-modules check-linto-studio
 .PHONY: install-local $(PACKAGE_DIRS)
-.PHONY: test-integration test-integration-up test-integration-down test-integration-logs test-integration-smoke
+.PHONY: test-integration test-integration-up test-integration-down test-integration-logs test-integration-smoke test-integration-harness

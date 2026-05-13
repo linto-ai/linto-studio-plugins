@@ -23,3 +23,7 @@ profiles.json
 # Ignore .DS_Store files (for macOS)
 .DS_Store
 letsencrypt
+
+# Local-only working directories
+certs/
+scratch/

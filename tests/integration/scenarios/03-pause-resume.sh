@@ -3,7 +3,7 @@
 #
 # End-to-end validation of the pause/resume feature.
 #
-# Covers (see doc/recette-pause-resume.md):
+# Covers (see doc/pause-resume-acceptance-tests.md):
 #   Case 1 - pause an active session over SRT (transcriptions stop, stream not killed)
 #   Case 2 - idempotent re-pause (200, status stays paused)
 #   Case 3 - invalid transition (pause on `ready` -> 400)

@@ -22,6 +22,10 @@ This command should be run inside every module of the global project, as well as
 
 [E-Meeting - Architecture overview (pdf)](./doc/Technical%20Architecture%20Overview.pdf)
 
+[Streaming protocols — TCP vs UDP semantics](./doc/streaming-protocols.md)
+
+[Production topology — Transcriber behind a load balancer](./doc/production-topology.md)
+
 ## Quickstart
 
 To quickly test this project, you can use either a local build or docker compose. You have several options briefly presented below.

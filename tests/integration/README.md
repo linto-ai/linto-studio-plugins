@@ -16,8 +16,28 @@ tests/integration/
     ws-stream.js                 # Node helper used by harness::stream_ws
   scenarios/
     00-smoke.sh                  # Minimal smoke test (profile + session lifecycle)
+    ...
+    16-transcriber-failover.sh   # LB-reroutes-reconnect-to-different-instance path
   fixtures/
     audio.wav                    # 5s mono 16kHz sine wave (generated with ffmpeg)
+  docker-compose.failover.yml    # Overlay used by scenario 16 (adds transcriber2)
+```
+
+### Multi-instance scenarios
+
+Scenario `16-transcriber-failover.sh` brings up a second Transcriber container
+(`transcriber2`) on host ports 28889/udp, 21935/tcp, 28890/tcp via
+`docker-compose.failover.yml`. It then streams to the primary instance, kills
+the stream, waits for SRT inactivity tear-down, and streams to the second
+instance — exercising the load-balancer-reroute-on-reconnect path described
+in [`doc/production-topology.md`](../../doc/production-topology.md). The
+scenario removes its extra container on exit; if it dies uncleanly, run:
+
+```bash
+docker compose -p emeeting-integration-test \
+    -f tests/integration/docker-compose.test.yml \
+    -f tests/integration/docker-compose.failover.yml \
+    rm -fsv transcriber2
 ```
 
 ## Stack

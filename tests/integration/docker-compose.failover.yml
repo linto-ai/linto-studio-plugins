@@ -1,0 +1,74 @@
+# Compose overlay used exclusively by scenario 16-transcriber-failover.sh.
+#
+# Adds a second Transcriber instance ("transcriber2") on the same network as
+# the main test stack. It binds to host ports that do not collide with the
+# primary transcriber so both can run side by side and the scenario can
+# stream to either one independently (simulating an LB reroute).
+#
+# Host port allocation:
+#   transcriber  : 18889/udp 11935/tcp 18890/tcp  (defined in docker-compose.test.yml)
+#   transcriber2 : 28889/udp 21935/tcp 28890/tcp  (this file)
+#
+# Apply with:
+#   docker compose -p emeeting-integration-test \
+#       -f docker-compose.test.yml -f docker-compose.failover.yml \
+#       up -d transcriber2
+
+services:
+  transcriber2:
+    build:
+      context: ../..
+      dockerfile: Transcriber/Dockerfile
+    container_name: emeeting-it-transcriber2
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DEBUG: ""
+      BROKER_HOST: broker
+      BROKER_PORT: 1883
+      BROKER_PROTOCOL: mqtt
+      BROKER_USE_TLS: "false"
+      BROKER_KEEPALIVE: "60"
+      BROKER_REJECT_UNAUTHORIZED: "true"
+      TRANSCRIBER_COMPONENTS: "BrokerClient,StreamingServer,Healthcheck"
+      STREAMING_HOST: "0.0.0.0"
+      STREAMING_PROTOCOLS: "SRT,RTMP,WS"
+      STREAMING_PASSPHRASE: "testpassphrase"
+      STREAMING_SRT_MODE: "listener"
+      STREAMING_SRT_UDP_PORT: "8889"
+      STREAMING_RTMP_TCP_PORT: "1935"
+      STREAMING_WS_TCP_PORT: "8890"
+      STREAMING_HEALTHCHECK_TCP: "9999"
+      STREAMING_PROXY_SRT_HOST: "127.0.0.1"
+      STREAMING_PROXY_RTMP_HOST: "127.0.0.1"
+      STREAMING_PROXY_WS_HOST: "127.0.0.1"
+      STREAMING_PROXY_SRT_UDP_PORT: "28889"
+      STREAMING_PROXY_RTMP_TCP_PORT: "21935"
+      STREAMING_PROXY_WS_TCP_PORT: "28890"
+      STREAMING_WS_ENDPOINT: "transcriber-ws"
+      MAX_AUDIO_BUFFER: "10"
+      MIN_AUDIO_BUFFER: "200"
+      SAMPLE_RATE: "16000"
+      BYTES_PER_SAMPLE: "2"
+      AUDIO_STORAGE_PATH: "/audio-storage/"
+      TRANSCRIBER_BOT_NAME: "bot"
+      TRANSCRIBER_RESET_MESSAGE: "Channel reset."
+      ASR_PROVIDER: "fake"
+      TRANSCRIBER_DEFAULT_PROVIDER: "fake"
+      # Must match Session-API's SECURITY_CRYPT_KEY.
+      SECURITY_CRYPT_KEY: "testtesttesttesttesttesttesttest"
+    ports:
+      - "28889:8889/udp"
+      - "21935:1935/tcp"
+      - "28890:8890/tcp"
+    depends_on:
+      broker:
+        condition: service_healthy
+    networks:
+      - it-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -w 1 localhost 9999 | grep -q OK || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s

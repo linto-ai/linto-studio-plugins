@@ -2,6 +2,8 @@
 
 The Transcriber accepts audio over three streaming protocols. They have **intentionally different** session-lifetime semantics, dictated by their underlying transport. This document explains the asymmetry and its operational consequences, especially for `PUT /sessions/:id/pause` and `/resume`.
 
+> **Production note.** In production, multiple Transcriber instances run behind a UDP-capable load balancer. The semantics described here apply to a single instance — for what happens when a stream reconnects and the LB reroutes it to a different instance, see [production-topology.md](./production-topology.md).
+
 ## Endpoints
 
 | Protocol | Transport | Default port | Stream identifier |

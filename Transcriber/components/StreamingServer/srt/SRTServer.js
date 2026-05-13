@@ -20,6 +20,14 @@ class MultiplexedSRTServer extends EventEmitter {
         this.runningChannels = {}
         this.pendingChannels = new Set();
         this.asyncSrtHelper = new AsyncSRT(); // Shared instance for socket option reads (validateStream)
+        // SRT runs over UDP. Unlike WS/RTMP (TCP), there is no FIN/RST when a
+        // sender stops streaming, so we have to detect inactivity ourselves:
+        // if no SRT packet has been observed for `channelTimeoutSeconds`, we
+        // assume the sender is gone and tear the connection down. Trade-off:
+        //   - too short → benign jitter cuts the stream and forces a new ASR
+        //                 (segmentId is preserved via lastSegmentIds map)
+        //   - too long  → resources held for a sender that will never return
+        // See CLAUDE.md "TCP vs UDP semantics" for the pause/resume impact.
         this.channelTimeoutSeconds = 5;
         this.isRunning = false;
 
@@ -49,6 +57,18 @@ class MultiplexedSRTServer extends EventEmitter {
         }
     }
 
+    // Per-channel sentinel: if no SRT packet has been observed in the last
+    // `channelTimeoutSeconds`, dispose the channel. WS and RTMP do NOT have
+    // an equivalent because TCP delivers FIN/RST on disconnect and the
+    // server reacts via the close/error events. For pause/resume this means:
+    //   - SRT pause + sender keeps streaming → packets keep arriving,
+    //     lastPacket stays fresh, no timeout, ASR restart on resume is
+    //     immediate (same provider).
+    //   - SRT pause + sender stops streaming → after channelTimeoutSeconds
+    //     the connection is torn down and the ASR is disposed. A subsequent
+    //     PUT /resume finds no ASR. Streaming has to start over (a new
+    //     SRT connect emits session-start and a fresh ASR is created with
+    //     the segmentId carried over via lastSegmentIds).
     checkTimedOutChannel() {
         const now = Date.now();
         for (const value of Object.values(this.runningChannels)) {

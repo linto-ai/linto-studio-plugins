@@ -9,6 +9,22 @@ const {
     STREAMING_RTMP_TCP_PORT
 } = process.env;
 
+// RTMP runs over TCP via node-media-server. The lifetime of a publish session
+// is governed by:
+//   - donePublish event (clean RTMP "deletestream" or TCP FIN from the client)
+//   - the NMS ping protocol below: ping every 30s, ping_timeout 60s — a
+//     client that stops responding to pings is dropped after at most 60s.
+// Unlike SRT we do NOT track per-packet inactivity ourselves; an idle but
+// alive TCP connection (publisher silent on a still-open socket) keeps the
+// channel registered. For pause/resume this means:
+//   - RTMP pause + publisher keeps the socket open → ASR stays alive (paused),
+//     resume is immediate on the same provider.
+//   - RTMP pause + publisher disconnects → donePublish triggers cleanup,
+//     emits session-stop, ASR disposed. A subsequent PUT /resume finds no
+//     ASR. Streaming has to start over.
+//   - RTMP pause + publisher dies without FIN → at most 60s later (ping
+//     timeout) the cleanup path runs, same outcome as a clean disconnect.
+// See CLAUDE.md "TCP vs UDP semantics" for the cross-protocol comparison.
 class MultiplexedRTMPServer extends EventEmitter {
   constructor(app) {
     super();

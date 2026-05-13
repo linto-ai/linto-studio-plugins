@@ -10,6 +10,17 @@ const {
     STREAMING_WS_ENDPOINT
 } = process.env;
 
+// WebSocket runs over TCP. Unlike SRT (UDP) there is no inactivity sentinel:
+// the connection lifetime is governed by the TCP socket alone. ws.on('close')
+// fires when the peer sends FIN or the OS detects an RST; ws.on('error') for
+// all other faults. Until then the channel is considered live, even if the
+// client has gone silent. For pause/resume this means:
+//   - WS pause + sender keeps the socket open and silent → ASR stays alive
+//     (just paused), resume is immediate on the same provider.
+//   - WS pause + sender closes the socket → ws.on('close') triggers cleanup,
+//     emits session-stop, ASR is disposed. A subsequent PUT /resume finds
+//     no ASR. Streaming has to start over.
+// See CLAUDE.md "TCP vs UDP semantics" for the cross-protocol comparison.
 class MultiplexedWebsocketServer extends EventEmitter {
   constructor(app) {
     super();

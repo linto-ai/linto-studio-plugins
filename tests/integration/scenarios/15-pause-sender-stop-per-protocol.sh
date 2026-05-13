@@ -111,6 +111,17 @@ run_case() {
     # open and we'd hit the longer ping timeout instead of the FIN path).
     harness::log "${proto}: terminating streamer pid=${stream_pid}"
     kill "${stream_pid}" 2>/dev/null || true
+    # The harness wraps WS streams in a "(ffmpeg | node ws-stream.js) &"
+    # sub-pipeline, so $! captures the subshell PID. SIGTERM to the subshell
+    # does NOT reliably reach the grandchild `node ws-stream.js` process —
+    # we have observed the node process surviving the kill, keeping the WS
+    # TCP connection open and preventing channel.streamStatus from flipping
+    # to inactive. A targeted pkill on the helper closes the socket cleanly.
+    # Same trick for ffmpeg-driven RTMP/WS pipes: the inner ffmpeg can hold
+    # the TCP socket too. Patterns are scoped to harness-specific arguments
+    # so we never kill a developer's unrelated processes.
+    pkill -TERM -f "node .*ws-stream.js" 2>/dev/null || true
+    pkill -TERM -f "ffmpeg .*lavfi .*sine=frequency=440" 2>/dev/null || true
 
     # Now the protocol-specific deadline: SRT needs the 5s inactivity
     # sentinel, WS/RTMP detect the close immediately.
@@ -140,11 +151,15 @@ run_case() {
 run_case "SRT"  "harness::stream_srt_loop"  10
 
 # WS: TCP FIN propagates fast, but the gstreamer-side flush + ws.on('close')
-# still needs a couple of seconds end-to-end.
-run_case "WS"   "harness::stream_ws_loop"   8
+# still needs a couple of seconds end-to-end. Bumped from 8s to 15s: ffmpeg's
+# SIGTERM handling sometimes takes longer than expected when the WebSocket is
+# still flushing buffered PCM chunks (the helper script reads stdin then
+# forwards over WS — both legs need to drain before the WS close fires).
+run_case "WS"   "harness::stream_ws_loop"   15
 
 # RTMP: ffmpeg sends RTMP "deletestream" on SIGTERM → donePublish → cleanup.
-# Same expected timing as WS.
-run_case "RTMP" "harness::stream_rtmp_loop" 8
+# Bumped from 8s to 15s for the same reason as WS; ffmpeg's clean shutdown
+# can stall on slow hosts (CI shared runners) under accumulated load.
+run_case "RTMP" "harness::stream_rtmp_loop" 15
 
 harness::ok "=== pause + sender-stop asymmetry verified across SRT / WS / RTMP ==="

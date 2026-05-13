@@ -80,6 +80,45 @@ wait_transcriber_healthy() {
     done
 }
 
+# Wait until the scheduler is healthy AND has published scheduler/status
+# online=true. This is critical: scenario 09 restarts the scheduler, and
+# transcriber publishes its session-start MQTT message with retain=false
+# (Transcriber/components/BrokerClient/index.js#activateSession). If the
+# scheduler isn't connected to the broker yet when the transcriber emits
+# session-start (which happens within milliseconds of the SRT stream
+# connecting), the message is LOST — the broker drops it because no
+# subscriber matches, and the session.status never flips to 'active' in
+# the DB. Polling docker healthcheck would be enough (it already greps
+# scheduler/status for online=true) but we also re-verify directly via
+# mosquitto_sub so the failure mode is obvious when this regresses.
+wait_scheduler_online() {
+    local timeout="${1:-90}"
+    local deadline=$(( $(date +%s) + timeout ))
+    while :; do
+        local cid
+        cid=$(harness::_compose ps -q scheduler 2>/dev/null | head -1)
+        if [[ -n "${cid}" ]]; then
+            local state health
+            state=$(docker inspect -f '{{.State.Status}}' "${cid}" 2>/dev/null || echo "missing")
+            health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}" 2>/dev/null || echo "none")
+            if [[ "${state}/${health}" == "running/healthy" ]]; then
+                # Belt-and-braces: confirm the retained scheduler/status
+                # actually has online=true right now.
+                if mosquitto_sub -h "${HARNESS_MQTT_HOST}" -p "${HARNESS_MQTT_PORT}" \
+                    -t scheduler/status -C 1 -W 3 2>/dev/null | grep -q '"online":true'; then
+                    harness::ok "scheduler online and reachable via broker"
+                    return 0
+                fi
+            fi
+        fi
+        if [[ $(date +%s) -ge ${deadline} ]]; then
+            harness::err "scheduler not online within ${timeout}s"
+            return 1
+        fi
+        sleep 2
+    done
+}
+
 # Always make sure the transcriber is restarted before we exit, even on FAIL.
 restore_transcriber() {
     harness::log "restoring transcriber container (cleanup)"
@@ -245,6 +284,11 @@ harness::_compose start transcriber >/dev/null 2>&1 \
 harness::_compose restart scheduler >/dev/null 2>&1 \
     || fail "could not restart scheduler container"
 wait_transcriber_healthy 90 || fail "transcriber did not come back healthy"
+# CRITICAL: also wait for the scheduler to be online before probing. The
+# transcriber's first session-start MQTT message uses retain=false, so it
+# is dropped by the broker if the scheduler isn't subscribed yet — and
+# the probe session.status then never reaches 'active'.
+wait_scheduler_online 90 || fail "scheduler did not come back online"
 
 # Validate the stack is actually functional again by creating a probe
 # session, streaming SRT, and waiting for status=active. This proves the
@@ -259,7 +303,14 @@ probe_profile_id=$(harness::create_transcriber_profile "post_crash_probe") \
 probe_session_id=$(harness::create_session "${probe_profile_id}" "post_crash_probe") \
     || fail "could not create probe session after restart"
 probe_stream_pid=$(harness::stream_srt_loop "${probe_session_id}" 0 "${AUDIO}" 0)
-probe_deadline=$(( $(date +%s) + 60 ))
+# Bumped from 60s to 120s. After scenario 09 has accumulated orphan sessions
+# from earlier failed runs in the same pipeline (we have observed up to ~5
+# stale rows), the scheduler's publishSessions() query is slower and the
+# end-to-end "create session → SRT validates → scheduler updates → status=
+# active" round-trip occasionally exceeds 60s. The probe just needs to
+# eventually succeed; a wider window makes the assertion robust without
+# changing its semantic.
+probe_deadline=$(( $(date +%s) + 120 ))
 probe_active=0
 while [[ $(date +%s) -lt ${probe_deadline} ]]; do
     cur=$(harness::get_session "${probe_session_id}" | jq -r '.status // empty' 2>/dev/null || echo "")

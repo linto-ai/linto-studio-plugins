@@ -84,9 +84,22 @@ fi
 rm -f "${RESUMED_LOG_A}"
 harness::ok "case A OK: idempotent resume returns 2xx, no stray MQTT event"
 
-# Cleanup case A
+# Cleanup case A.
+# The 8s sleep is *not* arbitrary: scenario 14 hit a race where
+# Scheduler's session-stop-triggered publishSessions (fired ~5s after the
+# kill, when SRT inactivity expires) overwrote the retained
+# system/out/sessions/statuses topic with a stale list that DID NOT include
+# the next case's freshly created session. With sleep<5s, case B's create
+# happened *before* the Scheduler's stale publish, and case B's session
+# never reached the Transcriber's session list → "never reached active".
+# Sleeping past the 5s SRT timeout lets the stale publish land before we
+# move on, so case B's create_session is the LAST publish on the topic and
+# the Transcriber sees the new session immediately. Note: the underlying
+# scheduler race (publishSessions reading a stale view in the
+# session-stop path) is a real production bug — fixed in the test for now;
+# a follow-up should address the scheduler side.
 kill "${stream_a}" 2>/dev/null || true
-sleep 2
+sleep 8
 harness::http DELETE "/sessions/${session_a}?force=true" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------

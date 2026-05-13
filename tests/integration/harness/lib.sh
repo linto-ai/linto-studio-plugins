@@ -142,10 +142,19 @@ harness::_track_bg() {
 }
 
 harness::_kill_bg() {
+    # SIGKILL by default. SIGTERM is unreliable on the streaming helpers
+    # we typically background: gst-launch-1.0 in SRT caller mode loops
+    # inside srt_connect() and ignores SIGTERM until the syscall returns,
+    # so a graceful kill leaks the process. ffmpeg's lavfi pipeline and
+    # mosquitto_sub handle SIGKILL fine. The harness has no use case for
+    # "give the child a chance to clean up" — every consumer is throw-away.
+    # Empirically observed leaks (gst-launch retrying SRT for tens of
+    # minutes after a scenario exit) all traced back to SIGTERM not
+    # taking effect; switching to SIGKILL eliminated them.
     local pid
     for pid in "${_HARNESS_BG_PIDS[@]:-}"; do
         [[ -z "${pid}" ]] && continue
-        kill "${pid}" 2>/dev/null || true
+        kill -9 "${pid}" 2>/dev/null || true
     done
     _HARNESS_BG_PIDS=()
 }

@@ -84,6 +84,57 @@ test-integration-smoke:
 test-integration-harness:
 	bash tests/integration/harness/test-cleanup-scoped.sh
 
+# ---------------------------------------------------------------------------
+# Unit tests (per Node service)
+#
+# Each service has its own Mocha suite. We invoke them sequentially so a
+# failure in one is visible and not swallowed by later output. `npm test`
+# requires node_modules; the `*-deps` prerequisite makes sure they exist.
+# ---------------------------------------------------------------------------
+UNIT_TEST_SERVICES := Transcriber Session-API Scheduler
+
+test-unit-deps:
+	@for svc in $(UNIT_TEST_SERVICES); do \
+		if [ ! -d "$$svc/node_modules" ]; then \
+			echo "==> installing deps for $$svc"; \
+			(cd "$$svc" && npm install) || exit 1; \
+		fi; \
+	done
+
+test-unit-transcriber: test-unit-deps
+	cd Transcriber && npm test
+
+test-unit-sessionapi: test-unit-deps
+	cd Session-API && npm test
+
+test-unit-scheduler: test-unit-deps
+	cd Scheduler && npm test
+
+test-unit: test-unit-transcriber test-unit-sessionapi test-unit-scheduler
+
+# ---------------------------------------------------------------------------
+# Full test suite — CI-style. Long but exhaustive.
+#
+# Order:
+#   1. Harness self-tests (fast, no Docker).
+#   2. Unit tests per service.
+#   3. Containerized integration suite (every scenario in tests/integration/
+#      scenarios/, including the multi-instance failover scenario which
+#      brings up its own extra Transcriber container).
+#
+# Stops at the first failing step. Print a summary line at the very end so
+# the result is unambiguous in CI logs.
+# ---------------------------------------------------------------------------
+test-all:
+	@echo "==> [1/3] harness self-tests"
+	$(MAKE) test-integration-harness
+	@echo "==> [2/3] unit tests"
+	$(MAKE) test-unit
+	@echo "==> [3/3] integration scenarios"
+	$(MAKE) test-integration
+	@echo "==> ALL TESTS PASSED"
+
 .PHONY: run-docker-dev run-dev down-docker-dev run-docker-prod clean-node-modules clean-docker-node-modules check-linto-studio
 .PHONY: install-local $(PACKAGE_DIRS)
 .PHONY: test-integration test-integration-up test-integration-down test-integration-logs test-integration-smoke test-integration-harness
+.PHONY: test-unit-deps test-unit test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-all

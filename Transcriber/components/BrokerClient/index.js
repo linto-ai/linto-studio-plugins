@@ -19,6 +19,16 @@ class BrokerClient extends Component {
     this._sessionStatusSnapshot = new Map(); // sessionId -> previous status, used to detect status transitions across snapshots
     this.uniqueId = getAppId(); //unique ID for this instance / path for MQTT
     this.serversStarted = false; // Track if streaming servers have been started (to handle MQTT reconnection)
+    // Track the scheduler's online status independently of our local state so
+    // the WAITING_SCHEDULER → READY transition can fire from either side of
+    // the startup race: scheduler/status arriving before our 'ready' event
+    // (typical when joining a stack where the scheduler is already running
+    // with a retained status message — e.g. adding a transcriber behind a
+    // load balancer in production), OR after, where the status message
+    // arrival is what unblocks us. Without this, a transcriber that
+    // receives the retained scheduler/status before transitioning to
+    // WAITING_SCHEDULER stays stuck and never starts its streaming servers.
+    this.schedulerOnline = false;
 
     this.domainSpecificValues = {
       srt_mode: this.srt_mode,
@@ -98,6 +108,23 @@ class BrokerClient extends Component {
     logger.info(`Registered all ACTIVE and READY sessions: ${this.sessions.length}`);
   }
 
+  // Idempotent transition WAITING_SCHEDULER → READY. Called from both the
+  // 'ready' broker event (case: scheduler/status retained message already
+  // delivered before we got here) and the scheduler/status message handler
+  // (case: status arrives after we entered WAITING_SCHEDULER). The combined
+  // (schedulerOnline && WAITING_SCHEDULER && !serversStarted) guard means at
+  // most one of those triggers actually starts the streaming servers.
+  maybeStartServers() {
+    if (!this.schedulerOnline) return;
+    if (this.state !== BrokerClient.states.WAITING_SCHEDULER) return;
+    if (this.serversStarted) return;
+    logger.info(`${this.uniqueId} scheduler online, registering...`);
+    this.client.publishStatus();
+    this.app.components['StreamingServer'].startServers();
+    this.serversStarted = true;
+    this.state = BrokerClient.states.READY;
+  }
+
   activateSession(session, channel) {
     // called by controllers/StreamingServer/controllers/StreamingServer.js uppon receiving session-start message
     this.client.publish(`session`, { transcriberId: this.uniqueId, sessionId: session.id, status: 'active', channelId: channel.id }, 1, false, true);
@@ -120,9 +147,12 @@ class BrokerClient extends Component {
         this.client.publishStatus();
         logger.info(`${this.uniqueId} Reconnected to broker - READY (servers already running)`)
       } else {
-        // First connection: wait for scheduler to start servers
+        // First connection: wait for scheduler to start servers.
         this.state = WAITING_SCHEDULER;
         logger.info(`${this.uniqueId} Connected to broker - WAITING_SCHEDULER`)
+        // Re-evaluate readiness: scheduler/status may have already been
+        // delivered (retained message) before we reached this state.
+        this.maybeStartServers();
       }
     });
     this.client.on("error", (err) => {

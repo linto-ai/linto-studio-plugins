@@ -2,15 +2,20 @@ const logger = require('../../../logger')
 
 // Handler for 'scheduler' messages
 function handleSchedulerMessage(scheduler) {
-  if (scheduler.online && this.state == this.constructor.states.WAITING_SCHEDULER) {
-    logger.info(`${this.uniqueId} scheduler online, registering...`);
-    this.client.publishStatus();
-    this.app.components['StreamingServer'].startServers();
-    this.serversStarted = true;
-    this.state = this.constructor.states.READY;
-  } else if (!scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
-    logger.warn(`${this.uniqueId} scheduler offline, transcriptions may be lost...`);
-  } else if (scheduler.online && this.state !== this.constructor.states.WAITING_SCHEDULER) {
+  // Always record the latest scheduler online state so maybeStartServers()
+  // can fire from either side of the WAITING_SCHEDULER transition race.
+  this.schedulerOnline = !!scheduler.online;
+
+  if (!scheduler.online) {
+    if (this.state !== this.constructor.states.WAITING_SCHEDULER) {
+      logger.warn(`${this.uniqueId} scheduler offline, transcriptions may be lost...`);
+    }
+    return;
+  }
+
+  if (this.state === this.constructor.states.WAITING_SCHEDULER) {
+    this.maybeStartServers();
+  } else {
     logger.info(`${this.uniqueId} scheduler back online.`);
   }
 }

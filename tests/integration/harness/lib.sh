@@ -278,11 +278,21 @@ EOF
 }
 
 # Create a Microsoft (Azure) ASR transcriber profile, prints the new profile id.
-# Args: NAME KEY REGION [LANGUAGES_CSV]
+# Args: NAME KEY REGION [LANGUAGES_CSV] [DIARIZATION] [AVAILABLE_TRANSLATIONS_CSV]
 #
 # LANGUAGES_CSV defaults to "fr-FR". Multiple BCP47 candidates can be passed
 # as a comma-separated list (e.g. "fr-FR,en-US"). Each candidate is wrapped in
 # the {"candidate": "..."} shape expected by Session-API.
+#
+# DIARIZATION (default "false") sets config.hasDiarization on the profile.
+#
+# AVAILABLE_TRANSLATIONS_CSV (optional, default empty) advertises the discrete
+# translation targets the profile supports, e.g. "de,es". Session-API's
+# extendTranscriberProfile() converts a plain string array into the internal
+# [{target, mode:"discrete"}] shape; enrichTranslations() then keeps a channel
+# translation whose target is advertised here as `discrete` (no fallback warning).
+# The 6th positional is additive: existing callers (e.g. 06-pause-resume-microsoft.sh)
+# that pass at most 5 args get an empty availableTranslations, exactly as before.
 #
 # Session-API encrypts the key at rest (Security.encrypt) before storing it.
 harness::create_microsoft_profile() {
@@ -291,11 +301,21 @@ harness::create_microsoft_profile() {
     local region="$3"
     local langs_csv="${4:-fr-FR}"
     local diarization="${5:-false}"
+    local translations_csv="${6:-}"
 
     # Build the JSON array of language candidates from a comma-separated list.
     local langs_json
     langs_json=$(jq -nc --arg csv "${langs_csv}" \
         '$csv | split(",") | map({candidate: (. | gsub("^\\s+|\\s+$"; ""))})')
+
+    # Build the availableTranslations string array (empty when not requested).
+    # We pass plain BCP47 strings; Session-API normalises them to the internal
+    # {target, mode:"discrete"} object array on persist.
+    local translations_json
+    translations_json=$(jq -nc --arg csv "${translations_csv}" \
+        '($csv | gsub("^\\s+|\\s+$"; "")) as $c
+         | if ($c | length) == 0 then []
+           else ($c | split(",") | map(gsub("^\\s+|\\s+$"; ""))) end')
 
     local payload
     payload=$(jq -nc \
@@ -304,6 +324,7 @@ harness::create_microsoft_profile() {
         --arg region "${region}" \
         --argjson langs "${langs_json}" \
         --argjson diar "${diarization}" \
+        --argjson translations "${translations_json}" \
         '{config: {
             type: "microsoft",
             name: $name,
@@ -311,7 +332,8 @@ harness::create_microsoft_profile() {
             languages: $langs,
             region: $region,
             key: $key,
-            hasDiarization: $diar
+            hasDiarization: $diar,
+            availableTranslations: $translations
         }}')
 
     local resp
@@ -587,6 +609,67 @@ harness::create_session_multi() {
     fi
     if [[ -z "${id}" ]]; then
         harness::err "Could not extract multi-channel session id from response: ${resp}"
+        return 1
+    fi
+    echo "${id}"
+}
+
+# Create a session with one channel that has diarization enabled AND a set of
+# discrete translation targets. Prints the session id.
+# Args: PROFILE_ID TRANSLATIONS_CSV [SESSION_NAME]
+#
+# TRANSLATIONS_CSV is a comma-separated list of BCP47 target tags, e.g. "de" or
+# "de,es". Each is posted as a channel translation entry
+# {target, mode:"discrete"} — the exact shape POST /sessions ->
+# validateTranslations()/enrichTranslations() accepts (see
+# Session-API/components/WebServer/routes/api/translationHelpers.js). For the
+# target to stay `discrete` (rather than fall back / route to an external
+# translator), the bound transcriber profile must advertise it via
+# availableTranslations (see harness::create_microsoft_profile 6th arg).
+#
+# channel.diarization=true is the top-level boolean the POST /sessions controller
+# reads (sessions.js: `diarization: channel.diarization ?? false`). Combined with
+# discrete translations on a Microsoft profile this drives the dual-recognizer
+# path under test (ConversationTranscriber primary + TranslationRecognizer
+# secondary).
+harness::create_session_diar_translation() {
+    local profile_id="$1"
+    local translations_csv="$2"
+    local name="${3:-it_session_diar_tr_$(date +%s%N)}"
+
+    # Build the channel.translations array: [{target, mode:"discrete"}, ...].
+    local translations_json
+    translations_json=$(jq -nc --arg csv "${translations_csv}" \
+        '$csv | split(",")
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(select(length > 0))
+              | map({target: ., mode: "discrete"})')
+
+    local payload
+    payload=$(jq -nc \
+        --arg name "${name}" \
+        --argjson pid "${profile_id}" \
+        --argjson translations "${translations_json}" \
+        '{
+            name: $name,
+            channels: [{
+                name: "ch0",
+                transcriberProfileId: $pid,
+                diarization: true,
+                translations: $translations
+            }]
+        }')
+
+    local resp
+    resp=$(harness::post "/sessions" "${payload}") || return 1
+    local id
+    id=$(jq -r '.id // .session.id // empty' <<< "${resp}")
+    if [[ -z "${id}" ]]; then
+        id=$(harness::get "/sessions?searchName=${name}" \
+            | jq -r '.sessions[0].id // empty')
+    fi
+    if [[ -z "${id}" ]]; then
+        harness::err "Could not extract diar+translation session id from response: ${resp}"
         return 1
     fi
     echo "${id}"

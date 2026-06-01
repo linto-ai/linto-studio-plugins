@@ -334,6 +334,38 @@ describe('MicrosoftTranscriber', () => {
             assert.deepStrictEqual(out.translations, {});
         });
 
+        it('fills locutor from result.speakerId (diarization primary path)', () => {
+            const channel = makeChannel([{ target: 'pt-PT', mode: 'discrete' }]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            // A ConversationTranscriber result: no translations, but a speakerId.
+            const result = { text: 'hello', offset: 0, duration: 0, language: 'en-US', speakerId: 'Guest-2' };
+            const out = t.formatResult(result, true);
+            assert.strictEqual(out.locutor, 'Guest-2');
+            assert.deepStrictEqual(out.translations, {});
+            assert.strictEqual(out.isPrimary, true);
+        });
+
+        it('marks isPrimary=false when called for the secondary recognizer', () => {
+            const channel = makeChannel([{ target: 'pt-PT', mode: 'discrete' }]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            const result = {
+                text: 'hello',
+                translations: makeTranslationsMock({ 'pt-pt': 'olá' }),
+                offset: 0, duration: 0, language: 'en-US',
+            };
+            const out = t.formatResult(result, false);
+            assert.strictEqual(out.isPrimary, false);
+            assert.deepStrictEqual(out.translations, { 'pt-PT': 'olá' });
+        });
+
+        it('defaults isPrimary=true when the flag is omitted (single-recognizer path)', () => {
+            const channel = makeChannel([]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            const result = { text: 'hi', offset: 0, duration: 0, language: 'en' };
+            const out = t.formatResult(result);
+            assert.strictEqual(out.isPrimary, true);
+        });
+
         it('handles mixed legacy-string and object entries in channel.translations', () => {
             const channel = makeChannel([
                 'pt-PT',
@@ -371,6 +403,25 @@ describe('MicrosoftTranscriber', () => {
             const speechConfig = t.createSpeechConfig(channel.transcriberProfile.config, channel.translations);
             assert.deepStrictEqual(speechConfig.targetLanguages, ['zh-Hans']);
         });
+
+        it('createSpeechConfig(config, null) does NOT build a SpeechTranslationConfig even on a channel WITH translations', () => {
+            // The dual-mode primary is created with translations=null and must
+            // remain translation-free regardless of channel-level translations.
+            const channel = makeChannel([{ target: 'pt-PT', mode: 'discrete' }]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            const speechConfig = t.createSpeechConfig(channel.transcriberProfile.config, null);
+            assert.ok(!(speechConfig instanceof MockSpeechTranslationConfig),
+                'translations=null must yield a plain SpeechConfig, not a SpeechTranslationConfig');
+            assert.ok(speechConfig instanceof MockSpeechConfig);
+        });
+
+        it('createSpeechConfig(config, [translations]) DOES build a SpeechTranslationConfig with the target languages', () => {
+            const channel = makeChannel([{ target: 'pt-PT', mode: 'discrete' }]);
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            const speechConfig = t.createSpeechConfig(channel.transcriberProfile.config, channel.translations);
+            assert.ok(speechConfig instanceof MockSpeechTranslationConfig);
+            assert.deepStrictEqual(speechConfig.targetLanguages, ['pt-pt']);
+        });
     });
 
     describe('lifecycle: start() / transcribe() / stop()', () => {
@@ -407,6 +458,32 @@ describe('MicrosoftTranscriber', () => {
             assert.strictEqual(t.recognizers.length, 2,
                 'expected one diarization recognizer + one translation recognizer');
             assert.strictEqual(t.pushStreams.length, 2);
+            t.stop();
+        });
+
+        it('dual mode: primary is a ConversationTranscriber, secondary is a TranslationRecognizer', () => {
+            // Regression guard for the root cause: createSpeechConfig/createRecognizer
+            // used to ignore the `translations` parameter and build the primary as a
+            // TranslationRecognizer, so no recognizer produced speakerId and the saved
+            // transcript came out empty when diarization+translation were both on.
+            const channel = makeChannel([{ target: 'pt-PT', mode: 'discrete' }]);
+            channel.diarization = true;
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            t.start();
+            assert.ok(t.recognizers[0] instanceof MockConversationTranscriber,
+                'primary (diarization) recognizer must be a ConversationTranscriber');
+            assert.ok(t.recognizers[1] instanceof MockTranslationRecognizer,
+                'secondary (translation) recognizer must be a TranslationRecognizer');
+            t.stop();
+        });
+
+        it('dual mode: primary listener isPrimary=true, secondary listener isPrimary=false', () => {
+            const channel = makeChannel([{ target: 'pt-PT', mode: 'discrete' }]);
+            channel.diarization = true;
+            const t = new MicrosoftTranscriber({ id: 's' }, channel);
+            t.start();
+            assert.strictEqual(t._listeners[0].isPrimary, true);
+            assert.strictEqual(t._listeners[1].isPrimary, false);
             t.stop();
         });
 

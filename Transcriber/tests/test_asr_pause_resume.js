@@ -367,4 +367,79 @@ describe('ASR pause/resume', () => {
             assert.strictEqual(asr.segmentId, 42, 'resume() must not touch segmentId');
         });
     });
+
+    // -------- Suite 6 — dual recognizer origin-tagging --------------------
+    //
+    // In Microsoft dual mode (diarization + translation) two recognizers emit
+    // 'transcribed' for the same spoken segment: the primary (ConversationTranscriber,
+    // isPrimary=true, carries the speaker) and the secondary (TranslationRecognizer,
+    // isPrimary=false, carries only translations). The wrapper must:
+    //   - emit a 'final' for both (so ASREvents can route translations),
+    //   - advance segmentId ONLY on primary finals,
+    //   - tag each final so ASREvents drops the secondary's canonical line.
+    // This replaces the old fragile modulo-2 `_dualFinalCount` counter.
+    describe('dual recognizer origin-tagging (segmentId progression)', () => {
+        // Drive the provider directly via emit() so we control interleaving and
+        // cardinality (Azure gives no ordering/cardinality guarantee across the
+        // two independent streams).
+        function emitFinal(asr, text, isPrimary) {
+            asr.provider.emit('transcribed', { text, isPrimary });
+        }
+
+        it('only primary finals advance segmentId; secondary finals attach to current segment', async () => {
+            const asr = await makeReadyAsr();
+            const finals = [];
+            asr.on('final', (t) => finals.push({ segmentId: t.segmentId, isPrimary: t.isPrimary }));
+
+            const start = asr.segmentId;
+            // Segment N: primary speaks, then its translation arrives.
+            emitFinal(asr, 'hello', true);
+            emitFinal(asr, 'bonjour', false);
+            // Segment N+1: primary speaks, then translation.
+            emitFinal(asr, 'world', true);
+            emitFinal(asr, 'monde', false);
+
+            assert.strictEqual(finals.length, 4, 'every final (primary + secondary) is emitted');
+            // Two primary finals → segmentId advanced exactly twice.
+            assert.strictEqual(asr.segmentId, start + 2);
+            // Primary "hello" and its secondary "bonjour" share the same segmentId.
+            assert.strictEqual(finals[0].segmentId, start);
+            assert.strictEqual(finals[1].segmentId, start);
+            assert.strictEqual(finals[0].isPrimary, true);
+            assert.strictEqual(finals[1].isPrimary, false);
+            // Next segment.
+            assert.strictEqual(finals[2].segmentId, start + 1);
+            assert.strictEqual(finals[3].segmentId, start + 1);
+        });
+
+        it('extra/out-of-order secondary finals never advance segmentId (robust to cardinality skew)', async () => {
+            const asr = await makeReadyAsr();
+            const start = asr.segmentId;
+
+            // Pathological stream: many translation finals, occasional primary.
+            emitFinal(asr, 'a', false);
+            emitFinal(asr, 'b', false);
+            emitFinal(asr, 'one', true);   // +1
+            emitFinal(asr, 'c', false);
+            emitFinal(asr, 'd', false);
+            emitFinal(asr, 'e', false);
+            emitFinal(asr, 'two', true);   // +1
+
+            assert.strictEqual(asr.segmentId, start + 2,
+                'segmentId advances exactly once per primary final, regardless of secondary count/order');
+        });
+
+        it('providers that do not tag isPrimary advance segmentId on every final (non-dual unchanged)', async () => {
+            const asr = await makeReadyAsr();
+            const start = asr.segmentId;
+
+            // No isPrimary field at all (amazon/linto/openai/fake, single-recognizer Azure).
+            asr.provider.emit('transcribed', { text: 'one' });
+            asr.provider.emit('transcribed', { text: 'two' });
+            asr.provider.emit('transcribed', { text: 'three' });
+
+            assert.strictEqual(asr.segmentId, start + 3,
+                'untagged finals must each advance segmentId (legacy single-recognizer behaviour)');
+        });
+    });
 });

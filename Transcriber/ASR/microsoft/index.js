@@ -198,20 +198,10 @@ class SecondaryRecognizerListener extends PrimaryRecognizerListener {
     // must never create a canonical caption line nor advance segmentId.
     isPrimary = false;
 
-    handleRecognizing(s, e) {
-        if (this._isStale()) return;
-        this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
-        this.emitTranscribing(this.transcriber.formatResult(e.result, this.isPrimary))
-    }
-
-    handleRecognized(s, e) {
-        if (this._isStale()) return;
-        this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
-        if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
-            this.emitTranscribed(this.transcriber.formatResult(e.result, this.isPrimary))
-        }
-    }
-
+    // handleRecognizing/handleRecognized are inherited unchanged from
+    // PrimaryRecognizerListener: they already forward this.isPrimary (=false
+    // here) to formatResult. Only the cancel/session-stopped handlers below
+    // differ in dual mode (a secondary failure must not tear down the channel).
     handleCanceled(s, e) {
         if (this._isStale()) {
             if (this._startupTimeout) {

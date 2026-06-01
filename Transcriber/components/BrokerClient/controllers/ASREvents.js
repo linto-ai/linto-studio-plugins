@@ -42,7 +42,12 @@ module.exports = async function () {
         // Publish discrete translations to separate topic (must read transcription.translations before stripping)
         publishDiscreteTranslations(this.client, transcription, sessionId, channelId, 'partial');
 
-        const { translations: _partialTranslations, ...partialPayload } = transcription;
+        // Dual-mode secondary (translation-only) partials carry no canonical
+        // text/speaker: they must not overwrite the diarization primary's live
+        // caption. Publish only their translations (done above) and stop here.
+        if (transcription.isPrimary === false) return;
+
+        const { translations: _partialTranslations, isPrimary: _partialIsPrimary, ...partialPayload } = transcription;
         this.client.publish(`transcriber/out/${sessionId}/${channelId}/partial`, partialPayload);
     });
 
@@ -56,7 +61,14 @@ module.exports = async function () {
         // Publish discrete translations to separate topic (must read transcription.translations before stripping)
         publishDiscreteTranslations(this.client, transcription, sessionId, channelId, 'final');
 
-        const { translations: _finalTranslations, ...finalPayload } = transcription;
+        // Dual-mode secondary (translation-only) finals must NOT produce a
+        // canonical caption line: that line would carry locutor=null and, with
+        // diarization enabled, the saved/canonical transcript drops it (root
+        // cause of the empty-saved-transcript bug). The diarization primary owns
+        // the canonical `final`; the secondary contributes only translations.
+        if (transcription.isPrimary === false) return;
+
+        const { translations: _finalTranslations, isPrimary: _finalIsPrimary, ...finalPayload } = transcription;
         this.client.publish(`transcriber/out/${sessionId}/${channelId}/final`, finalPayload);
     });
 }

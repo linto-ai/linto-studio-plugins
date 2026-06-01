@@ -6,6 +6,11 @@ const { toAzureCode, isAzureValid } = require('./azureLocale');
 
 
 class PrimaryRecognizerListener {
+    // The primary recognizer is the diarization source of truth in dual mode
+    // (and the only recognizer in every non-dual mode). Its results carry the
+    // speaker id and drive segmentId progression.
+    isPrimary = true;
+
     constructor(transcriber, name, epoch) {
         this.transcriber = transcriber;
         this.name = name;
@@ -46,14 +51,14 @@ class PrimaryRecognizerListener {
     handleRecognizing(s, e) {
         if (this._isStale()) return;
         this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
-        this.emitTranscribing(this.transcriber.formatResult(e.result))
+        this.emitTranscribing(this.transcriber.formatResult(e.result, this.isPrimary))
     }
 
     handleRecognized(s, e) {
         if (this._isStale()) return;
         this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
-            this.emitTranscribed(this.transcriber.formatResult(e.result))
+            this.emitTranscribed(this.transcriber.formatResult(e.result, this.isPrimary))
         }
     }
 
@@ -188,17 +193,22 @@ class PrimaryRecognizerListener {
 
 
 class SecondaryRecognizerListener extends PrimaryRecognizerListener {
+    // The secondary recognizer (translation-only, dual mode) is NOT the source
+    // of truth: it contributes translations attached to the current segment but
+    // must never create a canonical caption line nor advance segmentId.
+    isPrimary = false;
+
     handleRecognizing(s, e) {
         if (this._isStale()) return;
         this._recordSdkEvent('recognizing', { reason: e && e.result && e.result.reason });
-        this.emitTranscribing(this.transcriber.formatResult(e.result))
+        this.emitTranscribing(this.transcriber.formatResult(e.result, this.isPrimary))
     }
 
     handleRecognized(s, e) {
         if (this._isStale()) return;
         this._recordSdkEvent('recognized', { reason: e && e.result && e.result.reason });
         if (e.result.reason === ResultReason.RecognizedSpeech || e.result.reason === ResultReason.TranslatedSpeech) {
-            this.emitTranscribed(this.transcriber.formatResult(e.result))
+            this.emitTranscribed(this.transcriber.formatResult(e.result, this.isPrimary))
         }
     }
 
@@ -265,12 +275,12 @@ class MicrosoftTranscriber extends EventEmitter {
     // Map<azureCode, originalUserKey> — built once from channel.translations.
     // azureCode is the canonical form Azure expects (e.g. 'pt-pt', 'fr-ca', 'zh-Hans').
     // originalUserKey is the user-supplied BCP47 tag preserved for the MQTT payload.
-    getTranslationKeyMap() {
-        if (this._translationKeyMap) return this._translationKeyMap;
+    // Build a Map<azureCode, originalUserKey> from any translations array,
+    // applying the discrete-only filtering (objects with mode !== 'discrete',
+    // such as 'external', are ignored; legacy plain strings are kept).
+    _buildTranslationKeyMap(translations) {
         const map = new Map();
-        const { translations } = this.channel;
         if (!Array.isArray(translations) || translations.length === 0) {
-            this._translationKeyMap = map;
             return map;
         }
         for (const entry of translations) {
@@ -283,15 +293,29 @@ class MicrosoftTranscriber extends EventEmitter {
             // First entry wins on collision (validation upstream should prevent this).
             if (!map.has(azureCode)) map.set(azureCode, originalKey);
         }
-        this._translationKeyMap = map;
         return map;
+    }
+
+    getTranslationKeyMap() {
+        if (this._translationKeyMap) return this._translationKeyMap;
+        this._translationKeyMap = this._buildTranslationKeyMap(this.channel.translations);
+        return this._translationKeyMap;
     }
 
     getTargetLanguages() {
         return Array.from(this.getTranslationKeyMap().keys());
     }
 
-    formatResult(result) {
+    // Whether the given `translations` argument (as passed to setupRecognizer)
+    // yields at least one discrete Azure target language. This derives from the
+    // *parameter actually received* — NOT from channel-level translations — so a
+    // recognizer explicitly created with translations=null (the dual-mode
+    // diarization primary) is correctly treated as translation-free.
+    _hasTargetLanguages(translations) {
+        return this._buildTranslationKeyMap(translations).size > 0;
+    }
+
+    formatResult(result, isPrimary = true) {
         const translations = {};
         const keyMap = this.getTranslationKeyMap();
         if (result.translations && keyMap.size > 0) {
@@ -313,7 +337,13 @@ class MicrosoftTranscriber extends EventEmitter {
             "start": result.offset / 10000000,
             "end": (result.offset + result.duration) / 10000000,
             "lang": lang,
-            "locutor": result.speakerId
+            "locutor": result.speakerId,
+            // Marks which recognizer produced this result. In single-recognizer
+            // modes this is always true. In dual (diarization + translation) mode
+            // only the primary (ConversationTranscriber) is the canonical source
+            // of segments/speaker; the secondary (TranslationRecognizer) carries
+            // translations only — see ASR/index.js and ASREvents.js.
+            "isPrimary": isPrimary
         };
     }
 
@@ -378,7 +408,12 @@ class MicrosoftTranscriber extends EventEmitter {
 
     createSpeechConfig(config, translations) {
         const multi = config.languages.length > 1;
-        const hasTranslations = this.getTargetLanguages().length > 0;
+        // Derive from the `translations` parameter actually received, NOT from
+        // channel-level translations: the dual-mode primary is created with
+        // translations=null and must become a plain ConversationTranscriber/
+        // SpeechRecognizer, never a translation recognizer.
+        const targetLanguages = Array.from(this._buildTranslationKeyMap(translations).keys());
+        const hasTranslations = targetLanguages.length > 0;
         let usedEndpoint = null;
 
         const decryptedKey = new Security().safeDecrypt(config.key);
@@ -392,7 +427,6 @@ class MicrosoftTranscriber extends EventEmitter {
             speechConfig.setProperty(PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
 
             // Target language
-            const targetLanguages = this.getTargetLanguages();
             for (const targetLanguage of targetLanguages) {
                 speechConfig.addTargetLanguage(targetLanguage);
             }
@@ -415,7 +449,6 @@ class MicrosoftTranscriber extends EventEmitter {
             const speechConfig = SpeechTranslationConfig.fromSubscription(decryptedKey, config.region);
             speechConfig.speechRecognitionLanguage = config.languages[0]?.candidate;
 
-            const targetLanguages = this.getTargetLanguages();
             for (const targetLanguage of targetLanguages) {
                 speechConfig.addTargetLanguage(targetLanguage);
             }
@@ -442,7 +475,10 @@ class MicrosoftTranscriber extends EventEmitter {
 
     createRecognizer(config, translations, diarization, speechConfig, audioConfig) {
         const multi = config.languages.length > 1;
-        const hasTranslations = this.getTargetLanguages().length > 0;
+        // Same as createSpeechConfig: must follow the `translations` parameter so
+        // the dual-mode primary (translations=null) is built as a
+        // ConversationTranscriber, not a TranslationRecognizer.
+        const hasTranslations = this._hasTargetLanguages(translations);
 
         if (multi) {
             const candidates = config.languages.map(language => {

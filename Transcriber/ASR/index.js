@@ -35,7 +35,11 @@ class ASR extends eventEmitter {
     this.provider = null;
     this.state = ASR.states.CLOSED;
     this.segmentId = options.initialSegmentId || 1;
-    this._dualFinalCount = 0;
+    // Segment the most recent primary final/partial was assigned to. Used to
+    // align dual-mode secondary (translation-only) results onto the same
+    // segment as the primary that produced the source text. Before any primary
+    // result, secondary results fall back to the current segmentId.
+    this._lastPrimarySegmentId = this.segmentId;
     this.paused = false;
     this._transitionLock = Promise.resolve();
     // Chain init() into the transition lock so any pause()/resume() queued
@@ -127,6 +131,20 @@ class ASR extends eventEmitter {
     }
   }
 
+  // Resolve the segmentId a result belongs to. Primary (or untagged) results
+  // own the current segmentId and update _lastPrimarySegmentId so the dual-mode
+  // secondary can rejoin them: a secondary (isPrimary===false) result is pinned
+  // to the segment the latest primary produced, never the next one. This keeps
+  // a translation aligned with its source even though the primary final
+  // advances segmentId immediately after emitting.
+  _segmentIdFor(transcription) {
+    if (transcription.isPrimary === false) {
+      return this._lastPrimarySegmentId;
+    }
+    this._lastPrimarySegmentId = this.segmentId;
+    return this.segmentId;
+  }
+
   handleASREvents() {
     this.provider.on('connecting', () => {
       this.state = ASR.states.CONNECTING;
@@ -165,21 +183,25 @@ class ASR extends eventEmitter {
     this.provider.on('transcribing', (transcription) => {
       this.state = ASR.states.TRANSCRIBING;
       if (transcription.text.trim().length > 0) {
-        transcription.segmentId = this.segmentId;
+        transcription.segmentId = this._segmentIdFor(transcription);
         this.emit('partial', transcription);
       }
     });
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
-        transcription.segmentId = this.segmentId;
+        transcription.segmentId = this._segmentIdFor(transcription);
         this.emit('final', transcription);
-        if (this.channel.diarization && this.channel.translations?.length > 0) {
-          this._dualFinalCount++;
-          if (this._dualFinalCount >= 2) {
-            this.segmentId++;
-            this._dualFinalCount = 0;
-          }
-        } else {
+        // Origin-tagging for the Microsoft dual recognizer (diarization +
+        // translation). The primary (ConversationTranscriber) is the canonical
+        // source of segments and speaker; only its finals advance segmentId.
+        // The secondary (TranslationRecognizer, isPrimary===false) only carries
+        // translations attached to the segment the primary just produced
+        // (_lastPrimarySegmentId, set by _segmentIdFor) and must NOT advance
+        // segmentId nor create a second canonical caption line (ASREvents.js
+        // drops its canonical `final`). Any provider that does not tag isPrimary
+        // (amazon, linto, openai, fake, and every single-recognizer Microsoft
+        // mode) is treated as primary, so their behaviour is unchanged.
+        if (transcription.isPrimary !== false) {
           this.segmentId++;
         }
       }

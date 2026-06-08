@@ -23,7 +23,8 @@ const DEFAULT_HARD_MAX_WORDS = 150;
 // Matches: ". Le", "! On", "? Est", "。「" etc.
 const INTERNAL_SENTENCE_BOUNDARY = /[.!?。！？]\s+(?=[A-ZÀ-ÖØ-ÞÉÈÊËÎÏÔÙÛÜŸŒÆ])/;
 
-// Grace period after sending a commit: wait for server to flush trailing tokens (punctuation, etc.)
+// Grace period on hard silence: wait briefly for any late trailing tokens
+// (e.g. Voxtral's delayed punctuation) before emitting the segment.
 const DRAIN_GRACE_MS = 750;
 
 // Reconnection delay after WebSocket error (ms)
@@ -59,7 +60,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.startedAt = null;
         this._sessionReady = false;
         this._draining = false;
-        this._drainCommitTime = 0;
+        this._drainStartTime = 0;
         this._setupTimers = [];
         this._connGeneration = 0;
 
@@ -169,7 +170,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._cachedLang = null;
         this._lastLangCheckLen = 0;
         this._draining = false;
-        this._drainCommitTime = 0;
+        this._drainStartTime = 0;
         this.emit('connecting');
 
         // Decrypt apiKey if present
@@ -360,97 +361,114 @@ class OpenAIStreamingTranscriber extends EventEmitter {
      */
     startSegmentationTimer() {
         this.segmentationTimer = setInterval(() => {
-            if (!this.accumulatedText || this.accumulatedText.trim().length === 0) return;
-            if (!this.lastDeltaTime) return;
-
-            const now = Date.now();
-            const silenceDuration = now - this.lastDeltaTime;
-            const trimmedText = this.accumulatedText.trim();
-            const wordCount = this._wordCount(trimmedText);
-            const hasSentenceEnd = SENTENCE_ENDING_PUNCT.test(trimmedText);
-
-            // Don't emit segments smaller than minWords (unless hard silence)
-            if (wordCount < this.minWords && silenceDuration < this.hardSilenceMs) return;
-
-            let shouldEmit = false;
-            let reason = '';
-
-            // Priority 1: Hard max words exceeded - force cut
-            if (wordCount >= this.hardMaxWords) {
-                // Try to find a good break point (last sentence-ending punctuation)
-                const breakIdx = this._findBestBreakPoint(trimmedText);
-                if (breakIdx > 0 && breakIdx < trimmedText.length - 1) {
-                    // Emit up to the break point, keep the rest
-                    const emitText = trimmedText.substring(0, breakIdx + 1).trim();
-                    const remaining = trimmedText.substring(breakIdx + 1).trim();
-
-                    if (!this.startTime) this.startTime = now;
-                    const lang = this.detectLanguage(emitText, true);
-                    const payload = this.formatResult(emitText, lang);
-                    this.lastEndTime = payload.end;
-                    this.emit('transcribed', payload);
-            
-                    this.logger.debug(`ASR final transcription (hard max, split): ${emitText}`);
-
-                    this.accumulatedText = ' ' + remaining;
-                    this.startTime = now;
-                    this._lastLangCheckLen = 0;
-                    return;
-                }
-                // No good break point, emit everything
-                shouldEmit = true;
-                reason = 'hard max words';
-            }
-
-            // Priority 2: Soft max words + punctuation (no silence needed for long sentences)
-            if (!shouldEmit && wordCount >= this.softMaxWords && hasSentenceEnd) {
-                shouldEmit = true;
-                reason = `soft max (${wordCount} words) + punctuation`;
-            }
-
-            // Priority 3: Silence + punctuation + min words (sentence boundary)
-            if (!shouldEmit && silenceDuration > this.silenceMs && hasSentenceEnd && wordCount >= this.minWords) {
-                shouldEmit = true;
-                reason = `silence ${silenceDuration}ms + punctuation`;
-            }
-
-            // Priority 4: Longer silence + punctuation for shorter segments
-            if (!shouldEmit && silenceDuration > this.punctSilenceMs && hasSentenceEnd && wordCount >= this.softMaxWords / 2) {
-                shouldEmit = true;
-                reason = `short silence ${silenceDuration}ms + punctuation + ${wordCount} words`;
-            }
-
-            // Priority 5: Hard silence — commit-drain approach.
-            // Instead of emitting immediately, send a commit to flush the server's
-            // pending tokens (e.g. trailing punctuation), then wait a grace period.
-            if (!shouldEmit && wordCount >= this.minWords && silenceDuration > this.hardSilenceMs) {
-                if (!this._draining) {
-                    // Enter drain: send commit, wait for server to flush
-                    this._draining = true;
-                    this._drainCommitTime = now;
-                    this._sendCommit();
-                    this.logger.debug(`Hard silence ${silenceDuration}ms: sent commit, draining...`);
-                    return;
-                }
-
-                if (this.lastDeltaTime > this._drainCommitTime) {
-                    // New tokens arrived after commit — exit drain, back to normal accumulation
-                    this._draining = false;
-                    return;
-                }
-
-                if (now - this._drainCommitTime > DRAIN_GRACE_MS) {
-                    // Grace period expired, server sent nothing — emit as-is
-                    this._draining = false;
-                    shouldEmit = true;
-                    reason = `hard silence + drain timeout ${now - this._drainCommitTime}ms`;
-                }
-            }
-
-            if (shouldEmit) {
-                this._emitSegment(reason);
-            }
+            this._runSegmentationTick(Date.now());
         }, SEGMENTATION_CHECK_MS);
+    }
+
+    /**
+     * Evaluate segmentation once. Extracted from the interval callback so it
+     * can be unit-tested with a controlled clock.
+     * @param {number} now - current timestamp in ms
+     */
+    _runSegmentationTick(now) {
+        if (!this.accumulatedText || this.accumulatedText.trim().length === 0) return;
+        if (!this.lastDeltaTime) return;
+
+        const silenceDuration = now - this.lastDeltaTime;
+        const trimmedText = this.accumulatedText.trim();
+        const wordCount = this._wordCount(trimmedText);
+        const hasSentenceEnd = SENTENCE_ENDING_PUNCT.test(trimmedText);
+
+        // Don't emit segments smaller than minWords (unless hard silence)
+        if (wordCount < this.minWords && silenceDuration < this.hardSilenceMs) return;
+
+        let shouldEmit = false;
+        let reason = '';
+
+        // Priority 1: Hard max words exceeded - force cut
+        if (wordCount >= this.hardMaxWords) {
+            // Try to find a good break point (last sentence-ending punctuation)
+            const breakIdx = this._findBestBreakPoint(trimmedText);
+            if (breakIdx > 0 && breakIdx < trimmedText.length - 1) {
+                // Emit up to the break point, keep the rest
+                const emitText = trimmedText.substring(0, breakIdx + 1).trim();
+                const remaining = trimmedText.substring(breakIdx + 1).trim();
+
+                if (!this.startTime) this.startTime = now;
+                const lang = this.detectLanguage(emitText, true);
+                const payload = this.formatResult(emitText, lang);
+                this.lastEndTime = payload.end;
+                this.emit('transcribed', payload);
+
+                this.logger.debug(`ASR final transcription (hard max, split): ${emitText}`);
+
+                this.accumulatedText = ' ' + remaining;
+                this.startTime = now;
+                this._lastLangCheckLen = 0;
+                return;
+            }
+            // No good break point, emit everything
+            shouldEmit = true;
+            reason = 'hard max words';
+        }
+
+        // Priority 2: Soft max words + punctuation (no silence needed for long sentences)
+        if (!shouldEmit && wordCount >= this.softMaxWords && hasSentenceEnd) {
+            shouldEmit = true;
+            reason = `soft max (${wordCount} words) + punctuation`;
+        }
+
+        // Priority 3: Silence + punctuation + min words (sentence boundary)
+        if (!shouldEmit && silenceDuration > this.silenceMs && hasSentenceEnd && wordCount >= this.minWords) {
+            shouldEmit = true;
+            reason = `silence ${silenceDuration}ms + punctuation`;
+        }
+
+        // Priority 4: Longer silence + punctuation for shorter segments
+        if (!shouldEmit && silenceDuration > this.punctSilenceMs && hasSentenceEnd && wordCount >= this.softMaxWords / 2) {
+            shouldEmit = true;
+            reason = `short silence ${silenceDuration}ms + punctuation + ${wordCount} words`;
+        }
+
+        // Priority 5: Hard silence — debounce, then emit as-is (no punctuation needed).
+        //
+        // We deliberately do NOT send a commit here. This used to be the only
+        // mid-session commit the transcriber sent, and on the vLLM side it can
+        // land while the engine is re-anchoring a long realtime session's RoPE
+        // positions ("Generation already in progress, ignoring commit"), stalling
+        // this stream's delta output for ~10s (the acute freeze at re-anchor).
+        // The server transcribes continuously after the initial arming commit, so
+        // a periodic commit is unnecessary: the reference load client in the
+        // linto-ai/vllm fork (benchmarks/voxtral_realtime/ws_load.py, a bench tool
+        // shipped with the server, not part of this repo) sends no mid-session
+        // commit and stays in sync across re-anchors. We just wait a short grace
+        // period for any late tokens (Voxtral can emit delayed punctuation), then emit.
+        if (!shouldEmit && wordCount >= this.minWords && silenceDuration > this.hardSilenceMs) {
+            if (!this._draining) {
+                // Enter drain: wait a grace period for any late tokens
+                this._draining = true;
+                this._drainStartTime = now;
+                this.logger.debug(`Hard silence ${silenceDuration}ms: draining (grace ${DRAIN_GRACE_MS}ms)...`);
+                return;
+            }
+
+            if (this.lastDeltaTime > this._drainStartTime) {
+                // New tokens arrived during grace — exit drain, keep accumulating
+                this._draining = false;
+                return;
+            }
+
+            if (now - this._drainStartTime > DRAIN_GRACE_MS) {
+                // Grace period expired with no new tokens — emit as-is
+                this._draining = false;
+                shouldEmit = true;
+                reason = `hard silence + drain timeout ${now - this._drainStartTime}ms`;
+            }
+        }
+
+        if (shouldEmit) {
+            this._emitSegment(reason);
+        }
     }
 
     /**
@@ -506,13 +524,6 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.startTime = Date.now();
         this._lastLangCheckLen = 0;
         this._draining = false;
-    }
-
-    _sendCommit() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.protocol) {
-            const commit = this.protocol.buildCommit(false);
-            this.ws.send(JSON.stringify(commit));
-        }
     }
 
     transcribe(buffer) {

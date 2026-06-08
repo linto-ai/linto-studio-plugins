@@ -83,5 +83,24 @@ pipeline {
                 }
             }
         }
+
+        // TEMPORARY: build only the transcriber image under a dedicated, isolated
+        // tag for the re-anchor freeze fix validation on kube-linto-ai. Does not
+        // touch latest / latest-unstable and does not notify linto-deploy.
+        // Remove this stage once the fix is merged to next/main.
+        stage('Docker build for reanchor-fix validation branch') {
+            when {
+                branch 'fix/transcriber-voxtral-reanchor-freeze'
+            }
+            steps {
+                echo 'Publishing studio-plugins-transcriber:reanchor-fix'
+                script {
+                    def image = docker.build("${env.DOCKER_HUB_REPO}/studio-plugins-transcriber", "-f Transcriber/Dockerfile .")
+                    docker.withRegistry('https://registry.hub.docker.com', env.DOCKER_HUB_CRED) {
+                        image.push('reanchor-fix')
+                    }
+                }
+            }
+        }
     }
 }

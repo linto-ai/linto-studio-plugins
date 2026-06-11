@@ -12,6 +12,7 @@ require('./tests/test_translation_helpers');
 require('./tests/test_route_controllers');
 require('./tests/test_circular_buffer_overflow.js');
 require('./tests/test_asr_pause_resume.js');
+require('./tests/test_asr_flush_finals.js');
 require('./tests/test_security_diag.js');
 require('./tests/test_brokerclient_snapshot.js');
 require('./tests/test_amazon_epoch.js');

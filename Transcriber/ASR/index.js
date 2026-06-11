@@ -41,6 +41,7 @@ class ASR extends eventEmitter {
     // result, secondary results fall back to the current segmentId.
     this._lastPrimarySegmentId = this.segmentId;
     this.paused = false;
+    this._flushed = false;
     this._transitionLock = Promise.resolve();
     // Chain init() into the transition lock so any pause()/resume() queued
     // right after construction runs *after* init() has set up provider/state.
@@ -208,6 +209,37 @@ class ASR extends eventEmitter {
     });
   }
 
+  // Stop the provider WITH listeners still attached so any finals it flushes
+  // during stop() (e.g. Azure stopContinuousRecognitionAsync delivering the
+  // pending recognized result) are still emitted as 'final' and published to
+  // the broker BEFORE the end-of-stream bot marker (streamStopped). Chained on
+  // the transition lock so it never interleaves with pause()/resume(), and
+  // bounded so a hung provider can never delay the marker indefinitely.
+  async flushFinals() {
+    return this._chainTransition(async () => {
+      if (this._flushed || !this.provider || this.paused) return;
+      this._flushed = true;
+      const flushTimeoutMs = parseInt(process.env.ASR_STOP_FLUSH_TIMEOUT_MS, 10) || 3000;
+      let flushTimer;
+      try {
+        await Promise.race([
+          this.provider.stop(),
+          new Promise((resolve) => { flushTimer = setTimeout(resolve, flushTimeoutMs); }),
+        ]);
+      } catch (error) {
+        this.logger.warn(`flushFinals: provider.stop() error: ${error.message}`);
+      } finally {
+        clearTimeout(flushTimer);
+      }
+      // Some SDKs keep delivering callbacks shortly after stop() acks (see the
+      // epoch comment in ASR/microsoft/index.js). Give stragglers a beat
+      // before the end-of-stream marker is emitted.
+      const settleMs = parseInt(process.env.ASR_STOP_SETTLE_MS, 10) || 300;
+      await new Promise((resolve) => setTimeout(resolve, settleMs));
+      this.state = ASR.states.CLOSED;
+    });
+  }
+
   streamStopped() {
       if (!this.provider) {
         this.logger.warn('streamStopped called but provider is null');
@@ -303,7 +335,11 @@ class ASR extends eventEmitter {
       }
       if (this.provider) {
         this.provider.removeAllListeners();
-        await this.provider.stop();
+        // flushFinals() already stopped the provider (with listeners attached,
+        // so its in-flight finals were published); skip the redundant stop.
+        if (!this._flushed) {
+          await this.provider.stop();
+        }
       }
     } catch (error) {
       this.logger.error(`Error when saving the audio file: ${error}`)

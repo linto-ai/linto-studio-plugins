@@ -69,25 +69,10 @@ class StreamingServer extends Component {
         }
       });
 
-      server.on('session-stop', (session, channelId) => {
+      server.on('session-stop', async (session, channelId) => {
         try {
           logger.info(`Session ${session.id}, channel ${channelId} stopped`);
-          const asr = this.ASRs.get(`${session.id}_${channelId}`);
-          if (!asr) {
-            return;
-          }
-
-          this.preserveSegmentId(session.id, channelId, asr);
-
-          // store in a final with the bot the session-stop
-          asr.streamStopped();
-
-          // clean asr
-          asr.removeAllListeners();
-          asr.dispose();
-          this.ASRs.delete(`${session.id}_${channelId}`);
-          // pass to controllers/StreamingServer.js to forward to broker and mark the session as "ready"" / set channel status in database
-          this.emit('session-stop', session, channelId);
+          await this._stopAsr(session, channelId);
         } catch (error) {
           logger.error(`Error stopping session ${session.id}, channel ${channelId}: ${error}`);
         }
@@ -111,6 +96,32 @@ class StreamingServer extends Component {
     }
   }
 
+
+  // Tear down the ASR of a channel so the end-of-stream bot marker is provably
+  // the LAST final published for the stream, and the deactivate (streamStatus
+  // 'inactive') is published strictly after it:
+  //   1. remove the ASR from the map synchronously (double session-stop guard)
+  //   2. flush in-flight provider finals with listeners still attached
+  //   3. publish the bot end-of-stream marker
+  //   4. preserve the segment-id cursor (it now includes the flushed finals)
+  //   5. detach listeners and dispose (audio save stays fire-and-forget)
+  //   6. emit 'session-stop' -> controllers -> deactivate published last
+  // Returns false when no ASR was registered for the channel.
+  async _stopAsr(session, channelId) {
+    const key = `${session.id}_${channelId}`;
+    const asr = this.ASRs.get(key);
+    if (!asr) {
+      return false;
+    }
+    this.ASRs.delete(key);
+    await asr.flushFinals();
+    asr.streamStopped();
+    this.preserveSegmentId(session.id, channelId, asr);
+    asr.removeAllListeners();
+    asr.dispose();
+    this.emit('session-stop', session, channelId);
+    return true;
+  }
 
   // Create a bot for a channel and store it in the bots map
   async startBot(session, channel, address, botType, enableDisplaySub, subSource) {
@@ -226,19 +237,14 @@ class StreamingServer extends Component {
           mqttClient.unsubscribe(bot._translationTopic)
         }
       }
-      this.emit('session-stop', bot.session, channelId);
+      // Flush + stop the associated ASR first so the end-of-stream marker and
+      // the deactivate are published in order, then dispose the bot itself.
+      const hadAsr = await this._stopAsr(bot.session, channelId);
+      if (!hadAsr) {
+        this.emit('session-stop', bot.session, channelId);
+      }
       await bot.dispose();
       this.bots.delete(botKey);
-
-      // Also stop and remove the associated ASR instance if it exists
-      const asr = this.ASRs.get(botKey);
-      if (asr) {
-        this.preserveSegmentId(sessionId, channelId, asr);
-        asr.streamStopped();
-        asr.removeAllListeners();
-        asr.dispose();
-        this.ASRs.delete(botKey);
-      }
 
       // pass to controllers/StreamingServer.js to forward to broker and mark the session as inactive / set channel status in database
       logger.info(`Session ${sessionId}, channel ${channelId} stopped`);

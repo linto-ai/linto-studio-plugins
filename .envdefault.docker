@@ -47,6 +47,12 @@ DB_NAME=mydb
 ##### ASR #####
 TRANSCRIBER_BOT_NAME=bot
 TRANSCRIBER_RESET_MESSAGE="Channel reset."
+# Max time the Transcriber waits for the ASR provider to flush its pending
+# finals at stream stop, before emitting the end-of-stream marker (ms)
+ASR_STOP_FLUSH_TIMEOUT_MS=3000
+# Grace period after the provider flush for straggler SDK callbacks, before
+# the end-of-stream marker is emitted (ms)
+ASR_STOP_SETTLE_MS=300
 ASR_AVAILABLE_TRANSLATIONS_MICROSOFT="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
 ASR_HAS_DIARIZATION_MICROSOFT=true
 

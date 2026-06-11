@@ -589,6 +589,8 @@ module.exports = (webserver) => {
                     throw new ApiError(400, "Active or paused sessions cannot be stopped without force parameter");
                 }
 
+                const waitFinal = req.query.waitFinal === 'true';
+
                 // If session is not active or force is true, proceed with update
                 await Model.Session.update({
                     status: 'terminated',
@@ -598,14 +600,49 @@ module.exports = (webserver) => {
                         'id': sessionId
                     }
                 });
-                await Model.Channel.update({
-                    streamStatus: 'inactive'
-                }, {
-                    where: {
-                        'sessionId': sessionId
-                    }
-                });
+                if (!waitFinal) {
+                    // Legacy behaviour, byte-for-byte: callers that do not opt in
+                    // to the drain barrier get the channels forced inactive now.
+                    await Model.Channel.update({
+                        streamStatus: 'inactive'
+                    }, {
+                        where: {
+                            'sessionId': sessionId
+                        }
+                    });
+                }
+                // Removing the session from the retained statuses broadcast makes
+                // the transcribers force-cut any stream still open, triggering the
+                // flush -> end-of-stream marker -> deactivate sequence.
                 webserver.emit('session-update');
+
+                if (waitFinal) {
+                    // Drain barrier: wait until every channel has been deactivated
+                    // by its transcriber. The Scheduler serializes per-channel
+                    // commits (finals -> marker -> inactive), so once no channel is
+                    // 'active' every published caption is committed and visible.
+                    const timeoutMs = parseInt(process.env.SESSION_STOP_FLUSH_TIMEOUT_MS, 10) || 10000;
+                    const deadline = Date.now() + timeoutMs;
+                    let stillActive = await Model.Channel.count({
+                        where: { sessionId, streamStatus: 'active' }
+                    });
+                    while (stillActive > 0 && Date.now() < deadline) {
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                        stillActive = await Model.Channel.count({
+                            where: { sessionId, streamStatus: 'active' }
+                        });
+                    }
+                    if (stillActive > 0) {
+                        logger.warn(`stop waitFinal: ${stillActive} channel(s) of session ${sessionId} still active after ${timeoutMs}ms — captions may be incomplete`);
+                    }
+                    // Normalize every still-open channel to inactive so the session is
+                    // never left half-open (legacy parity: the old path forced ALL
+                    // channels inactive unconditionally).
+                    await Model.Channel.update(
+                        { streamStatus: 'inactive' },
+                        { where: { sessionId, streamStatus: { [Model.Op.ne]: 'inactive' } } }
+                    );
+                }
 
                 const result = await getSessionResult(session.id);
                 res.json(result);

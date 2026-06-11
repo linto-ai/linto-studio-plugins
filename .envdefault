@@ -61,6 +61,9 @@ ASR_STOP_FLUSH_TIMEOUT_MS=3000
 # Grace period after the provider flush for straggler SDK callbacks, before
 # the end-of-stream marker is emitted (ms)
 ASR_STOP_SETTLE_MS=300
+# Max time PUT /sessions/:id/stop?waitFinal=true waits for every channel to be
+# deactivated by its transcriber before reading captions as-is (ms)
+SESSION_STOP_FLUSH_TIMEOUT_MS=10000
 ASR_AVAILABLE_TRANSLATIONS_MICROSOFT="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
 ASR_HAS_DIARIZATION_MICROSOFT=true
 ASR_AVAILABLE_TRANSLATIONS_AMAZON=""

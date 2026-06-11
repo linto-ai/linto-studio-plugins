@@ -22,6 +22,13 @@ class BrokerClient extends Component {
     this.timeoutId = null
     this.emit("connecting");
     this.transcribers = new Array(); // internal scheduler representation of system transcribers.
+    // Per-channel persistence chains: serialize caption/translation/status
+    // writes so the Postgres commit order matches the MQTT arrival order.
+    // The end-of-stream bot marker (published by the Transcriber after its
+    // provider flush) and the 'inactive' deactivate (published after the
+    // marker) then become true barriers: a reader that sees them committed is
+    // guaranteed to see every earlier final of the channel.
+    this.channelPersistChains = new Map();
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
@@ -260,6 +267,26 @@ class BrokerClient extends Component {
     } catch (error) {
       logger.error('Failed to stop bot:', error);
     }
+  }
+
+  // Append a persistence task to the channel's serialized chain. The
+  // .catch(() => {}) guards keep one failed write from breaking the chain —
+  // saveTranscription/saveTranslation/updateSession already log their own
+  // errors. The map entry is pruned once the chain settles and is still the
+  // tail, so the map stays bounded.
+  chainChannelPersist(sessionId, channelId, fn) {
+    const key = `${sessionId}_${channelId}`;
+    const next = (this.channelPersistChains.get(key) || Promise.resolve())
+      .catch(() => {})
+      .then(fn)
+      .catch(() => {});
+    this.channelPersistChains.set(key, next);
+    next.then(() => {
+      if (this.channelPersistChains.get(key) === next) {
+        this.channelPersistChains.delete(key);
+      }
+    });
+    return next;
   }
 
   // ###### TRANSCRIPTION ######

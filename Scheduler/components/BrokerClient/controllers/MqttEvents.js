@@ -8,7 +8,7 @@ module.exports = async function () {
       const sessionId = parts[2];
       const channelId = parts[3];
       const translation = JSON.parse(message.toString());
-      await this.saveTranslation(translation, sessionId, channelId);
+      await this.chainChannelPersist(sessionId, channelId, () => this.saveTranslation(translation, sessionId, channelId));
       return;
     }
 
@@ -16,7 +16,7 @@ module.exports = async function () {
     if (topic.endsWith('final')) {
       const [type, direction, sessionId, channelId, action] = topic.split('/');
       const transcription = JSON.parse(message.toString());
-      await this.saveTranscription(transcription, sessionId, channelId);
+      await this.chainChannelPersist(sessionId, channelId, () => this.saveTranscription(transcription, sessionId, channelId));
       return;
     }
 
@@ -40,7 +40,7 @@ module.exports = async function () {
             status: newStreamStatus,
             channelId: channelId
           } = JSON.parse(message.toString());
-          this.updateSession(transcriberId, sessionId, channelId, newStreamStatus);
+          this.chainChannelPersist(sessionId, channelId, () => this.updateSession(transcriberId, sessionId, channelId, newStreamStatus));
         }
         break;
       case 'translator':

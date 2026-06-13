@@ -43,6 +43,29 @@ def buildAllPlugins(version, commit_sha) {
     buildDockerfile('TranslatorPython', 'studio-plugins-translator', version, commit_sha, 'TranslatorPython')
 }
 
+// Best-effort deploy of a freshly built image to the staging cluster (full CI/CD).
+// Needs a Jenkins SSH credential 'staging-deploy-ssh' (key for ubuntu@bm2-3s);
+// if absent the build still succeeds (push-only).
+def stagingDeploy(image_name, tag) {
+    try {
+        withCredentials([sshUserPrivateKey(credentialsId: 'staging-deploy-ssh', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+            sh "ssh -i \$SSH_KEY -o StrictHostKeyChecking=no \$SSH_USER@163.114.159.33 'staging-deploy ${image_name} ${tag}'"
+        }
+    } catch (err) {
+        echo "Staging auto-deploy skipped for ${image_name}:${tag} (add the 'staging-deploy-ssh' credential to enable): ${err}"
+    }
+}
+
+// Build one plugin image, push it to the private staging registry as dev-<slug>, deploy it.
+def buildStagingPlugin(folder_name, image_name, tag, context = '.') {
+    def fullImage = "registry.staging.linto.ai/lintoai/${image_name}"
+    def image = docker.build(fullImage, "-f ${folder_name}/Dockerfile ${context}")
+    docker.withRegistry('https://registry.staging.linto.ai', 'staging-registry-credentials') {
+        image.push(tag)
+    }
+    stagingDeploy(image_name, tag)
+}
+
 pipeline {
     agent any
     environment {
@@ -77,9 +100,34 @@ pipeline {
             steps {
                 echo 'Publishing latest-unstable'
                 script {
+                    def changedFiles = sh(returnStdout: true, script: 'git diff --name-only HEAD^ HEAD').trim()
+                    // Skip the latest-unstable rebuild for purely CI/docs commits
+                    if (changedFiles.readLines().every { it == 'Jenkinsfile' || it.endsWith('.md') }) {
+                        echo "Only CI/docs changed (${changedFiles}); skip latest-unstable rebuild"
+                        return
+                    }
                     def commit_sha = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
 
                     buildAllPlugins('latest-unstable', commit_sha)
+                }
+            }
+        }
+
+        // Streaming core only (transcriber/scheduler/session-api/migration) — no
+        // translator (needs a translate model, out of scope for staging).
+        stage('Docker build for staging branches') {
+            when {
+                branch 'staging/*'
+            }
+            steps {
+                echo 'Building staging feature-branch images (streaming plugins, private registry, never Docker Hub)'
+                script {
+                    def slug = env.BRANCH_NAME.replaceFirst('^staging/', '').replaceAll('[^a-zA-Z0-9]+', '-').toLowerCase()
+                    def tag = "dev-${slug}"
+                    buildStagingPlugin('Transcriber', 'studio-plugins-transcriber', tag)
+                    buildStagingPlugin('Scheduler', 'studio-plugins-scheduler', tag)
+                    buildStagingPlugin('Session-API', 'studio-plugins-sessionapi', tag)
+                    buildStagingPlugin('migration', 'studio-plugins-migration', tag)
                 }
             }
         }

@@ -46,12 +46,29 @@
         "transcriber_profiles"
       ],
       "summary": "Create a new transcriber config",
-      "description": "For Amazon profiles, use **multipart/form-data** to upload certificate (.crt) and privateKey (.pem) files. The private key **must** be in PKCS#8 format (BEGIN PRIVATE KEY or BEGIN ENCRYPTED PRIVATE KEY). Traditional RSA format (BEGIN RSA PRIVATE KEY) is **not supported** - convert using: `openssl pkcs8 -topk8 -in old.pem -out new.pem`. For other profiles (Microsoft, LinTO), use application/json.",
+      "description": "For Amazon profiles, use **multipart/form-data** to upload certificate (.crt) and privateKey (.pem) files. The private key **must** be in PKCS#8 format (BEGIN PRIVATE KEY or BEGIN ENCRYPTED PRIVATE KEY). Traditional RSA format (BEGIN RSA PRIVATE KEY) is **not supported** - convert using: `openssl pkcs8 -topk8 -in old.pem -out new.pem`. For other profiles (Microsoft, LinTO, Google), use application/json.\n\n**Google** (Cloud Speech-to-Text): authenticate with a Google Cloud **service-account key**. Paste the full service-account JSON into `config.credentials` (stored encrypted, returned obfuscated as `Secret credentials are hidden`). Optional `config.model` (`latest_long` | `latest_short` | `telephony`, empty = Google default) and `config.projectId` (defaults to the key's `project_id`). Languages use BCP-47 codes (e.g. `fr-FR`); up to 3 extra candidates act as alternate languages. Google runs in real-time `StreamingRecognize`, which has **no native translation** (use the external translators downstream). Diarization capability is carried in the profile (`config.hasDiarization`); no server env var is required.",
       "requestBody": {
         "content": {
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/TranscriberProfileRequest"
+            },
+            "examples": {
+              "google": {
+                "summary": "Google Cloud Speech-to-Text profile",
+                "value": {
+                  "config": {
+                    "type": "google",
+                    "name": "Google FR",
+                    "description": "Google STT (French, English fallback)",
+                    "languages": [{ "candidate": "fr-FR" }, { "candidate": "en-US" }],
+                    "credentials": "{\"type\":\"service_account\",\"project_id\":\"my-gcp-project\",\"private_key\":\"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n\",\"client_email\":\"stt@my-gcp-project.iam.gserviceaccount.com\"}",
+                    "model": "latest_long",
+                    "hasDiarization": false
+                  },
+                  "quickMeeting": false
+                }
+              }
             }
           },
           "multipart/form-data": {
@@ -126,7 +143,7 @@
         "transcriber_profiles"
       ],
       "summary": "Update a transcriber config by ID (partial update)",
-      "description": "Updates a transcriber profile with partial data. Only fields provided in the request body will be updated. The config field is merged with the existing configuration. For Amazon profiles, use **multipart/form-data** to update certificate (.crt) and/or privateKey (.pem) files. Private keys **must** be in PKCS#8 format - convert if needed: `openssl pkcs8 -topk8 -in old.pem -out new.pem`.",
+      "description": "Updates a transcriber profile with partial data. Only fields provided in the request body will be updated. The config field is merged with the existing configuration. For Amazon profiles, use **multipart/form-data** to update certificate (.crt) and/or privateKey (.pem) files. Private keys **must** be in PKCS#8 format - convert if needed: `openssl pkcs8 -topk8 -in old.pem -out new.pem`. For **Google** profiles, omit `config.credentials` to keep the stored service-account key, or send a new full service-account JSON to replace it.",
       "parameters": [
         {
           "name": "id",

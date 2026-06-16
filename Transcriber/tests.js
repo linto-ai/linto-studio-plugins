@@ -16,6 +16,8 @@ require('./tests/test_asr_flush_finals.js');
 require('./tests/test_security_diag.js');
 require('./tests/test_brokerclient_snapshot.js');
 require('./tests/test_amazon_epoch.js');
+require('./tests/test_google_transcriber.js');
+require('./tests/test_session_api_validation.js');
 
 
 describe('CircularBuffer', () => {

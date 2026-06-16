@@ -86,7 +86,8 @@
           "enum": [
             "microsoft",
             "linto",
-            "amazon"
+            "amazon",
+            "google"
           ]
         },
         "name": {
@@ -142,7 +143,7 @@
         },
         "credentials": {
           "type": "string",
-          "description": "Auto-generated encrypted bundle containing certificate, private key, and passphrase (read-only, set by server)"
+          "description": "For amazon: auto-generated encrypted bundle (certificate, private key, passphrase). For google: the full Google service-account JSON key text (plaintext on input, stored encrypted, returned obfuscated). Set/encrypted by the server."
         },
         "trustAnchorArn": {
           "type": "string",
@@ -155,6 +156,14 @@
         "roleArn": {
           "type": "string",
           "description": "AWS IAM Role ARN to assume"
+        },
+        "model": {
+          "type": "string",
+          "description": "Google STT model (empty/absent => Google default): \"latest_long\", \"latest_short\", or \"telephony\""
+        },
+        "projectId": {
+          "type": "string",
+          "description": "Google Cloud project ID override (falls back to project_id from the service-account credentials)"
         }
       },
       "oneOf": [
@@ -207,7 +216,8 @@
           "enum": [
             "microsoft",
             "linto",
-            "amazon"
+            "amazon",
+            "google"
           ]
         },
         "name": {
@@ -262,7 +272,7 @@
         },
         "credentials": {
           "type": "string",
-          "description": "Auto-generated encrypted bundle containing certificate, private key, and passphrase (read-only, set by server)"
+          "description": "For amazon: auto-generated encrypted bundle (certificate, private key, passphrase). For google: the full Google service-account JSON key text (plaintext on input, stored encrypted, returned obfuscated). Set/encrypted by the server."
         },
         "trustAnchorArn": {
           "type": "string",
@@ -275,6 +285,14 @@
         "roleArn": {
           "type": "string",
           "description": "AWS IAM Role ARN to assume"
+        },
+        "model": {
+          "type": "string",
+          "description": "Google STT model (empty/absent => Google default): \"latest_long\", \"latest_short\", or \"telephony\""
+        },
+        "projectId": {
+          "type": "string",
+          "description": "Google Cloud project ID override (falls back to project_id from the service-account credentials)"
         }
       }
     }

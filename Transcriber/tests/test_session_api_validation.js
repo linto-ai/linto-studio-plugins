@@ -450,6 +450,75 @@ describe('Session API - Transcriber Profile Validation', function () {
         });
     });
 
+    describe('google profile validation (contract test)', function () {
+
+        // The source uses language-tags' tags.check(); language-tags is not a
+        // dependency of the Transcriber workspace, so we use an equivalent
+        // lightweight BCP-47 check for these contract tests.
+        function isValidLocale(locale) {
+            return typeof locale === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(locale);
+        }
+
+        // Replicate the validation logic including the google branch (mirrors source)
+        function validateTranscriberProfile(body, update = false) {
+            const config = body.config;
+            if (!config) {
+                return { error: 'TranscriberProfile object is missing', status: 400 };
+            }
+            if (!config.type || !config.name || !config.description || !config.languages || !config.languages.length) {
+                return { error: 'TranscriberProfile object is missing required properties', status: 400 };
+            }
+            if (config.type === 'google' && (!config.languages.every(lang => isValidLocale(lang.candidate)) || (!config.credentials && !update))) {
+                return { error: 'Invalid Google TranscriberProfile languages or missing credentials', status: 400 };
+            }
+            if (config.languages.some(lang => typeof lang !== 'object')) {
+                return { error: 'Invalid TranscriberProfile languages', status: 400 };
+            }
+            if (config.languages.some(lang => typeof lang.candidate !== 'string' || (lang.endpoint !== undefined && typeof lang.endpoint !== 'string'))) {
+                return { error: 'Invalid TranscriberProfile language properties', status: 400 };
+            }
+        }
+
+        it('should accept valid google profile with languages and credentials', function () {
+            const result = validateTranscriberProfile({
+                config: {
+                    type: 'google',
+                    name: 'Google STT',
+                    description: 'Test',
+                    credentials: '{"type":"service_account","project_id":"p"}',
+                    languages: [{ candidate: 'en-US' }, { candidate: 'fr-FR' }]
+                }
+            });
+            assert.strictEqual(result, undefined, 'Valid google profile should return undefined (no error)');
+        });
+
+        it('should reject google without credentials on create', function () {
+            const result = validateTranscriberProfile({
+                config: {
+                    type: 'google',
+                    name: 'Google STT',
+                    description: 'Test',
+                    languages: [{ candidate: 'en-US' }]
+                }
+            });
+            assert.ok(result);
+            assert.strictEqual(result.status, 400);
+            assert.ok(result.error.includes('credentials'));
+        });
+
+        it('should accept google without credentials on update', function () {
+            const result = validateTranscriberProfile({
+                config: {
+                    type: 'google',
+                    name: 'Google STT',
+                    description: 'Test',
+                    languages: [{ candidate: 'en-US' }]
+                }
+            }, true);
+            assert.strictEqual(result, undefined);
+        });
+    });
+
     // -------------------------------------------------------------------
     // API key encryption/obfuscation contract tests
     // -------------------------------------------------------------------
@@ -561,6 +630,9 @@ describe('Session API - Transcriber Profile Validation', function () {
             const diarizationEnv = process.env[`ASR_HAS_DIARIZATION_${config.type.toUpperCase()}`];
             if (diarizationEnv) {
                 body.config.hasDiarization = diarizationEnv.toUpperCase() == 'TRUE';
+            } else if (config.type === 'google') {
+                // Google profiles are self-contained: capability carried in the profile.
+                body.config.hasDiarization = config.hasDiarization === true;
             } else {
                 body.config.hasDiarization = false;
             }
@@ -616,6 +688,16 @@ describe('Session API - Transcriber Profile Validation', function () {
             assert.strictEqual(result.config.hasDiarization, true);
             // Restore
             process.env.ASR_HAS_DIARIZATION_OPENAI_STREAMING = 'false';
+        });
+
+        it('should derive google hasDiarization from the profile (no env var)', function () {
+            delete process.env.ASR_HAS_DIARIZATION_GOOGLE;
+            const enabled = extendTranscriberProfile({ config: { type: 'google', hasDiarization: true } });
+            assert.strictEqual(enabled.config.hasDiarization, true);
+            const disabled = extendTranscriberProfile({ config: { type: 'google', hasDiarization: false } });
+            assert.strictEqual(disabled.config.hasDiarization, false);
+            const omitted = extendTranscriberProfile({ config: { type: 'google' } });
+            assert.strictEqual(omitted.config.hasDiarization, false);
         });
     });
 });

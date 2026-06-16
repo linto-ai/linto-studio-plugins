@@ -25,6 +25,9 @@ const validateTranscriberProfile = (body, update=false) => {
         // certificate and privateKey will be validated in the route handler after file upload
         return;
     }
+    if (config.type === 'google' && (!config.languages.every(lang => isValidLocale(lang.candidate)) || (!config.credentials && !update))) {
+        return { error: 'Invalid Google TranscriberProfile languages or missing credentials', status: 400 };
+    }
     if (config.type === 'openai_streaming') {
         if (!config.endpoint || !config.model) {
             return { error: 'OpenAI Streaming profiles require endpoint and model', status: 400 };
@@ -124,6 +127,11 @@ const extendTranscriberProfile = (body) => {
     const diarizationEnv = process.env[`ASR_HAS_DIARIZATION_${config.type.toUpperCase()}`];
     if (diarizationEnv) {
         body.config.hasDiarization = diarizationEnv.toUpperCase() == 'TRUE';
+    }
+    else if (config.type === 'google') {
+        // Google profiles are fully self-contained: the diarization capability is
+        // carried in the profile itself (no deployment env var required).
+        body.config.hasDiarization = config.hasDiarization === true;
     }
     else {
         body.config.hasDiarization = false;

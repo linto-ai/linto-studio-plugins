@@ -16,10 +16,9 @@ class ApiError extends Error {
 // KEEP IN SYNC with AZURE_DISTINCT_TARGETS in Transcriber/ASR/microsoft/azureLocale.js.
 const COLLISION_RISK_PRIMARIES = new Set(['pt', 'fr', 'zh', 'sr', 'tlh']);
 
-// Audio-only channel: no profile is signalled by a missing/null id or the -1 sentinel.
-const NO_TRANSCRIBER_PROFILE = -1;
+// Audio-only channel: no profile is signalled by a missing or null id.
 function hasNoTranscriberProfile(transcriberProfileId) {
-    return transcriberProfileId == null || transcriberProfileId === NO_TRANSCRIBER_PROFILE;
+    return transcriberProfileId == null;
 }
 
 // Returns the profile for the id, null for an audio-only channel, or throws 400 if the id is unknown.
@@ -121,7 +120,6 @@ module.exports = {
     validateTranslations,
     bcp47Equal,
     enrichTranslations,
-    NO_TRANSCRIBER_PROFILE,
     hasNoTranscriberProfile,
     resolveTranscriberProfile,
 };

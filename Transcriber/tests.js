@@ -16,6 +16,7 @@ require('./tests/test_asr_flush_finals.js');
 require('./tests/test_security_diag.js');
 require('./tests/test_brokerclient_snapshot.js');
 require('./tests/test_amazon_epoch.js');
+require('./tests/test_segmentation');
 require('./tests/test_segmentation_reanchor');
 
 

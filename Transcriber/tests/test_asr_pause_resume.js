@@ -14,62 +14,18 @@
  */
 
 const assert = require('assert');
-const path = require('path');
 const { describe, it, before, after, beforeEach } = require('mocha');
+const { setupMocks, fromTranscriber } = require('./helpers/asr_mocks');
 
-// ---- Mocks ---------------------------------------------------------------
-
-const mockLogger = {
-    info() {}, warn() {}, error() {}, debug() {}, log() {},
-    getChannelLogger() {
-        return { info() {}, warn() {}, error() {}, debug() {}, log() {} };
-    }
+// ASR-wrapper family: drive the real ASR/index.js + FakeTranscriber against the
+// shared mocks (no ws stub, real CircularBuffer for audio buffering).
+const ASR_MOCK_OPTS = {
+    invalidate: [fromTranscriber('ASR/index.js'), fromTranscriber('ASR/fake/index.js')],
+    mockWs: false,
+    circularBuffer: true,
 };
 
-const liveSrtLibPath = require.resolve('live-srt-lib');
-const transcriberLoggerPath = path.resolve(__dirname, '../logger.js');
-const asrIndexPath = path.resolve(__dirname, '../ASR/index.js');
-const fakeIndexPath = path.resolve(__dirname, '../ASR/fake/index.js');
-
 let teardown;
-
-function setupMocks() {
-    const origLib = require.cache[liveSrtLibPath];
-    const origLogger = require.cache[transcriberLoggerPath];
-
-    require.cache[liveSrtLibPath] = {
-        id: liveSrtLibPath,
-        filename: liveSrtLibPath,
-        loaded: true,
-        exports: {
-            CircularBuffer: require('../../lib/circularbuffer.js'),
-            logger: mockLogger,
-            Model: {},
-            Security: class {
-                encrypt(t) { return t; }
-                decrypt(t) { return t; }
-                safeDecrypt(t) { return t; }
-            },
-        },
-    };
-
-    require.cache[transcriberLoggerPath] = {
-        id: transcriberLoggerPath,
-        filename: transcriberLoggerPath,
-        loaded: true,
-        exports: mockLogger,
-    };
-
-    delete require.cache[asrIndexPath];
-    delete require.cache[fakeIndexPath];
-
-    return function () {
-        if (origLib) require.cache[liveSrtLibPath] = origLib; else delete require.cache[liveSrtLibPath];
-        if (origLogger) require.cache[transcriberLoggerPath] = origLogger; else delete require.cache[transcriberLoggerPath];
-        delete require.cache[asrIndexPath];
-        delete require.cache[fakeIndexPath];
-    };
-}
 
 // ---- Test environment ----------------------------------------------------
 
@@ -84,7 +40,7 @@ describe('ASR pause/resume', () => {
 
     before(() => {
         process.env.MIN_AUDIO_BUFFER = '1'; // 1 ms => 1 byte threshold given test env
-        teardown = setupMocks();
+        teardown = setupMocks(ASR_MOCK_OPTS);
         ASR = require('../ASR/index.js');
         FakeTranscriber = require('../ASR/fake/index.js');
     });

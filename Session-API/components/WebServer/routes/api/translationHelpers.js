@@ -16,6 +16,22 @@ class ApiError extends Error {
 // KEEP IN SYNC with AZURE_DISTINCT_TARGETS in Transcriber/ASR/microsoft/azureLocale.js.
 const COLLISION_RISK_PRIMARIES = new Set(['pt', 'fr', 'zh', 'sr', 'tlh']);
 
+// Audio-only channel: no profile is signalled by a missing/null id or the -1 sentinel.
+const NO_TRANSCRIBER_PROFILE = -1;
+function hasNoTranscriberProfile(transcriberProfileId) {
+    return transcriberProfileId == null || transcriberProfileId === NO_TRANSCRIBER_PROFILE;
+}
+
+// Returns the profile for the id, null for an audio-only channel, or throws 400 if the id is unknown.
+async function resolveTranscriberProfile(transcriberProfileId, transaction) {
+    if (hasNoTranscriberProfile(transcriberProfileId)) return null;
+    const profile = await Model.TranscriberProfile.findByPk(transcriberProfileId, { transaction });
+    if (!profile) {
+        throw new ApiError(400, `Transcriber profile with id ${transcriberProfileId} not found`);
+    }
+    return profile;
+}
+
 function validateTranslations(translations) {
     if (!translations) return null;
     if (!Array.isArray(translations)) throw new ApiError(400, "translations must be an array");
@@ -105,4 +121,7 @@ module.exports = {
     validateTranslations,
     bcp47Equal,
     enrichTranslations,
+    NO_TRANSCRIBER_PROFILE,
+    hasNoTranscriberProfile,
+    resolveTranscriberProfile,
 };

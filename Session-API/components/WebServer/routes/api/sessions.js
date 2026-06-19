@@ -1,5 +1,5 @@
 const { Model, logger } = require("live-srt-lib")
-const { ApiError, validateTranslations, enrichTranslations } = require('./translationHelpers');
+const { ApiError, validateTranslations, enrichTranslations, hasNoTranscriberProfile, resolveTranscriberProfile } = require('./translationHelpers');
 
 // Fields a client may set via PUT/PATCH on /sessions/:id.
 // System-managed fields (id, status, startTime, endTime, pausedAt, erroredOn,
@@ -333,22 +333,20 @@ module.exports = (webserver) => {
                         throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
-                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
-                    if (!transcriberProfile) {
-                        throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
-                    }
-                    const languages = transcriberProfile.config.languages.map(language => language.candidate)
-                    const translations = await enrichTranslations(validatedTranslations, transcriberProfile);
+                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
+                    const languages = transcriberProfile ? transcriberProfile.config.languages.map(language => language.candidate) : [];
+                    const translations = transcriberProfile ? await enrichTranslations(validatedTranslations, transcriberProfile) : validatedTranslations;
                     await Model.Channel.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
                         compressAudio: channel.compressAudio ?? true,
-                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
+                        // No profile: force live transcripts off (FakeTranscriber path).
+                        enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations,
                         streamStatus: 'inactive',
                         sessionId: session.id,
-                        transcriberProfileId: transcriberProfile.id,
+                        transcriberProfileId: transcriberProfile ? transcriberProfile.id : null,
                         name: channel.name,
                         meta: channel.meta
                     }, { transaction });
@@ -420,11 +418,12 @@ module.exports = (webserver) => {
                         }
 
                         const updatedAttrs = updatedChannel;
+                        const clearingProfile = 'transcriberProfileId' in updatedChannel && hasNoTranscriberProfile(updatedChannel.transcriberProfileId);
 
                         if (updatedChannel.translations) {
                             const validated = validateTranslations(updatedChannel.translations);
-                            const profileId = updatedChannel.transcriberProfileId || currentChannel.transcriberProfileId;
-                            const profile = await Model.TranscriberProfile.findByPk(profileId, { transaction });
+                            const profileId = clearingProfile ? null : (updatedChannel.transcriberProfileId || currentChannel.transcriberProfileId);
+                            const profile = profileId ? await Model.TranscriberProfile.findByPk(profileId, { transaction }) : null;
                             updatedAttrs.translations = profile ? await enrichTranslations(validated, profile) : validated;
                         }
 
@@ -432,13 +431,14 @@ module.exports = (webserver) => {
                             throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                         }
 
-                        if (updatedChannel.transcriberProfileId) {
-                            let transcriberProfile = await Model.TranscriberProfile.findByPk(updatedChannel.transcriberProfileId, { transaction });
-                            if (!transcriberProfile) {
-                                throw new ApiError(400, `Transcriber profile with id ${updatedChannel.transcriberProfileId} not found`);
-                            }
-                            const languages = transcriberProfile.config.languages.map(language => language.candidate);
-                            updatedAttrs.languages = languages;
+                        if (clearingProfile) {
+                            // Switch the channel to audio-only.
+                            updatedAttrs.transcriberProfileId = null;
+                            updatedAttrs.languages = [];
+                            updatedAttrs.enableLiveTranscripts = false;
+                        } else if (updatedChannel.transcriberProfileId) {
+                            const transcriberProfile = await resolveTranscriberProfile(updatedChannel.transcriberProfileId, transaction);
+                            updatedAttrs.languages = transcriberProfile.config.languages.map(language => language.candidate);
                         }
 
                         await Model.Channel.update({
@@ -482,23 +482,21 @@ module.exports = (webserver) => {
                         throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
-                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
-                    if (!transcriberProfile) {
-                        throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
-                    }
-                    const languages = transcriberProfile.config.languages.map(language => language.candidate)
-                    const translations = await enrichTranslations(validatedTranslations, transcriberProfile);
+                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
+                    const languages = transcriberProfile ? transcriberProfile.config.languages.map(language => language.candidate) : [];
+                    const translations = transcriberProfile ? await enrichTranslations(validatedTranslations, transcriberProfile) : validatedTranslations;
 
                     await Model.Channel.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
                         compressAudio: channel.compressAudio ?? true,
-                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
+                        // No profile: force live transcripts off (FakeTranscriber path).
+                        enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
                         translations: translations,
                         streamStatus: 'inactive',
                         sessionId: session.id,
-                        transcriberProfileId: transcriberProfile.id,
+                        transcriberProfileId: transcriberProfile ? transcriberProfile.id : null,
                         name: channel.name,
                         meta: channel.meta
                     }, { transaction });

@@ -1,5 +1,5 @@
 const { Model, logger } = require("live-srt-lib")
-const { ApiError, validateTranslations } = require('./translationHelpers');
+const { ApiError, validateTranslations, resolveTranscriberProfile } = require('./translationHelpers');
 
 function parseBoolean(v) {
     if (v === "true" || v === true) {
@@ -113,20 +113,18 @@ module.exports = (webserver) => {
                 // Create channel templates
                 for (const channel of channels) {
                     const translations = validateTranslations(channel.translations);
-                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
-                    if (!transcriberProfile) {
-                        throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
-                    }
-                    const languages = transcriberProfile.config.languages.map(language => language.candidate)
+                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
+                    const languages = transcriberProfile ? transcriberProfile.config.languages.map(language => language.candidate) : []
                     await Model.ChannelTemplate.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
                         compressAudio: channel.compressAudio ?? true,
-                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
+                        // No profile: force live transcripts off (FakeTranscriber path).
+                        enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages,
                         translations: translations,
                         sessionTemplateId: sessionTemplate.id,
-                        transcriberProfileId: transcriberProfile.id,
+                        transcriberProfileId: transcriberProfile ? transcriberProfile.id : null,
                         name: channel.name,
                         meta: channel.meta
                     }, { transaction });
@@ -184,20 +182,18 @@ module.exports = (webserver) => {
                 // Recreate channels
                 for (const channel of channels) {
                     const translations = validateTranslations(channel.translations);
-                    let transcriberProfile = await Model.TranscriberProfile.findByPk(channel.transcriberProfileId, { transaction });
-                    if (!transcriberProfile) {
-                        throw new ApiError(400, `Transcriber profile with id ${channel.transcriberProfileId} not found`);
-                    }
-                    const languages = transcriberProfile.config.languages.map(language => language.candidate)
+                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
+                    const languages = transcriberProfile ? transcriberProfile.config.languages.map(language => language.candidate) : []
                     await Model.ChannelTemplate.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
                         compressAudio: channel.compressAudio ?? true,
-                        enableLiveTranscripts: channel.enableLiveTranscripts ?? true,
+                        // No profile: force live transcripts off (FakeTranscriber path).
+                        enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages,
                         translations: translations,
                         sessionTemplateId: sessionTemplate.id,
-                        transcriberProfileId: transcriberProfile.id,
+                        transcriberProfileId: transcriberProfile ? transcriberProfile.id : null,
                         name: channel.name,
                         meta: channel.meta
                     }, { transaction });

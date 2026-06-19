@@ -111,14 +111,15 @@ class ASR extends eventEmitter {
         this.audioFile = fs.createWriteStream(audioFilePath);
       }
       this.audioBuffer = new CircularBuffer();
-      this.logger.info(`Starting ${channel.transcriberProfile.config.type} ASR`);
 
-      // Use the FakeTranscriber if live transcripts are disabled
-      if (!this.channel.enableLiveTranscripts) {
+      // FakeTranscriber when live transcripts are off or no profile is set (audio-only).
+      const hasProfile = !!(channel.transcriberProfile && channel.transcriberProfile.config);
+      if (!this.channel.enableLiveTranscripts || !hasProfile) {
         this.provider = new FakeTranscriber(this.session, channel);
         this.logger.info("ASR started with FakeTranscriber");
       }
       else {
+        this.logger.info(`Starting ${channel.transcriberProfile.config.type} ASR`);
         const backend = loadAsr(channel.transcriberProfile.config.type);
         this.provider = new backend(this.session, this.channel);
       }

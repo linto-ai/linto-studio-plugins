@@ -1,6 +1,5 @@
 const assert = require('assert');
-const EventEmitter = require('eventemitter3');
-const path = require('path');
+const { setupMocks } = require('./helpers/asr_mocks');
 
 // Regression guard for the acute Voxtral freeze at RoPE re-anchor.
 //
@@ -11,67 +10,6 @@ const path = require('path');
 // delta output for ~10s. The reference client (ws_load.py) sends no
 // mid-session commit and passes re-anchors cleanly. This test pins the
 // behaviour so the commit-drain is not silently re-introduced.
-
-const mockLogger = {
-    info() {}, warn() {}, error() {}, debug() {},
-    getChannelLogger() {
-        return { info() {}, warn() {}, error() {}, debug() {}, log() {} };
-    }
-};
-
-class MockSecurity {
-    safeDecrypt(text) { return text; }
-}
-
-class MockWebSocket extends EventEmitter {
-    constructor(url, options) {
-        super();
-        this.readyState = 1;
-        this.sentMessages = [];
-        this.closed = false;
-    }
-    send(data) { this.sentMessages.push(data); }
-    close() { this.closed = true; this.readyState = 3; }
-    static get OPEN() { return 1; }
-    static get CLOSED() { return 3; }
-}
-
-const transcriberPath = path.resolve(__dirname, '../ASR/openai_streaming/index.js');
-const loggerPath = path.resolve(__dirname, '../logger.js');
-
-function setupMocks() {
-    const wsModulePath = require.resolve('ws');
-    const liveSrtLibPath = require.resolve('live-srt-lib');
-
-    const origWs = require.cache[wsModulePath];
-    const origLiveSrtLib = require.cache[liveSrtLibPath];
-    const origLogger = require.cache[loggerPath];
-
-    require.cache[wsModulePath] = {
-        id: wsModulePath, filename: wsModulePath, loaded: true,
-        exports: MockWebSocket
-    };
-    require.cache[liveSrtLibPath] = {
-        id: liveSrtLibPath, filename: liveSrtLibPath, loaded: true,
-        exports: { Security: MockSecurity, logger: mockLogger, Model: {} }
-    };
-    require.cache[loggerPath] = {
-        id: loggerPath, filename: loggerPath, loaded: true,
-        exports: mockLogger
-    };
-
-    delete require.cache[transcriberPath];
-
-    return function teardown() {
-        if (origWs) require.cache[wsModulePath] = origWs;
-        else delete require.cache[wsModulePath];
-        if (origLiveSrtLib) require.cache[liveSrtLibPath] = origLiveSrtLib;
-        else delete require.cache[liveSrtLibPath];
-        if (origLogger) require.cache[loggerPath] = origLogger;
-        else delete require.cache[loggerPath];
-        delete require.cache[transcriberPath];
-    };
-}
 
 describe('Segmentation: re-anchor freeze guard (no mid-session commit)', function () {
     let OpenAIStreamingTranscriber;
@@ -144,5 +82,52 @@ describe('Segmentation: re-anchor freeze guard (no mid-session commit)', functio
         assert.strictEqual(emitted.length, 1, 'segment should be emitted after the grace period');
         assert.strictEqual(t._draining, false, 'drain should be cleared after emit');
         assert.strictEqual(commitsSent(t).length, 0, 'no mid-session commit at any point');
+    });
+
+    // Enter drain on hard silence, then have a late token land *after* the drain
+    // started (lastDeltaTime advances past _drainStartTime — the Voxtral
+    // delayed-token case the grace exists for). The next hard-silence tick must
+    // see the fresher token and abort the drain rather than emit a truncated
+    // segment. Returns the transcriber, the captured emissions and lateToken.
+    function drainThenLateToken() {
+        const t = makeTranscriber();
+        const emitted = [];
+        t.on('transcribed', p => emitted.push(p));
+
+        const base = 100000;
+        t.accumulatedText = NO_PUNCT_TEXT;
+        t.lastDeltaTime = base;
+
+        const drainStart = base + t.hardSilenceMs + 1;
+        t._runSegmentationTick(drainStart);                 // enter drain
+
+        const lateToken = drainStart + 5;
+        t.accumulatedText = NO_PUNCT_TEXT + ' and a late tail';
+        t.lastDeltaTime = lateToken;
+        t._runSegmentationTick(lateToken + t.hardSilenceMs + 1);   // abort drain
+
+        return { t, emitted, lateToken };
+    }
+
+    it('aborts the drain without emitting when a late token arrives after drain started', function () {
+        const { t, emitted } = drainThenLateToken();
+
+        assert.strictEqual(emitted.length, 0, 'must not emit while fresh tokens are still arriving');
+        assert.strictEqual(t._draining, false, 'drain should be aborted so it can restart cleanly');
+        assert.strictEqual(commitsSent(t).length, 0, 'still no mid-session commit');
+    });
+
+    it('emits the extended segment once silence settles after the late token (no text lost)', function () {
+        const { t, emitted, lateToken } = drainThenLateToken();
+
+        // Silence now truly settles (no further tokens): re-enter drain and let
+        // the grace expire so the full, late-token-inclusive segment is emitted.
+        const reDrainStart = lateToken + t.hardSilenceMs + 1;
+        t._runSegmentationTick(reDrainStart);                       // re-enter drain
+        t._runSegmentationTick(reDrainStart + GRACE_OVERSHOOT_MS);  // grace expired -> emit
+
+        assert.strictEqual(emitted.length, 1, 'segment should eventually emit once silence settles');
+        assert.ok(emitted[0].text.includes('late tail'), 'the late token must not be dropped from the segment');
+        assert.strictEqual(commitsSent(t).length, 0, 'still no mid-session commit');
     });
 });

@@ -1,0 +1,22 @@
+{
+  "name": "live-transcription-open-source-toolbox-botservice",
+  "version": "1.0.0",
+  "description": "Live Transcription Open Source Toolbox : BotService component — dedicated, autonomous meeting-bot service (Visio/Teams/Jitsi/BBB web bots)",
+  "main": "botservice.js",
+  "scripts": {
+    "start": "node botservice.js",
+    "start-live": "npx -y nodemon botservice.js",
+    "test": "./node_modules/.bin/mocha --exit --recursive tests/"
+  },
+  "author": "LINAGORA",
+  "license": "EUPL",
+  "dependencies": {
+    "live-srt-lib": "file:../lib",
+    "playwright": "^1.49.0",
+    "uuid": "^9.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "mocha": "^11.7.5"
+  }
+}

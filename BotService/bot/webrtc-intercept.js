@@ -1,0 +1,307 @@
+/**
+ * WebRTC interception script generator.
+ *
+ * Produces a self-contained JavaScript string injected into the meeting page via
+ * page.addInitScript(). It runs entirely in the browser and:
+ *   1. patches RTCPeerConnection to capture every inbound audio track;
+ *   2. resamples each track to 16 kHz S16LE in-page (AudioWorklet, ScriptProcessor
+ *      fallback) and streams it as binary frames to the loopback LocalAudioServer;
+ *   3. maps tracks to participants per platform so the Node side can do native
+ *      diarization (SFU) or forward server-side speaker info (Teams).
+ *
+ * Binary frame: [uint16BE trackIndex][uint16BE reserved=0][...PCM]. Control
+ * messages are sent as JSON text frames.
+ *
+ * Only the block for the requested platform is emitted, so a Visio bot never
+ * ships Teams introspection and vice-versa. The participant-mapping pollers
+ * depend on each platform's (undocumented) client internals — Jitsi's
+ * `window.APP.conference`, LiveKit's React Room object, Teams' `window.callingDebug`
+ * — and fail soft (a missing internal just means "not ready yet").
+ *
+ * @param {string} localWsUrl  ws://127.0.0.1:PORT/bot-<sessionId>_<channelId>
+ * @param {object} platformConfig  manifest: { platformType: 'sfu'|'mcu'|'teams', debug? }
+ * @returns {string} JavaScript source to inject
+ */
+function getInterceptScript (localWsUrl, platformConfig) {
+  const debug = !!platformConfig.debug
+  const platformType = platformConfig.platformType || 'unknown'
+  const platformBlock = platformType === 'sfu'
+    ? SFU_MAPPING_BLOCK
+    : platformType === 'teams' ? TEAMS_SPEAKER_BLOCK : ''
+
+  return `
+(function () {
+  'use strict';
+  const LOCAL_WS_URL = ${JSON.stringify(localWsUrl)};
+  const PLATFORM_TYPE = ${JSON.stringify(platformType)};
+  const DEBUG = ${JSON.stringify(debug)};
+  const TARGET_SAMPLE_RATE = 16000;
+  const MAX_RECONNECT_RETRIES = 10;
+  const RECONNECT_DELAY_MS = 1000;
+  const intervals = [];
+
+  function log() { if (DEBUG) console.log.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); }
+
+  // ── Loopback WebSocket to the Node LocalAudioServer ───────────────────────
+  let ws = null, wsReady = false, reconnectAttempts = 0, reconnectTimer = null, disposed = false;
+  const headerBuf = new ArrayBuffer(4);
+  const headerView = new DataView(headerBuf);
+  const headerBytes = new Uint8Array(headerBuf);
+
+  function connectWs() {
+    if (disposed) return;
+    try {
+      ws = new WebSocket(LOCAL_WS_URL);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = function () { wsReady = true; reconnectAttempts = 0; log('ws connected'); };
+      ws.onclose = function () {
+        wsReady = false;
+        if (disposed) return;
+        if (reconnectAttempts < MAX_RECONNECT_RETRIES) {
+          reconnectAttempts++;
+          reconnectTimer = setTimeout(connectWs, RECONNECT_DELAY_MS);
+        } else { log('ws max retries reached'); disposed = true; }
+      };
+      ws.onerror = function () { log('ws error'); };
+    } catch (e) { log('ws connect failed', e && e.message); }
+  }
+
+  function sendBinary(trackIdx, pcmInt16) {
+    if (!wsReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+    headerView.setUint16(0, trackIdx, false); // trackIndex, big-endian
+    headerView.setUint16(2, 0, false);        // reserved
+    const payload = new Uint8Array(4 + pcmInt16.byteLength);
+    payload.set(headerBytes, 0);
+    payload.set(new Uint8Array(pcmInt16.buffer, pcmInt16.byteOffset, pcmInt16.byteLength), 4);
+    ws.send(payload.buffer);
+  }
+
+  function sendJson(obj) {
+    if (!wsReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify(obj));
+  }
+
+  // ── PCM conversion ────────────────────────────────────────────────────────
+  // Linear-interpolation resample (no anti-alias filter). Adequate for speech
+  // ASR at v1; revisit if downsampling artefacts hurt accuracy.
+  function resample(input, sourceRate) {
+    if (sourceRate === TARGET_SAMPLE_RATE) return input;
+    const ratio = sourceRate / TARGET_SAMPLE_RATE;
+    const outLen = Math.floor(input.length / ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const idx = i * ratio;
+      const lo = Math.floor(idx);
+      const hi = Math.min(lo + 1, input.length - 1);
+      const frac = idx - lo;
+      out[i] = input[lo] * (1 - frac) + input[hi] * frac;
+    }
+    return out;
+  }
+
+  function float32ToInt16(f32) {
+    const out = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      let s = f32[i];
+      s = s < -1 ? -1 : (s > 1 ? 1 : s);
+      out[i] = s < 0 ? Math.max(-32768, s * 32768) : Math.min(32767, s * 32767);
+    }
+    return out;
+  }
+
+  // ── Track capture ─────────────────────────────────────────────────────────
+  let trackIndexSeq = 0;
+  const tracks = new Map(); // trackId -> { index, participantId }
+  const processedTracks = new Set();
+  let sharedCtx = null, workletReady = false;
+
+  async function setupTrackCapture(track, tIdx) {
+    if (!sharedCtx) sharedCtx = new AudioContext();
+    const ctx = sharedCtx;
+    const sourceRate = ctx.sampleRate;
+    const source = ctx.createMediaStreamSource(new MediaStream([track]));
+
+    try {
+      if (!workletReady) {
+        const code = 'class PCMCapture extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c&&c.length>0)this.port.postMessage(new Float32Array(c));return true;}}registerProcessor("pcm-capture",PCMCapture);';
+        const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        workletReady = true;
+      }
+      const node = new AudioWorkletNode(ctx, 'pcm-capture');
+      source.connect(node);
+      node.connect(ctx.destination); // keeps the graph pulling
+      node.port.onmessage = function (e) { sendBinary(tIdx, float32ToInt16(resample(e.data, sourceRate))); };
+      log('AudioWorklet capture for track', tIdx);
+    } catch (e) {
+      log('AudioWorklet unavailable, ScriptProcessor fallback');
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      source.connect(proc);
+      proc.connect(ctx.destination);
+      proc.onaudioprocess = function (ev) {
+        sendBinary(tIdx, float32ToInt16(resample(ev.inputBuffer.getChannelData(0), sourceRate)));
+      };
+    }
+  }
+
+  function handleNewTrack(track) {
+    if (!track || track.kind !== 'audio' || processedTracks.has(track.id)) return;
+    processedTracks.add(track.id);
+    const tIdx = trackIndexSeq++;
+    tracks.set(track.id, { index: tIdx, participantId: null });
+    sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: tIdx });
+    setupTrackCapture(track, tIdx).catch(function (e) { log('capture setup failed', e && e.message); });
+    track.addEventListener('ended', function () {
+      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: tIdx });
+      tracks.delete(track.id);
+      processedTracks.delete(track.id);
+    });
+  }
+
+  const OriginalRTCPeerConnection = window.RTCPeerConnection;
+  function PatchedRTCPeerConnection(config, constraints) {
+    const pc = new OriginalRTCPeerConnection(config, constraints);
+    pc.addEventListener('track', function (event) { if (event.track) handleNewTrack(event.track); });
+    log('RTCPeerConnection intercepted');
+    return pc;
+  }
+  PatchedRTCPeerConnection.prototype = OriginalRTCPeerConnection.prototype;
+  if (OriginalRTCPeerConnection.generateCertificate) {
+    PatchedRTCPeerConnection.generateCertificate = OriginalRTCPeerConnection.generateCertificate.bind(OriginalRTCPeerConnection);
+  }
+  window.RTCPeerConnection = PatchedRTCPeerConnection;
+  if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = PatchedRTCPeerConnection;
+
+  function hasUnmappedTrack() {
+    for (const info of tracks.values()) if (!info.participantId) return true;
+    return false;
+  }
+  function mapTrack(trackId, participant) {
+    const info = tracks.get(trackId);
+    if (!info || info.participantId) return;
+    info.participantId = participant.id;
+    sendJson({ type: 'participantMapping', trackIndex: info.index, participant: participant });
+    log('mapped track', info.index, '->', participant.name);
+  }
+
+  ${platformBlock}
+
+  window.addEventListener('beforeunload', function () {
+    disposed = true;
+    intervals.forEach(clearInterval);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+  });
+
+  connectWs();
+  log('initialised for platform', PLATFORM_TYPE);
+})();
+`
+}
+
+// ── SFU participant mapping (Jitsi + LiveKit/Visio) ─────────────────────────
+// Emitted only for platformType === 'sfu'. Relies on shared helpers
+// (tracks, hasUnmappedTrack, mapTrack, sendJson, intervals, log).
+const SFU_MAPPING_BLOCK = `
+  // Jitsi: tracks live on window.APP.conference._room participants.
+  function pollJitsi() {
+    if (tracks.size === 0 || !hasUnmappedTrack()) return;
+    try {
+      const room = window.APP && window.APP.conference && window.APP.conference._room;
+      if (!room || !room.getParticipants) return;
+      for (const p of room.getParticipants()) {
+        for (const pt of (p.getTracks() || [])) {
+          if (pt.getType && pt.getType() !== 'audio') continue;
+          const id = pt.track && pt.track.id;
+          if (id) mapTrack(id, { id: p.getId(), name: p.getDisplayName() || p.getId() });
+        }
+      }
+    } catch (e) { /* jitsi API not ready */ }
+  }
+
+  // LiveKit/Visio: find the Room object by walking the React fiber tree for the
+  // characteristic { remoteParticipants, localParticipant, activeSpeakers } shape.
+  let livekitRoom = null;
+  function findLivekitRoom() {
+    try {
+      const root = document.getElementById('root');
+      if (!root) return null;
+      const key = Object.keys(root).find(function (k) { return k.indexOf('__reactContainer') === 0 || k.indexOf('__reactFiber') === 0; });
+      if (!key) return null;
+      const seen = new Set();
+      const queue = [root[key]];
+      let qi = 0;
+      while (qi < queue.length) {
+        const fiber = queue[qi++];
+        if (!fiber || seen.has(fiber)) continue;
+        seen.add(fiber);
+        if (seen.size > 5000) break;
+        let state = fiber.memoizedState, depth = 0;
+        while (state && depth < 20) {
+          const s = state.queue && state.queue.lastRenderedState;
+          if (s && typeof s === 'object' && s.remoteParticipants && s.localParticipant && s.activeSpeakers) return s;
+          state = state.next; depth++;
+        }
+        if (fiber.child) queue.push(fiber.child);
+        if (fiber.sibling) queue.push(fiber.sibling);
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function pollLivekit() {
+    if (tracks.size === 0 || !hasUnmappedTrack()) return;
+    if (window.APP && window.APP.conference) return; // Jitsi handles its own mapping
+    if (!livekitRoom) { livekitRoom = findLivekitRoom(); if (!livekitRoom) return; log('LiveKit Room found'); }
+    if (livekitRoom.state !== 'connected') { livekitRoom = null; return; }
+    try {
+      livekitRoom.remoteParticipants.forEach(function (p) {
+        p.trackPublications.forEach(function (pub) {
+          if (pub.kind !== 'audio' || !pub.track || !pub.track.mediaStreamTrack) return;
+          mapTrack(pub.track.mediaStreamTrack.id, { id: p.identity, name: p.name || p.identity });
+        });
+      });
+    } catch (e) { /* ignore */ }
+  }
+  setTimeout(function () { intervals.push(setInterval(pollJitsi, 2000)); intervals.push(setInterval(pollLivekit, 2000)); }, 5000);
+`
+
+// ── Teams speaker detection (MCU: one mixed track, speaker from page state) ──
+// Emitted only for platformType === 'teams'.
+const TEAMS_SPEAKER_BLOCK = `
+  const known = new Map(); // mri -> { id, name }
+  let currentSpeakerId = null, startTime = 0;
+  function pollTeams() {
+    if (!startTime) startTime = Date.now();
+    const position = Date.now() - startTime;
+    try {
+      const call = window.callingDebug && window.callingDebug.observableCall;
+      if (!call || !call.participants) {
+        known.forEach(function (v, mri) { sendJson({ type: 'participantLeft', participant: { id: mri, name: v.name } }); });
+        known.clear();
+        return;
+      }
+      const seen = new Set();
+      let domId = null, domName = null;
+      call.participants.forEach(function (p) {
+        if (!p.mri || !p.displayName) return;
+        seen.add(p.mri);
+        const prev = known.get(p.mri);
+        if (!prev || prev.name !== p.displayName) {
+          known.set(p.mri, { id: p.mri, name: p.displayName });
+          sendJson({ type: 'participantMapping', trackIndex: 0, participant: { id: p.mri, name: p.displayName } });
+        }
+        if (p.voiceLevel > 0 && !domId) { domId = p.mri; domName = p.displayName; }
+      });
+      known.forEach(function (v, mri) {
+        if (!seen.has(mri)) { known.delete(mri); sendJson({ type: 'participantLeft', participant: { id: mri, name: v.name } }); }
+      });
+      if (domId !== currentSpeakerId) {
+        currentSpeakerId = domId;
+        sendJson({ type: 'speakerChanged', position: position, speaker: domId ? { id: domId, name: domName } : null });
+      }
+    } catch (e) { /* teams API not ready */ }
+  }
+  setTimeout(function () { intervals.push(setInterval(pollTeams, 200)); }, 3000);
+`
+
+module.exports = { getInterceptScript }

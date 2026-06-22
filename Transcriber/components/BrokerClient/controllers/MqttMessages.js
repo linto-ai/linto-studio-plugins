@@ -50,14 +50,8 @@ function handleTranscriberMessage(parts, message) {
   if (direction === 'in' && uniqueId === this.uniqueId) {
     const action = subparts.join('/');
     switch (action) {
-      case 'startbot':
-        const { session, channel, address, botType, enableDisplaySub, subSource } = JSON.parse(message);
-        this.app.components['StreamingServer'].startBot(session, channel, address, botType, enableDisplaySub, subSource);
-        break;
-      case 'stopbot':
-        const { sessionId, channelId } = JSON.parse(message);
-        this.app.components['StreamingServer'].stopBot(sessionId, channelId);
-        break;
+      // Meeting bots are no longer embedded here: they run in the dedicated
+      // BotService and reach this Transcriber as a normal WS audio stream.
       default:
         logger.warn(`Unknown action: ${action}`);
     }

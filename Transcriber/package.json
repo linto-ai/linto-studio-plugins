@@ -35,7 +35,6 @@
     "live-srt-lib": "file:../lib",
     "microsoft-cognitiveservices-speech-sdk": "1.46.0",
     "node-media-server": "^2.6.6",
-    "puppeteer-stream": "^3.0.15",
     "uuid": "13.0.0",
     "ws": "^8.13.0"
   },

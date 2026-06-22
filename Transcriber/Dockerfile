@@ -32,11 +32,6 @@ RUN mkdir -p /usr/src/app/transcriber/bin && \
     https://rolesanywhere.amazonaws.com/releases/1.7.1/X86_64/Linux/Amzn2023/aws_signing_helper && \
     chmod +x /usr/src/app/transcriber/bin/aws_signing_helper
 
-RUN wget -O /tmp/chromium.tar.xz https://dl.linto.ai/downloads/tools/ungoogled-chromium_135.0.7049.84-1_linux.tar.xz && \
-    mkdir -p /opt/chrome && \
-    tar -xf /tmp/chromium.tar.xz -C /opt/chrome --strip-components=1 && \
-    rm /tmp/chromium.tar.xz
-
 COPY lib/ /usr/src/app/lib
 COPY Transcriber/ /usr/src/app/transcriber
 COPY .envdefault /usr/src/app/

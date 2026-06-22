@@ -4,7 +4,6 @@ const ASR = require('../../ASR');
 const MultiplexedSRTServer = require('./srt/SRTServer.js');
 const MultiplexedWebsocketServer = require('./websocket/WebsocketServer.js');
 const MultiplexedRTMPServer = require('./rtmp/RTMPServer.js');
-const Bot = require('./bot');
 
 
 const SERVER_MAPPING = {
@@ -27,7 +26,6 @@ class StreamingServer extends Component {
     this.id = this.constructor.name; //singleton ID within transcriber app
     this.state = StreamingServer.states.CLOSED;
     this.ASRs = new Map();
-    this.bots = new Map();
     this.lastSegmentIds = new Map();
     this.servers = [];
     this.init().then(async () => {
@@ -127,136 +125,6 @@ class StreamingServer extends Component {
     asr.dispose();
     this.emit('session-stop', session, channelId);
     return true;
-  }
-
-  // Create a bot for a channel and store it in the bots map
-  async startBot(session, channel, address, botType, enableDisplaySub, subSource) {
-    logger.info(`Starting ${botType} bot for session ${session.id}, channel ${channel.id}`);
-    try {
-      const bot = new Bot(session, channel, address, botType, enableDisplaySub);
-      bot.session = session;
-      // Bot events
-      bot.on('session-start', (session, channel) => {
-        logger.info(`Session ${session.id}, channel ${channel.id} started`);
-
-        const initialSegmentId = this.resolveInitialSegmentId(session.id, channel.id, channel);
-        const asr = new ASR(session, channel, { initialSegmentId });
-        asr.on('partial', (transcription) => {
-          let subtitle = transcription.text;
-          if (subSource && transcription.translations) {
-            subtitle = transcription.translations[subSource];
-            if (subtitle === undefined) {
-              const shortSource = subSource.split('-')[0];
-              const matchingKey = Object.keys(transcription.translations)
-                .find(k => k.split('-')[0] === shortSource);
-              if (matchingKey) subtitle = transcription.translations[matchingKey];
-            }
-          }
-
-          if (enableDisplaySub) {
-            bot.updateCaptions(subtitle, false);
-          }
-
-          this.emit('partial', transcription, session.id, channel.id, channel);
-        });
-        asr.on('final', (transcription) => {
-          let subtitle = transcription.text;
-          if (subSource && transcription.translations) {
-            subtitle = transcription.translations[subSource];
-            if (subtitle === undefined) {
-              const shortSource = subSource.split('-')[0];
-              const matchingKey = Object.keys(transcription.translations)
-                .find(k => k.split('-')[0] === shortSource);
-              if (matchingKey) subtitle = transcription.translations[matchingKey];
-            }
-          }
-
-          if (enableDisplaySub) {
-            bot.updateCaptions(subtitle, true);
-          }
-
-          this.emit('final', transcription, session.id, channel.id, channel);
-        });
-        this.ASRs.set(`${session.id}_${channel.id}`, asr);
-        // pass to controllers/StreamingServer.js to forward to broker and mark the session as active / set channel status in database
-        this.emit('session-start', session, channel);
-        logger.info(`Session ${session.id}, channel ${channel.id} started`);
-      })
-
-      bot.on('data', (audio, sessionId, channelId) => {
-        const buffer = Buffer.from(audio.data);
-        const asr = this.ASRs.get(`${sessionId}_${channelId}`);
-        if (asr) {
-          asr.transcribe(buffer);
-        }
-      })
-      // can return false or true. If false, bot is not started
-      await bot.init();
-      this.bots.set(`${session.id}_${channel.id}`, bot);
-
-      // Subscribe to external translations for bot subtitles
-      if (subSource && enableDisplaySub) {
-        const translationTopic = `transcriber/out/${session.id}/${channel.id}/final/translations`
-        const mqttClient = this.app.components['BrokerClient']?.client
-        if (mqttClient) {
-          mqttClient.subscribe(translationTopic)
-          const translationHandler = (topic, message) => {
-            if (topic !== translationTopic) return
-            try {
-              const translation = JSON.parse(message.toString())
-              if (translation.targetLang === subSource ||
-                  translation.targetLang.split('-')[0] === subSource.split('-')[0]) {
-                bot.updateCaptions(translation.text, true)
-              }
-            } catch (err) {
-              logger.error(`Error handling bot translation: ${err.message}`)
-            }
-          }
-          mqttClient.on('message', translationHandler)
-          // Store handler for cleanup
-          bot._translationHandler = translationHandler
-          bot._translationTopic = translationTopic
-          bot._translationMqttClient = mqttClient
-        }
-      }
-
-    } catch (error) {
-      logger.error(`Error starting bot: ${error.message}`);
-    }
-  }
-
-  // Stop a bot for a given session and channel
-  async stopBot(sessionId, channelId) {
-    logger.info(`Stopping bot for session ${sessionId}, channel ${channelId}`);
-    try {
-      const botKey = `${sessionId}_${channelId}`;
-      const bot = this.bots.get(botKey);
-      if (!bot) {
-        logger.warn(`No bot found for session ${sessionId}, channel ${channelId}`);
-        return;
-      }
-      // Clean up translation subscription
-      if (bot._translationHandler && bot._translationTopic) {
-        const mqttClient = bot._translationMqttClient
-        if (mqttClient) {
-          mqttClient.removeListener('message', bot._translationHandler)
-          mqttClient.unsubscribe(bot._translationTopic)
-        }
-      }
-      // Flush + stop the associated ASR first so the end-of-stream marker and
-      // the deactivate are published in order, then dispose the bot itself.
-      const hadAsr = await this._stopAsr(bot.session, channelId);
-      if (!hadAsr) {
-        this.emit('session-stop', bot.session, channelId);
-      }
-      await bot.dispose();
-      this.bots.delete(botKey);
-
-      // pass to controllers/StreamingServer.js to forward to broker and mark the session as inactive / set channel status in database
-      logger.info(`Session ${sessionId}, channel ${channelId} stopped`);
-    } catch (error) {
-      logger.error(`Error stopping bot: ${error.message}`);
-    }
   }
 
   async _applyToSessionASRs(sessionId, action) {

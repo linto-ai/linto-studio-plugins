@@ -20,6 +20,7 @@ require('./tests/test_segmentation');
 require('./tests/test_segmentation_reanchor');
 require('./tests/test_google_transcriber.js');
 require('./tests/test_speaker_tracker.js');
+require('./tests/test_ws_native_diar.js');
 
 
 describe('CircularBuffer', () => {

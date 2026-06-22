@@ -8,6 +8,13 @@ TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separate
 SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, they load in this order
 SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
+BOTSERVICE_COMPONENTS=BrokerClient
+
+# BotService (dedicated meeting-bot service)
+MAX_CONCURRENT_BOTS=10
+EMPTY_MEETING_TIMEOUT_SECONDS=60
+BOT_DISPLAY_NAME=LinTO Bot
+STREAMING_WS_BOT_HOST=transcriber
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

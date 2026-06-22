@@ -54,7 +54,13 @@ class StreamingServer extends Component {
       server.on('session-start', (session, channel) => {
         try {
           const initialSegmentId = this.resolveInitialSegmentId(session.id, channel.id, channel);
-          const asr = new ASR(session, channel, { initialSegmentId });
+          // Native diarization: bot WS streams register a SpeakerTracker on the
+          // WS server at init. Non-bot sources (SRT/RTMP/non-native WS) have none.
+          const speakerTracker = typeof server.getSpeakerTracker === 'function'
+            ? server.getSpeakerTracker(session.id, channel.id)
+            : null;
+          const diarizationMode = speakerTracker ? 'native' : 'asr';
+          const asr = new ASR(session, channel, { initialSegmentId, speakerTracker, diarizationMode });
           asr.on('partial', (transcription) => {
             this.emit('partial', transcription, session.id, channel.id, channel);
           });

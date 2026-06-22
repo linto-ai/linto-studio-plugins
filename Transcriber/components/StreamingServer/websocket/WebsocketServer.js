@@ -3,6 +3,7 @@ const EventEmitter = require('eventemitter3');
 const path = require('path');
 const WebSocket = require('ws');
 const logger = require('../../../logger')
+const SpeakerTracker = require('../SpeakerTracker');
 
 const {
     STREAMING_HOST,
@@ -31,6 +32,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
     this.runningChannels = {};
     this.pendingChannels = new Set();
     this.isRunning = false;
+    // Native diarization: per-channel SpeakerTracker, created on `init` when a
+    // bot announces diarizationMode='native'. Keyed by `${sessionId}_${channelId}`.
+    this.speakerTrackers = new Map();
   }
 
   // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
@@ -198,12 +202,26 @@ class MultiplexedWebsocketServer extends EventEmitter {
     }
 
     if (initMessage.type === 'init') {
-        logger.info(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}`);
+        logger.info(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}, diarizationMode=${initMessage.diarizationMode || 'asr'}`);
 
         if(initMessage.encoding == 'pcm' && initMessage.sampleRate != 16000) {
             logger.warn(`Invalid sample rate: ${initMessage.sampleRate}`);
             ws.send(JSON.stringify({ type: 'error', message: `Invalid sample rate: ${initMessage.sampleRate}. Only 16000 is accepted.` }));
             return null
+        }
+
+        // Native diarization (bot streams): set up the SpeakerTracker BEFORE
+        // initPcm() emits 'session-start', so the StreamingServer can hand it to
+        // the ASR as it is created. Must run before the callback is built.
+        fd.diarizationMode = initMessage.diarizationMode || 'asr';
+        if (fd.diarizationMode === 'native') {
+            const key = `${fd.session.id}_${fd.channel.id}`;
+            const tracker = new SpeakerTracker();
+            for (const participant of (initMessage.participants || [])) {
+                tracker.updateParticipant({ action: 'join', participant });
+            }
+            this.speakerTrackers.set(key, tracker);
+            logger.info(`Native diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${(initMessage.participants || []).length} initial participants)`);
         }
 
         const callback = initMessage.encoding == 'pcm' ? this.initPcm(ws, fd) : this.initWorker(ws, fd);
@@ -230,8 +248,44 @@ class MultiplexedWebsocketServer extends EventEmitter {
           this.cleanupWebsocket(ws, fd);
       });
       return (message) => {
+          // A bot stream interleaves binary PCM with JSON control messages
+          // (speakerChanged / participant) for native diarization. Distinguish
+          // them robustly: only treat a frame as control if it both *looks* like
+          // JSON ({") and parses to a recognized control type; otherwise it is
+          // PCM (a PCM sample can coincidentally start with 0x7B 0x22, so a parse
+          // failure must fall through to audio rather than drop the frame).
+          if (this.handleControlMessage(fd, message)) return;
           this.emit('data', message, fd.session.id, fd.channel.id);
       };
+  }
+
+  // Returns true if the message was consumed as a native-diarization control
+  // message, false if it should be treated as audio data.
+  handleControlMessage(fd, message) {
+      if (fd.diarizationMode !== 'native') return false;
+      if (!Buffer.isBuffer(message) || message.length < 2) return false;
+      if (message[0] !== 0x7B || message[1] !== 0x22) return false; // not '{"'
+      let data;
+      try {
+          data = JSON.parse(message.toString());
+      } catch (e) {
+          return false; // PCM that merely started with 0x7B22
+      }
+      const tracker = this.speakerTrackers.get(`${fd.session.id}_${fd.channel.id}`);
+      if (!tracker) return false;
+      if (data.type === 'speakerChanged') {
+          tracker.addSpeakerChange(data);
+          return true;
+      }
+      if (data.type === 'participant') {
+          tracker.updateParticipant(data);
+          return true;
+      }
+      return false;
+  }
+
+  getSpeakerTracker(sessionId, channelId) {
+      return this.speakerTrackers.get(`${sessionId}_${channelId}`) || null;
   }
 
   initWorker(ws, fd) {
@@ -325,6 +379,14 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
       if (fd && this.runningChannels[fd.channel.id]) {
           delete this.runningChannels[fd.channel.id];
+      }
+      if (fd) {
+          const key = `${fd.session.id}_${fd.channel.id}`;
+          const tracker = this.speakerTrackers.get(key);
+          if (tracker) {
+              tracker.clear();
+              this.speakerTrackers.delete(key);
+          }
       }
   }
 }

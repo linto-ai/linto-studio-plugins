@@ -40,6 +40,11 @@ class ASR extends eventEmitter {
     // segment as the primary that produced the source text. Before any primary
     // result, secondary results fall back to the current segmentId.
     this._lastPrimarySegmentId = this.segmentId;
+    // Native diarization (bot streams): when a SpeakerTracker is provided, the
+    // speaker label comes from the meeting (per-participant SFU tracks / Teams
+    // page state) instead of the ASR provider. null for ordinary streams.
+    this.speakerTracker = options.speakerTracker || null;
+    this.diarizationMode = options.diarizationMode || 'asr';
     this.paused = false;
     this._flushed = false;
     this._transitionLock = Promise.resolve();
@@ -147,6 +152,19 @@ class ASR extends eventEmitter {
     return this.segmentId;
   }
 
+  // Native diarization: stamp the segment's speaker from the bot-fed
+  // SpeakerTracker, overriding any provider-supplied locutor. The display name
+  // is preferred (real meeting participant) and falls back to the id. No-op for
+  // ordinary (non-bot) streams where speakerTracker is null.
+  _applyNativeSpeaker(transcription) {
+    if (this.diarizationMode !== 'native' || !this.speakerTracker) return;
+    this.speakerTracker.assignSpeakerToSegment(transcription.segmentId);
+    const speaker = this.speakerTracker.getSpeakerForSegment(transcription.segmentId);
+    if (speaker) {
+      transcription.locutor = speaker.name || speaker.id;
+    }
+  }
+
   handleASREvents() {
     this.provider.on('connecting', () => {
       this.state = ASR.states.CONNECTING;
@@ -186,13 +204,16 @@ class ASR extends eventEmitter {
       this.state = ASR.states.TRANSCRIBING;
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this._segmentIdFor(transcription);
+        this._applyNativeSpeaker(transcription);
         this.emit('partial', transcription);
       }
     });
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this._segmentIdFor(transcription);
+        this._applyNativeSpeaker(transcription);
         this.emit('final', transcription);
+        if (this.speakerTracker) this.speakerTracker.clearSegment(transcription.segmentId);
         // Origin-tagging for the Microsoft dual recognizer (diarization +
         // translation). The primary (ConversationTranscriber) is the canonical
         // source of segments and speaker; only its finals advance segmentId.

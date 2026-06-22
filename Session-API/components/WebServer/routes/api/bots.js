@@ -67,7 +67,13 @@ module.exports = (webserver) => {
                 const enableDisplaySub = req.body.enableDisplaySub;
                 const subSource = req.body.subSource;
 
-                // Check at least compressAudio or live
+                // Audio quality invariant: "not live" implies "do not compress".
+                // When live transcription is off, the kept audio is meant to be (re)fed to an
+                // offline transcription pipeline, which needs maximum quality -> uncompressed WAV.
+                // When live is on, the transcription is already produced in real time, so the kept
+                // file is only for replay and may be compressed (MP3). Hence compressing without live
+                // is rejected. NOTE: audio-only channels (no transcriber profile) are a "not live"
+                // mode and must therefore keep compressAudio=false at creation.
                 if (channel.compressAudio && !channel.enableLiveTranscripts) {
                     return res.status(400).json({ error: "Compress audio must be disabled if live is disabled." });
                 }

@@ -118,8 +118,8 @@ module.exports = (webserver) => {
                     await Model.ChannelTemplate.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
-                        compressAudio: channel.compressAudio ?? true,
-                        // No profile: force live transcripts off (FakeTranscriber path).
+                        // No profile (audio-only): uncompressed audio + live off (quality invariant, see bots.js).
+                        compressAudio: transcriberProfile ? (channel.compressAudio ?? true) : false,
                         enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages,
                         translations: translations,
@@ -187,8 +187,8 @@ module.exports = (webserver) => {
                     await Model.ChannelTemplate.create({
                         keepAudio: channel.keepAudio ?? true,
                         diarization: channel.diarization ?? false,
-                        compressAudio: channel.compressAudio ?? true,
-                        // No profile: force live transcripts off (FakeTranscriber path).
+                        // No profile (audio-only): uncompressed audio + live off (quality invariant, see bots.js).
+                        compressAudio: transcriberProfile ? (channel.compressAudio ?? true) : false,
                         enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages,
                         translations: translations,

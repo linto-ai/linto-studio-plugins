@@ -327,19 +327,21 @@ module.exports = (webserver) => {
                 for (const [index, channel] of channels.entries()) {
                     const validatedTranslations = validateTranslations(channel.translations);
 
+                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
                     const keepAudio = channel.keepAudio ?? true;
-                    const compressAudio = channel.compressAudio ?? true;
+                    // Audio quality invariant: an audio-only channel (no profile) is a "not live" mode,
+                    // so its kept audio stays uncompressed (WAV) for an eventual offline transcription. See bots.js.
+                    const compressAudio = transcriberProfile ? (channel.compressAudio ?? true) : false;
                     if (!compressAudio && !keepAudio) {
                         throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
-                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
                     const languages = transcriberProfile ? transcriberProfile.config.languages.map(language => language.candidate) : [];
                     const translations = transcriberProfile ? await enrichTranslations(validatedTranslations, transcriberProfile) : validatedTranslations;
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio ?? true,
+                        keepAudio: keepAudio,
                         diarization: channel.diarization ?? false,
-                        compressAudio: channel.compressAudio ?? true,
+                        compressAudio: compressAudio,
                         // No profile: force live transcripts off (FakeTranscriber path).
                         enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages, //array of BCP47 language tags from transcriber profile
@@ -432,13 +434,22 @@ module.exports = (webserver) => {
                         }
 
                         if (clearingProfile) {
-                            // Switch the channel to audio-only.
+                            // Switch the channel to audio-only: no live, and uncompressed audio
+                            // (audio quality invariant, see bots.js).
                             updatedAttrs.transcriberProfileId = null;
                             updatedAttrs.languages = [];
                             updatedAttrs.enableLiveTranscripts = false;
+                            updatedAttrs.compressAudio = false;
                         } else if (updatedChannel.transcriberProfileId) {
                             const transcriberProfile = await resolveTranscriberProfile(updatedChannel.transcriberProfileId, transaction);
                             updatedAttrs.languages = transcriberProfile.config.languages.map(language => language.candidate);
+                            // Re-assigning a profile re-enables live unless the client explicitly opts out;
+                            // mirrors the create path (default true with a profile). Without this, a channel
+                            // previously switched to audio-only would keep enableLiveTranscripts=false and stay
+                            // silent on the FakeTranscriber path despite having a real profile.
+                            if (!('enableLiveTranscripts' in updatedChannel)) {
+                                updatedAttrs.enableLiveTranscripts = true;
+                            }
                         }
 
                         await Model.Channel.update({
@@ -476,20 +487,22 @@ module.exports = (webserver) => {
 
                     const validatedTranslations = validateTranslations(channel.translations);
 
+                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
                     const keepAudio = channel.keepAudio ?? true;
-                    const compressAudio = channel.compressAudio ?? true;
+                    // Audio quality invariant: an audio-only channel (no profile) is a "not live" mode,
+                    // so its kept audio stays uncompressed (WAV) for an eventual offline transcription. See bots.js.
+                    const compressAudio = transcriberProfile ? (channel.compressAudio ?? true) : false;
                     if (!compressAudio && !keepAudio) {
                         throw new ApiError(400, "Compress audio is not enabled and keep audio is not enabled on channel");
                     }
 
-                    const transcriberProfile = await resolveTranscriberProfile(channel.transcriberProfileId, transaction);
                     const languages = transcriberProfile ? transcriberProfile.config.languages.map(language => language.candidate) : [];
                     const translations = transcriberProfile ? await enrichTranslations(validatedTranslations, transcriberProfile) : validatedTranslations;
 
                     await Model.Channel.create({
-                        keepAudio: channel.keepAudio ?? true,
+                        keepAudio: keepAudio,
                         diarization: channel.diarization ?? false,
-                        compressAudio: channel.compressAudio ?? true,
+                        compressAudio: compressAudio,
                         // No profile: force live transcripts off (FakeTranscriber path).
                         enableLiveTranscripts: transcriberProfile ? (channel.enableLiveTranscripts ?? true) : false,
                         languages: languages, //array of BCP47 language tags from transcriber profile

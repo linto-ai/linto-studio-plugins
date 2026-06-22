@@ -97,5 +97,21 @@ services:
     networks:
       - internal
 
+  botservice:
+    build:
+      context: .
+      dockerfile: BotService/Dockerfile
+    env_file:
+      - .envdefault.docker
+      - path: .env
+        required: false
+    environment:
+      - DEBUG=botservice:*
+    depends_on:
+      broker:
+        condition: service_started
+    networks:
+      - internal
+
 networks:
   internal:

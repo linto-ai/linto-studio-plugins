@@ -64,6 +64,16 @@ module.exports = async function () {
           }
         }
         break;
+      case 'botservice':
+        if (action === 'status') {
+          const botservice = JSON.parse(message.toString());
+          if (botservice.online) {
+            this.registerBotService(botservice);
+          } else {
+            this.unregisterBotService(botservice);
+          }
+        }
+        break;
       default:
         logger.debug(`Received message for unknown type ${type}`);
     }

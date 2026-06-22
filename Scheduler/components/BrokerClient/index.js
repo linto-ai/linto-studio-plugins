@@ -17,11 +17,13 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `scheduler/in/#`, `translator/out/+/status`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `scheduler/in/#`, `translator/out/+/status`, `botservice/out/+/status`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
     this.transcribers = new Array(); // internal scheduler representation of system transcribers.
+    this.botservices = new Array(); // registered BotService replicas {uniqueId, online, activeBots, capabilities}
+    this.botOwnership = new Map(); // `${sessionId}_${channelId}` -> botservice uniqueId, for targeted stopbot
     // Per-channel persistence chains: serialize caption/translation/status
     // writes so the Postgres commit order matches the MQTT arrival order.
     // The end-of-stream bot marker (published by the Transcriber after its
@@ -167,61 +169,44 @@ class BrokerClient extends Component {
     return isUpdated;
   }
 
-  // Choose the least used transcriber to start a bot
-  // we do this cause bot handling needs to be scheduled on the instance with the least load
+  // ###### BOT ROUTING (to the dedicated BotService) ######
+
+  // Pick a BotService that supports the requested provider, preferring more
+  // specialized replicas (fewest advertised capabilities) and the least loaded.
+  selectBotService(provider) {
+    const candidates = this.botservices.filter(bs =>
+      bs.online && Array.isArray(bs.capabilities) && bs.capabilities.includes(provider));
+    if (candidates.length === 0) return null;
+    const minCaps = Math.min(...candidates.map(bs => bs.capabilities.length));
+    const specialists = candidates.filter(bs => bs.capabilities.length === minCaps);
+    return specialists.reduce((best, bs) =>
+      (best === null || (bs.activeBots || 0) < (best.activeBots || 0)) ? bs : best, null);
+  }
+
+  // Transcriber WS ingest URL a bot connects to. Any transcriber accepts any
+  // session (sessions are broadcast on system/out/sessions/statuses), so we
+  // target the transcriber service by name (load-balanced) rather than a
+  // specific replica's hostname.
+  buildTranscriberWsUrl(sessionId, channelIndex) {
+    const host = process.env.STREAMING_WS_BOT_HOST || 'transcriber';
+    const port = process.env.STREAMING_WS_TCP_PORT || '8080';
+    const endpoint = process.env.STREAMING_WS_ENDPOINT || 'transcriber-ws';
+    const proto = (process.env.STREAMING_WS_SECURE && process.env.STREAMING_WS_SECURE !== 'false') ? 'wss' : 'ws';
+    return `${proto}://${host}:${port}/${endpoint}/${sessionId},${channelIndex}`;
+  }
+
   async startBot(botId) {
-    // search all channels with active streamStatus
-    // count the number of active channels for each transcriberId, choose the one with the least active channels
-    // ignore channels with transcriberId = null or set to an id that is not in the transcribers array
-    // if no transcriber is found, use the first transcriber in the transcribers array
-    // publish the startbot command to the chosen transcriber
-
     try {
-      // Fetch active channels and count them by transcriberId
-      const activeChannelsCount = await Model.Channel.findAll({
-        where: {
-          streamStatus: 'active',
-          transcriberId: {
-            [Model.Op.not]: null, // Exclude channels with null transcriberId
-          }
-        },
-        attributes: [
-          'transcriberId',
-          [Model.sequelize.fn('COUNT', Model.sequelize.col('transcriberId')), 'activeCount']
-        ],
-        group: 'transcriberId',
-        raw: true
-      });
-
-      // Filter to include only those transcribers currently registered and online
-      const validTranscriberCounts = activeChannelsCount.filter(c =>
-        this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online)
-      );
-
-      // Sort to find the least used transcriber that is online
-      let chosenTranscriber = null;
-      let leastActiveCount = Infinity;
-      validTranscriberCounts.forEach(c => {
-        const transcriber = this.transcribers.find(t => t.uniqueId === c.transcriberId && t.online);
-        if (transcriber && c.activeCount < leastActiveCount) {
-          chosenTranscriber = transcriber;
-          leastActiveCount = c.activeCount;
-        }
-      });
-
-      // Use the first online transcriber if none found by active channel count
-      if (!chosenTranscriber) {
-        chosenTranscriber = this.transcribers.find(t => t.online);
+      const botData = await this.getStartBotData(botId);
+      if (!botData) return;
+      const botservice = this.selectBotService(botData.botType);
+      if (!botservice) {
+        logger.error(`No BotService available with capability '${botData.botType}' to start bot ${botId}.`);
+        return;
       }
-
-      if (chosenTranscriber) {
-        // retrieve bot data
-        const botData = await this.getStartBotData(botId);
-        this.client.publish(`transcriber/in/${chosenTranscriber.uniqueId}/startbot`, botData, 1, false, true);
-        logger.debug(`Bot scheduled on transcriber ${chosenTranscriber.uniqueId} for session ${botData.session.id}, channel ${botData.channelId}`);
-      } else {
-        logger.error('No transcriber available to start bot.');
-      }
+      this.botOwnership.set(`${botData.session.id}_${botData.channel.id}`, botservice.uniqueId);
+      this.client.publish(`botservice/in/${botservice.uniqueId}/startbot`, botData, 2, false, true);
+      logger.debug(`Bot ${botId} scheduled on BotService ${botservice.uniqueId} (${botData.botType}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
       logger.error('Failed to start bot:', error);
     }
@@ -229,44 +214,83 @@ class BrokerClient extends Component {
 
   async getStartBotData(botId) {
     const bot = await Model.Bot.findByPk(botId);
-    const session = await Model.Session.findOne({
-      include: [
-        {
-          model: Model.Channel,
-          where: {id: bot.channelId},
-          include: [Model.TranscriberProfile]
-        }
-      ]
+    if (!bot) { logger.error(`Bot ${botId} not found`); return null; }
+
+    // Load the session with ALL its channels (sorted by id) so the channel index
+    // matches the Transcriber's stream validation (which sorts channels by id).
+    const ownChannel = await Model.Channel.findByPk(bot.channelId);
+    if (!ownChannel) { logger.error(`Channel ${bot.channelId} not found for bot ${botId}`); return null; }
+    const session = await Model.Session.findByPk(ownChannel.sessionId, {
+      include: [{ model: Model.Channel, as: 'channels', include: [Model.TranscriberProfile] }],
+      order: [[{ model: Model.Channel, as: 'channels' }, 'id', 'ASC']]
     });
+    const channels = session.channels;
+    const channelIndex = channels.findIndex(c => c.id === bot.channelId);
+    const channel = channels[channelIndex];
 
     return {
-      session, channel: session.channels[0], address: bot.url,
+      session,
+      channel,
+      address: bot.url,
       botType: bot.provider,
-      enableDisplaySub: bot.enableDisplaySub, subSource: bot.subSource
-    }
+      enableDisplaySub: bot.enableDisplaySub,
+      subSource: bot.subSource,
+      botId: bot.id,
+      websocketUrl: this.buildTranscriberWsUrl(session.id, channelIndex)
+    };
   }
 
   async stopBot(botId) {
-    // find the transcriberId for the channel
-    // publish the stopbot command to the transcriber
     try {
-      logger.debug(`Stopping bot ${botId}`)
-      const bot = await Model.Bot.findByPk(botId, {include: Model.Channel});
+      logger.debug(`Stopping bot ${botId}`);
+      const bot = await Model.Bot.findByPk(botId, { include: Model.Channel });
+      if (!bot) { logger.error(`Bot ${botId} not found`); return; }
       const channel = bot.channel;
 
-      await Model.Bot.destroy({
-        where: {id: bot.id}
-      });
+      await Model.Bot.destroy({ where: { id: bot.id } });
 
-      if (!channel?.transcriberId) {
-        logger.warn(`No transcriberId in channel ${channel.id}`);
+      if (!channel) {
+        logger.warn(`Bot ${botId} had no channel; nothing to route`);
         return;
       }
-
-      this.client.publish(`transcriber/in/${channel.transcriberId}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 1, false, true);
+      const key = `${channel.sessionId}_${channel.id}`;
+      const owner = this.botOwnership.get(key);
+      this.botOwnership.delete(key);
+      if (owner) {
+        this.client.publish(`botservice/in/${owner}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
+      } else {
+        logger.warn(`No BotService owner tracked for ${key}; stop not routed (bot may have already left)`);
+      }
     } catch (error) {
       logger.error('Failed to stop bot:', error);
     }
+  }
+
+  // ###### BOTSERVICE STATUS ######
+
+  registerBotService(botservice) {
+    const existing = this.botservices.find(b => b.uniqueId === botservice.uniqueId);
+    if (existing) {
+      existing.online = true;
+      if (botservice.activeBots !== undefined) existing.activeBots = botservice.activeBots;
+      if (botservice.capabilities !== undefined) existing.capabilities = botservice.capabilities;
+      return;
+    }
+    this.botservices.push({
+      uniqueId: botservice.uniqueId,
+      online: true,
+      activeBots: botservice.activeBots || 0,
+      capabilities: botservice.capabilities || []
+    });
+    logger.debug(`BotService ${botservice.uniqueId} UP (capabilities: ${(botservice.capabilities || []).join(', ')})`);
+  }
+
+  unregisterBotService(botservice) {
+    this.botservices = this.botservices.filter(b => b.uniqueId !== botservice.uniqueId);
+    for (const [key, owner] of this.botOwnership) {
+      if (owner === botservice.uniqueId) this.botOwnership.delete(key);
+    }
+    logger.debug(`BotService ${botservice.uniqueId} DOWN`);
   }
 
   // Append a persistence task to the channel's serialized chain. The

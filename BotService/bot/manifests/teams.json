@@ -1,0 +1,31 @@
+{
+  "platformType": "teams",
+  "diarizationMode": "native",
+  "loginRules": [
+    {
+      "action": "click",
+      "selector": "[data-focus-target='gum-continue']",
+      "timeout": 5000,
+      "optional": true
+    },
+    {
+      "action": "fill",
+      "selector": "[data-tid='prejoin-display-name-input']",
+      "value": "{{botName}}",
+      "timeout": 30000
+    },
+    {
+      "action": "click",
+      "selector": "#prejoin-join-button",
+      "timeout": 15000
+    }
+  ],
+  "leaveRules": [
+    {
+      "action": "click",
+      "selector": "#hangup-button",
+      "timeout": 3000,
+      "optional": true
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "platformType": "sfu",
+  "diarizationMode": "native",
+  "loginRules": [
+    {
+      "action": "fill",
+      "selector": "input[placeholder=\"Enter your name\"]",
+      "value": "{{botName}}",
+      "timeout": 30000
+    },
+    {
+      "action": "click",
+      "selector": "[aria-label=\"Join meeting\"]",
+      "timeout": 15000
+    }
+  ],
+  "leaveRules": [
+    {
+      "action": "click",
+      "selector": "[aria-label=\"Leave\"]",
+      "timeout": 3000,
+      "optional": true
+    }
+  ]
+}

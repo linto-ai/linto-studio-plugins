@@ -1,0 +1,31 @@
+{
+  "platformType": "mcu",
+  "diarizationMode": "asr",
+  "blockExternalDomains": true,
+  "loginRules": [
+    {
+      "action": "fill",
+      "selector": "input[placeholder=\"Enter your name!\"]",
+      "value": "{{botName}}",
+      "timeout": 30000
+    },
+    {
+      "action": "click",
+      "selector": "#room-join",
+      "timeout": 15000
+    },
+    {
+      "action": "click",
+      "selector": "text=Listen only",
+      "timeout": 1800000
+    }
+  ],
+  "leaveRules": [
+    {
+      "action": "click",
+      "selector": "[aria-label=\"Leave audio\"]",
+      "timeout": 3000,
+      "optional": true
+    }
+  ]
+}

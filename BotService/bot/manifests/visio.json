@@ -1,0 +1,25 @@
+{
+  "platformType": "sfu",
+  "diarizationMode": "native",
+  "loginRules": [
+    {
+      "action": "fill",
+      "selector": "input[type='text']",
+      "value": "{{botName}}",
+      "timeout": 30000
+    },
+    {
+      "action": "click",
+      "selector": "button[type='submit']",
+      "timeout": 10000
+    }
+  ],
+  "leaveRules": [
+    {
+      "action": "click",
+      "selector": "button[aria-label='Quitter']",
+      "timeout": 3000,
+      "optional": true
+    }
+  ]
+}

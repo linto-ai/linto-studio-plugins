@@ -49,8 +49,9 @@
               "description": "The type of bot to start.",
               "enum": [
                 "jitsi",
-                "youtube",
-                "bigbluebutton"
+                "bigbluebutton",
+                "teams",
+                "visio"
               ]
             }
         },

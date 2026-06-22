@@ -61,21 +61,31 @@ describe('TranscriberStream', () => {
     assert.deepEqual([...audio[2]], [5])
   })
 
-  it('forwards speakerChanged and participant events only after ready', () => {
+  it('forwards speakerChanged and participant events as soon as the socket is open (not ack-gated)', () => {
+    // Control is NOT ack-gated: the Transcriber creates its SpeakerTracker while
+    // processing init (before ack) and tolerates control before audio, so a
+    // speaker boundary during the handshake must not be dropped.
     ws.emit('open')
     bot.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } })
-    assert.equal(jsonFrames(ws).filter(f => f.type === 'speakerChanged').length, 0, 'gated before ack')
+    assert.equal(jsonFrames(ws).filter(f => f.type === 'speakerChanged').length, 1, 'sent pre-ack once open')
     ws.emit('message', JSON.stringify({ type: 'ack' }))
-    bot.emit('speakerChanged', { type: 'speakerChanged', position: 20, speaker: { id: 'u1', name: 'Alice' } })
     bot.emit('participant-joined', { identity: 'u2', name: 'Bob' })
     bot.emit('participant-left', { identity: 'u2', name: 'Bob' })
     const frames = jsonFrames(ws)
-    assert.ok(frames.some(f => f.type === 'speakerChanged' && f.position === 20))
     assert.ok(frames.some(f => f.type === 'participant' && f.action === 'join' && f.participant.id === 'u2'))
     assert.ok(frames.some(f => f.type === 'participant' && f.action === 'leave' && f.participant.id === 'u2'))
   })
 
-  it('does not send when the socket is not open', () => {
+  it('does not send control before the socket is open', () => {
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } })
+    // ws starts OPEN in the fake; simulate a not-yet-open socket explicitly.
+    const ws2 = new FakeWs(); ws2.readyState = 0 // CONNECTING
+    const bot2 = fakeBot(); new TranscriberStream(ws2, bot2)
+    bot2.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } })
+    assert.equal(ws2.sent.length, 0)
+  })
+
+  it('does not send audio when the socket is not open', () => {
     ws.emit('open')
     ws.emit('message', JSON.stringify({ type: 'ack' }))
     ws.readyState = 3 // CLOSED

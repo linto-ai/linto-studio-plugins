@@ -127,6 +127,29 @@ describe('Bot', () => {
     })
   })
 
+  it('auto-leaves via the join watchdog when no participant is ever seen', (done) => {
+    const bot = makeBot('visio')
+    bot.joinTimeoutMs = 10
+    bot.on('meeting-empty', () => done())
+    bot._armJoinWatchdog()
+  })
+
+  it('cancels the join watchdog once a participant is mapped', () => {
+    const bot = makeBot('visio')
+    bot.joinTimeoutMs = 10000
+    bot._armJoinWatchdog()
+    assert.notEqual(bot.joinWatchdog, null)
+    bot._onParticipantMapping(0, { id: 'u1', name: 'Alice' })
+    assert.equal(bot.joinWatchdog, null)
+  })
+
+  it('dispose() is idempotent', async () => {
+    const bot = makeBot('visio')
+    await bot.dispose()
+    assert.equal(bot.disposed, true)
+    await bot.dispose() // must not throw / double-run
+  })
+
   it('substitutes {{botName}} in fill rule values', () => {
     const bot = makeBot('visio')
     bot.botName = 'Acme Bot'

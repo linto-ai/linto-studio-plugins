@@ -29,8 +29,12 @@ class SpeakerTracker {
       this.participants.set(message.participant.id, message.participant)
       logger.debug(`SpeakerTracker: participant joined ${message.participant.name || message.participant.id}`)
     } else if (message.action === 'leave') {
-      this.participants.delete(message.participant.id)
-      logger.debug(`SpeakerTracker: participant left ${message.participant.id}`)
+      const id = message.participant.id
+      this.participants.delete(id)
+      // Don't keep stamping a departed participant onto new segments.
+      if (this.currentSpeaker && this.currentSpeaker.id === id) this.currentSpeaker = null
+      if (this.lastKnownSpeaker && this.lastKnownSpeaker.id === id) this.lastKnownSpeaker = null
+      logger.debug(`SpeakerTracker: participant left ${id}`)
     }
   }
 

@@ -67,6 +67,15 @@ describe('SpeakerTracker (native diarization)', () => {
     assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'locked after grace');
   });
 
+  it('clears the current/last speaker when that participant leaves', () => {
+    const t = new SpeakerTracker();
+    t.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.updateParticipant({ action: 'leave', participant: { id: 'u1' } });
+    assert.equal(t.currentSpeaker, null, 'departed participant no longer current');
+    assert.equal(t.lastKnownSpeaker, null, 'departed participant not used as fallback');
+  });
+
   it('clears a segment and all state', () => {
     const t = new SpeakerTracker();
     t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });

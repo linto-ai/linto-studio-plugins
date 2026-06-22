@@ -381,12 +381,11 @@ class MultiplexedWebsocketServer extends EventEmitter {
           delete this.runningChannels[fd.channel.id];
       }
       if (fd) {
-          const key = `${fd.session.id}_${fd.channel.id}`;
-          const tracker = this.speakerTrackers.get(key);
-          if (tracker) {
-              tracker.clear();
-              this.speakerTrackers.delete(key);
-          }
+          // Drop the map reference (a reconnect gets a fresh tracker) but do NOT
+          // clear() it synchronously: session-stop triggers an async ASR flush
+          // (flushFinals) whose trailing finals still read this tracker to stamp
+          // their speaker. The ASR holds the reference; GC reclaims it after dispose.
+          this.speakerTrackers.delete(`${fd.session.id}_${fd.channel.id}`);
       }
   }
 }

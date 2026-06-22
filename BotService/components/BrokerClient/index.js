@@ -42,7 +42,20 @@ class BrokerClient extends Component {
     this.audioServer = new LocalAudioServer()
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true })
 
+    // A Chromium crash kills every bot's page at once: tear those bots down so
+    // their mixers/Transcriber sockets don't leak (the pool already dropped the
+    // dead contexts). The next startbot relaunches a fresh browser.
+    this.browserPool.on('disconnected', () => this._handleBrowserLost())
+
     this._wire()
+  }
+
+  async _handleBrowserLost () {
+    logger.warn(`BotService: browser lost, stopping ${this.bots.size} bot(s)`)
+    await Promise.all([...this.bots.keys()].map(key => {
+      const [sessionId, channelId] = key.split('_')
+      return this.stopBot(sessionId, channelId)
+    }))
   }
 
   _wire () {
@@ -77,6 +90,10 @@ class BrokerClient extends Component {
     this.client.publishStatus({ activeBots: this.bots.size, capabilities: this.capabilities })
   }
 
+  // NOTE: enableDisplaySub / subSource are accepted for contract compatibility
+  // (Studio still posts them, the Scheduler forwards them) but intentionally
+  // unused in v1 — in-meeting caption injection was dropped (redundant with the
+  // platforms' native captions and Studio's live captions; see the redesign notes).
   async startBot ({ session, channel, address, botType, websocketUrl, botId, enableDisplaySub, subSource }) {
     const key = `${session.id}_${channel.id}`
     logger.info(`BotService: starting bot ${key} (${botType})`)
@@ -89,8 +106,16 @@ class BrokerClient extends Component {
     // Join the meeting BEFORE opening the Transcriber WS: login can be slow and
     // we don't want the Transcriber's connection-idle timeout to fire mid-join.
     const ok = await bot.init()
-    if (!ok || !this.bots.has(key)) {
+    if (!ok) {
       await this.stopBot(session.id, channel.id)
+      return
+    }
+    // A stopbot that arrived during the (slow) init replaced/removed our record:
+    // the just-initialized bot is now an orphan — dispose it directly (stopBot
+    // would no-op on the missing key and leak the live context).
+    if (this.bots.get(key) !== record) {
+      logger.info(`BotService: bot ${key} was stopped during init, disposing orphan`)
+      await bot.dispose()
       return
     }
 

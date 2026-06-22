@@ -1,3 +1,4 @@
+const EventEmitter = require('events')
 const { logger } = require('live-srt-lib')
 const { chromium } = require('playwright')
 
@@ -22,8 +23,9 @@ const CONTEXT_OPTIONS = {
  * `maxContexts` and lazily (re)launches the browser if it is missing or has
  * crashed, so a browser disconnect doesn't permanently break the service.
  */
-class BrowserPool {
+class BrowserPool extends EventEmitter {
   constructor (options = {}) {
+    super()
     this.maxContexts = options.maxContexts || 10
     this.browser = null
     this.launching = null // in-flight launch promise (dedupes concurrent (re)launches)
@@ -43,11 +45,14 @@ class BrowserPool {
         this.browser = browser
         browser.on('disconnected', () => {
           // Crash or external close: drop the reference and forget the now-dead
-          // contexts so the next createContext() relaunches a fresh browser.
+          // contexts so the next createContext() relaunches a fresh browser, and
+          // signal owners so they can tear down the bots whose pages just died
+          // (their mixers/WS live outside the pool and would otherwise leak).
           if (this.browser === browser) {
             logger.warn('BrowserPool: Chromium disconnected, clearing pool')
             this.browser = null
             this.contexts.clear()
+            this.emit('disconnected')
           }
         })
         logger.info('BrowserPool: Chromium launched')

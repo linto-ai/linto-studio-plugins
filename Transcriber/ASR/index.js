@@ -45,6 +45,9 @@ class ASR extends eventEmitter {
     // page state) instead of the ASR provider. null for ordinary streams.
     this.speakerTracker = options.speakerTracker || null;
     this.diarizationMode = options.diarizationMode || 'asr';
+    // Previous PRIMARY final's segment, cleared one final late so a lagging
+    // dual-recognizer secondary (translation) can still read the segment's speaker.
+    this._prevFinalSegmentId = null;
     this.paused = false;
     this._flushed = false;
     this._transitionLock = Promise.resolve();
@@ -158,7 +161,13 @@ class ASR extends eventEmitter {
   // ordinary (non-bot) streams where speakerTracker is null.
   _applyNativeSpeaker(transcription) {
     if (this.diarizationMode !== 'native' || !this.speakerTracker) return;
-    this.speakerTracker.assignSpeakerToSegment(transcription.segmentId);
+    // Only the canonical PRIMARY result owns the assignment; a dual-recognizer
+    // secondary (isPrimary===false) reads it read-only so it inherits the
+    // primary's speaker instead of re-deriving it from the (possibly changed)
+    // current speaker.
+    if (transcription.isPrimary !== false) {
+      this.speakerTracker.assignSpeakerToSegment(transcription.segmentId);
+    }
     const speaker = this.speakerTracker.getSpeakerForSegment(transcription.segmentId);
     if (speaker) {
       transcription.locutor = speaker.name || speaker.id;
@@ -213,7 +222,6 @@ class ASR extends eventEmitter {
         transcription.segmentId = this._segmentIdFor(transcription);
         this._applyNativeSpeaker(transcription);
         this.emit('final', transcription);
-        if (this.speakerTracker) this.speakerTracker.clearSegment(transcription.segmentId);
         // Origin-tagging for the Microsoft dual recognizer (diarization +
         // translation). The primary (ConversationTranscriber) is the canonical
         // source of segments and speaker; only its finals advance segmentId.
@@ -225,6 +233,12 @@ class ASR extends eventEmitter {
         // (amazon, linto, openai, fake, and every single-recognizer Microsoft
         // mode) is treated as primary, so their behaviour is unchanged.
         if (transcription.isPrimary !== false) {
+          // Native diarization: free the PREVIOUS segment now (bounded memory)
+          // while keeping the just-emitted one available for a lagging secondary.
+          if (this.speakerTracker && this._prevFinalSegmentId != null) {
+            this.speakerTracker.clearSegment(this._prevFinalSegmentId);
+          }
+          this._prevFinalSegmentId = transcription.segmentId;
           this.segmentId++;
         }
       }

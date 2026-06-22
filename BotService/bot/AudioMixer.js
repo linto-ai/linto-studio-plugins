@@ -9,9 +9,11 @@ const FRAME_DURATION_MS = 20
 const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_DURATION_MS) / 1000 // 320 samples / 640 bytes
 
 const DEFAULTS = {
-  // Per-participant ring buffer depth (~200 ms) — absorbs jitter between the
-  // browser capture cadence and the fixed 20 ms mix tick without unbounded growth.
-  bufferFrames: 10,
+  // Per-participant ring buffer depth (~3.2 s) — absorbs jitter between the browser
+  // capture cadence and the fixed 20 ms mix tick, and is large enough to hold the
+  // early-audio burst the Bot replays once a participant mapping arrives (so the
+  // first words are mixed, not overwritten). Drained at one frame per tick.
+  bufferFrames: 160,
   // RMS amplitude above which a participant is considered to be speaking. Tuned
   // for S16LE speech; below this is treated as silence/background noise.
   energyThreshold: 500,
@@ -112,9 +114,11 @@ class AudioMixer extends EventEmitter {
     let maxEnergy = 0
     let dominantSpeakerId = null
     let dominantSpeakerName = null
+    let contributed = false
 
     for (const [participantId, participant] of this.participantBuffers) {
       if (participant.samplesAvailable < SAMPLES_PER_FRAME) continue
+      contributed = true
 
       let energySq = 0
       for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
@@ -134,11 +138,16 @@ class AudioMixer extends EventEmitter {
       }
     }
 
-    // Copy out: 'audio' consumers may hold the buffer across frames, and the
-    // accumulator is reused next tick.
-    const out = Buffer.allocUnsafe(mixedFrame.byteLength)
-    out.set(new Uint8Array(mixedFrame.buffer, mixedFrame.byteOffset, mixedFrame.byteLength))
-    this.emit('audio', out)
+    // Only emit when at least one participant supplied audio this tick: before
+    // the first participant maps (and during full silence) there is nothing
+    // useful to stream, so we avoid feeding continuous silence into the ASR.
+    if (contributed) {
+      // Copy out: 'audio' consumers may hold the buffer across frames, and the
+      // accumulator is reused next tick.
+      const out = Buffer.allocUnsafe(mixedFrame.byteLength)
+      out.set(new Uint8Array(mixedFrame.buffer, mixedFrame.byteOffset, mixedFrame.byteLength))
+      this.emit('audio', out)
+    }
 
     this._updateSpeaker(dominantSpeakerId, dominantSpeakerName)
     this.mixPosition += FRAME_DURATION_MS

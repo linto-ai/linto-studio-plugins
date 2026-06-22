@@ -105,6 +105,16 @@ describe('AudioMixer', () => {
       mixer.mixAndEmit()
     })
 
+    it('does not emit an audio frame when no participant contributed (silence skip)', () => {
+      let frames = 0
+      mixer.on('audio', () => { frames++ })
+      mixer.mixAndEmit() // no participants at all
+      mixer.addAudio('p1', frame(1000), 0)
+      mixer.mixAndEmit() // p1 has a full frame -> emits
+      mixer.mixAndEmit() // p1 drained, nothing new -> skipped
+      assert.equal(frames, 1)
+    })
+
     it('emits a single transition while the same speaker keeps talking', () => {
       mixer.addAudio('p1', frame(5000), 0)
       let count = 0

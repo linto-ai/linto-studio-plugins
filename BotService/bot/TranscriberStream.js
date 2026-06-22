@@ -57,7 +57,11 @@ class TranscriberStream {
   }
 
   _sendControl (obj) {
-    if (this.ready && this._isOpen()) this.ws.send(JSON.stringify(obj))
+    // Control messages (speakerChanged / participant) are NOT ack-gated: the
+    // Transcriber creates the SpeakerTracker while processing `init` (before it
+    // sends `ack`) and tolerates control before audio, so forwarding as soon as
+    // the socket is open avoids dropping speaker boundaries during the handshake.
+    if (this._isOpen()) this.ws.send(JSON.stringify(obj))
   }
 
   _flush () {

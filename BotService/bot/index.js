@@ -47,12 +47,18 @@ class Bot extends EventEmitter {
     this.wsPath = `/bot-${this.contextId}`
     this.botName = process.env.BOT_DISPLAY_NAME || 'LinTO Bot'
     this.emptyMeetingTimeoutMs = parseInt(process.env.EMPTY_MEETING_TIMEOUT_SECONDS || '60', 10) * 1000
+    // Absolute watchdog: if NOBODY is ever seen after the bot joins (wrong link,
+    // never admitted from the lobby, room already empty, mapping never resolves),
+    // the empty-meeting timer never arms — so leave anyway after this window.
+    this.joinTimeoutMs = parseInt(process.env.JOIN_TIMEOUT_SECONDS || '120', 10) * 1000
 
     this.trackParticipants = new Map() // trackIndex -> { id, name }
     this.participants = new Map() // participantId -> { id, name }
     this.earlyAudio = new Map() // trackIndex -> [Buffer] buffered until mapped (SFU)
     this.hasSeenParticipant = false
     this.emptyMeetingTimer = null
+    this.joinWatchdog = null
+    this.disposed = false
 
     this.manifest = this._loadManifest(botType)
     this.logger = logger
@@ -103,15 +109,22 @@ class Bot extends EventEmitter {
       await this.page.addInitScript(getInterceptScript(localWsUrl, this.manifest))
 
       if (this.manifest.blockExternalDomains) {
+        // Allow the meeting host and its subdomains only; match on the parsed
+        // request hostname (not a raw URL substring, which "evil.com?x=allowed"
+        // would slip through and "allowed.evil.com" would wrongly pass).
         const allowed = new URL(this.address).hostname
         await this.page.route('**/*', (route) => {
-          route.request().url().includes(allowed) ? route.continue() : route.abort()
+          let host = ''
+          try { host = new URL(route.request().url()).hostname } catch (e) { host = '' }
+          const ok = host === allowed || host.endsWith(`.${allowed}`)
+          ok ? route.continue() : route.abort()
         })
       }
 
       logger.info(`Bot[${this.contextId}]: joining ${this.address}`)
       await this.page.goto(this.address, { timeout: 50000 })
       await this.execRules(this.manifest.loginRules)
+      this._armJoinWatchdog()
 
       if (this.isSfu) {
         this._startMixer()
@@ -206,6 +219,7 @@ class Bot extends EventEmitter {
       this.emit('participant-joined', { identity: participant.id, name: participant.name })
     }
     this.hasSeenParticipant = true
+    this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
     this._flushEarlyAudio(trackIndex, participant)
   }
@@ -246,6 +260,23 @@ class Bot extends EventEmitter {
     if (!this.emptyMeetingTimer) return
     clearTimeout(this.emptyMeetingTimer)
     this.emptyMeetingTimer = null
+  }
+
+  _armJoinWatchdog () {
+    if (this.joinWatchdog || this.hasSeenParticipant) return
+    this.joinWatchdog = setTimeout(() => {
+      this.joinWatchdog = null
+      if (!this.hasSeenParticipant) {
+        logger.warn(`Bot[${this.contextId}]: no participant seen within ${this.joinTimeoutMs / 1000}s, leaving`)
+        this.emit('meeting-empty')
+      }
+    }, this.joinTimeoutMs)
+  }
+
+  _cancelJoinWatchdog () {
+    if (!this.joinWatchdog) return
+    clearTimeout(this.joinWatchdog)
+    this.joinWatchdog = null
   }
 
   getParticipantsList () {
@@ -312,12 +343,17 @@ class Bot extends EventEmitter {
   }
 
   async dispose () {
+    if (this.disposed) return // idempotent: init-failure path + stopBot both call us
+    this.disposed = true
+    this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
-    // Best-effort graceful leave before tearing the context down.
+    // Best-effort graceful leave before tearing the context down (skip if the page
+    // is already gone, e.g. an init failure or a browser crash).
     if (this.manifest && this.manifest.leaveRules && this.page) {
       await this.execRules(this.manifest.leaveRules, true)
     }
+    this.page = null
     this.audioServer.unregisterBot(this.wsPath)
     await this.browserPool.destroyContext(this.contextId)
     this.removeAllListeners()

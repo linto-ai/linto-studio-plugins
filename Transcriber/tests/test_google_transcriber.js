@@ -25,6 +25,7 @@ class MockRecognizeStream {
     constructor(request) {
         this.request = request;
         this.writable = true;
+        this.writableNeedDrain = false;
         this.writes = [];
         this._handlers = {};
         this.ended = false;
@@ -34,14 +35,31 @@ class MockRecognizeStream {
         this._handlers[event].push(cb);
         return this;
     }
+    once(event, cb) {
+        const wrapper = (payload) => {
+            this.removeListener(event, wrapper);
+            cb(payload);
+        };
+        return this.on(event, wrapper);
+    }
+    removeListener(event, cb) {
+        if (this._handlers[event]) {
+            this._handlers[event] = this._handlers[event].filter(h => h !== cb);
+        }
+        return this;
+    }
     removeAllListeners(event) {
         if (event) delete this._handlers[event]; else this._handlers = {};
         return this;
     }
+    listenerCount(event) {
+        if (event) return (this._handlers[event] || []).length;
+        return Object.values(this._handlers).reduce((n, arr) => n + arr.length, 0);
+    }
     write(buf) { this.writes.push(buf); }
     end() { this.ended = true; this.writable = false; }
     emit(event, payload) {
-        (this._handlers[event] || []).forEach(cb => cb(payload));
+        (this._handlers[event] || []).slice().forEach(cb => cb(payload));
     }
 }
 
@@ -184,6 +202,11 @@ describe('GoogleTranscriber', () => {
             assert.ok(req.config.diarizationConfig);
             assert.strictEqual(req.config.diarizationConfig.enableSpeakerDiarization, true);
         });
+
+        it('always requests word time offsets (needed for per-segment start)', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            assert.strictEqual(t._buildRequest().config.enableWordTimeOffsets, true);
+        });
     });
 
     describe('formatResult()', () => {
@@ -214,7 +237,43 @@ describe('GoogleTranscriber', () => {
             assert.strictEqual(t.formatResult(result).end, 13);
         });
 
-        it('extracts locutor from speakerTag when diarization is on', () => {
+        it('derives start from the first word offset (does not absorb silence)', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            t.lastEnd = 2; // previous final ended at 2s
+            const result = {
+                alternatives: [{
+                    transcript: 'after a long pause',
+                    // utterance actually starts at 10s after ~8s of silence
+                    words: [
+                        { word: 'after', startTime: { seconds: 10, nanos: 0 } },
+                        { word: 'pause', startTime: { seconds: 10, nanos: 800000000 } },
+                    ],
+                }],
+                resultEndTime: { seconds: 11, nanos: 0 },
+            };
+            const out = t.formatResult(result);
+            assert.strictEqual(out.start, 10, 'start should track the first word, not the previous end');
+            assert.strictEqual(out.end, 11);
+        });
+
+        it('adds _streamOffset to the word-derived start across restarts', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            t._streamOffset = 100;
+            const result = {
+                alternatives: [{ transcript: 'x', words: [{ word: 'x', startTime: { seconds: 1, nanos: 500000000 } }] }],
+                resultEndTime: { seconds: 2, nanos: 0 },
+            };
+            assert.strictEqual(t.formatResult(result).start, 101.5);
+        });
+
+        it('falls back to lastEnd for results without word timings', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            t.lastEnd = 5;
+            const result = { alternatives: [{ transcript: 'no words' }], resultEndTime: { seconds: 6, nanos: 0 } };
+            assert.strictEqual(t.formatResult(result).start, 5);
+        });
+
+        it('attributes locutor to the FIRST tagged speaker (consistent with Amazon)', () => {
             const t = new GoogleTranscriber({ id: 's' }, makeChannel({ diarization: true }));
             const result = {
                 alternatives: [{
@@ -226,7 +285,16 @@ describe('GoogleTranscriber', () => {
                 }],
                 resultEndTime: { seconds: 1, nanos: 0 },
             };
-            assert.strictEqual(t.formatResult(result).locutor, 'spk_2');
+            assert.strictEqual(t.formatResult(result).locutor, 'spk_1');
+        });
+
+        it('leaves locutor null when diarization is off even if words carry tags', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel({ diarization: false }));
+            const result = {
+                alternatives: [{ transcript: 'x', words: [{ word: 'x', speakerTag: 3 }] }],
+                resultEndTime: { seconds: 1, nanos: 0 },
+            };
+            assert.strictEqual(t.formatResult(result).locutor, null);
         });
     });
 
@@ -322,6 +390,195 @@ describe('GoogleTranscriber', () => {
             const t = new GoogleTranscriber({ id: 's' }, makeChannel());
             await t.start();
             assert.strictEqual(t.client.opts.projectId, 'proj-from-creds');
+            await t.stop();
+        });
+    });
+
+    describe('_onError()', () => {
+        it('restarts silently on OUT_OF_RANGE (code 11) without emitting error', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const first = t.recognizeStream;
+            let errored = false;
+            t.on('error', () => { errored = true; });
+            first.emit('error', { code: 11, message: 'Exceeded maximum allowed stream duration' });
+            assert.strictEqual(errored, false, 'duration rollover must not surface an error');
+            assert.notStrictEqual(t.recognizeStream, first, 'a fresh stream should be opened');
+            assert.strictEqual(first.ended, true, 'old stream torn down');
+            await t.stop();
+        });
+
+        it('restarts on an "exceed"-message error even without code 11', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const first = t.recognizeStream;
+            t.on('error', () => assert.fail('should not emit error'));
+            first.emit('error', { message: 'stream duration exceeded the limit' });
+            assert.notStrictEqual(t.recognizeStream, first);
+            await t.stop();
+        });
+
+        it('maps gRPC codes to the contract error strings', async () => {
+            const cases = [[7, 'FORBIDDEN'], [16, 'AUTHENTICATION_FAILURE'], [8, 'TOO_MANY_REQUESTS'], [999, 'RUNTIME_ERROR']];
+            for (const [code, expected] of cases) {
+                const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+                await t.start();
+                const errs = [];
+                t.on('error', e => errs.push(e));
+                t.recognizeStream.emit('error', { code, message: 'boom' });
+                assert.deepStrictEqual(errs, [expected], `code ${code} -> ${expected}`);
+                await t.stop();
+            }
+        });
+
+        it('emits a STRING, never an Error object (wrapper contract)', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            let payload;
+            t.on('error', e => { payload = e; });
+            t.recognizeStream.emit('error', { code: 7, message: 'denied' });
+            assert.strictEqual(typeof payload, 'string');
+            await t.stop();
+        });
+
+        it('swallows a non-restart error that arrives after stop()', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const stream = t.recognizeStream;
+            await t.stop();
+            let errored = false;
+            t.on('error', () => { errored = true; });
+            // stream was torn down (removeAllListeners), but even a direct call is guarded by !isStreaming
+            t._onError({ code: 7, message: 'late' }, stream);
+            assert.strictEqual(errored, false);
+        });
+
+        it('code 11 after stop() does not resurrect a stream', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const stream = t.recognizeStream;
+            await t.stop();
+            t._onError({ code: 11, message: 'exceed' }, stream);
+            assert.strictEqual(t.recognizeStream, null, 'restart is a no-op once stopped');
+        });
+    });
+
+    describe('_restartStream() — timestamp continuity', () => {
+        it('accumulates _streamOffset so timestamps stay monotonic across a restart', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const first = t.recognizeStream;
+            // a final ends at 5s on the first stream
+            first.emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: 'one' }], resultEndTime: { seconds: 5, nanos: 0 } }] });
+            assert.strictEqual(t.lastEnd, 5);
+
+            t._restartStream();
+            assert.strictEqual(t._streamOffset, 5, 'offset carries the previous end');
+            assert.notStrictEqual(t.recognizeStream, first);
+
+            // the new stream reports a result at +3s relative => absolute 8s
+            const finals = [];
+            t.on('transcribed', p => finals.push(p));
+            t.recognizeStream.emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: 'two' }], resultEndTime: { seconds: 3, nanos: 0 } }] });
+            assert.strictEqual(finals.length, 1);
+            assert.strictEqual(finals[0].end, 8);
+            assert.strictEqual(finals[0].text, 'two');
+            await t.stop();
+        });
+
+        it('does not restart when not streaming', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            t.isStreaming = false;
+            t._restartStream(); // must be a safe no-op
+            assert.strictEqual(t.recognizeStream, null);
+        });
+    });
+
+    describe('stale-stream isolation (M1)', () => {
+        it('ignores buffered data delivered by an old stream after a restart', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const old = t.recognizeStream;
+            t._restartStream();
+            const events = [];
+            t.on('transcribed', p => events.push(p));
+            t.on('transcribing', p => events.push(p));
+            // old stream was torn down: emitting on it must reach no handler
+            old.emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: 'ghost' }], resultEndTime: { seconds: 1, nanos: 0 } }] });
+            assert.strictEqual(events.length, 0, 'no phantom caption from the retired stream');
+            assert.strictEqual(old.listenerCount(), 0, 'all listeners detached from the old stream');
+            await t.stop();
+        });
+
+        it('the identity guard drops data tagged with a non-current stream', () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            t.startedAt = 'x';
+            t.recognizeStream = { current: true };
+            let emitted = false;
+            t.on('transcribed', () => { emitted = true; });
+            t._onData({ results: [{ isFinal: true, alternatives: [{ transcript: 'stale' }], resultEndTime: { seconds: 1, nanos: 0 } }] }, { other: true });
+            assert.strictEqual(emitted, false);
+        });
+    });
+
+    describe('transcribe() backpressure & teardown', () => {
+        it('drops audio (no write) while the stream needs to drain, resumes after drain', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const stream = t.recognizeStream;
+            stream.writableNeedDrain = true;
+            t.transcribe(Buffer.from([1, 2]));
+            assert.strictEqual(stream.writes.length, 0, 'must not write under backpressure');
+            // simulate the gRPC stream draining
+            stream.writableNeedDrain = false;
+            stream.emit('drain');
+            t.transcribe(Buffer.from([3, 4]));
+            assert.strictEqual(stream.writes.length, 1, 'writes resume once drained');
+            await t.stop();
+        });
+
+        it('drops audio when not streaming (after stop)', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            await t.stop();
+            t.transcribe(Buffer.from([1])); // no stream, must not throw
+            assert.strictEqual(t.recognizeStream, null);
+        });
+
+        it('coerces a Uint8Array into a Node Buffer before writing', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            t.transcribe(new Uint8Array([9, 8, 7]));
+            assert.strictEqual(t.recognizeStream.writes.length, 1);
+            assert.ok(Buffer.isBuffer(t.recognizeStream.writes[0]));
+            await t.stop();
+        });
+
+        it('stop() tears down stream + client and detaches every listener', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const stream = t.recognizeStream;
+            const client = t.client;
+            await t.stop();
+            assert.strictEqual(stream.ended, true, 'stream ended');
+            assert.strictEqual(stream.listenerCount(), 0, 'stream listeners detached');
+            assert.strictEqual(client.closed, true, 'client closed');
+            assert.strictEqual(t.recognizeStream, null);
+            assert.strictEqual(t.client, null);
+            assert.strictEqual(t.restartTimer, null, 'restart timer cleared');
+        });
+
+        it('start() after stop() reopens a clean stream (pause/resume reuse)', async () => {
+            const t = new GoogleTranscriber({ id: 's' }, makeChannel());
+            await t.start();
+            const first = t.recognizeStream;
+            await t.stop();
+            await t.start();
+            assert.ok(t.recognizeStream);
+            assert.notStrictEqual(t.recognizeStream, first);
+            assert.strictEqual(t.isStreaming, true);
+            assert.strictEqual(t._streamOffset, 0, 'offset reset on a fresh start');
+            assert.strictEqual(t.lastEnd, 0);
             await t.stop();
         });
     });

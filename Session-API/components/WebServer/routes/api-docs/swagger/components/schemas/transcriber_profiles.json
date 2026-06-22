@@ -185,6 +185,27 @@
             "languages",
             "endpoint"
           ]
+        },
+        {
+          "required": [
+            "type",
+            "name",
+            "description",
+            "languages",
+            "region",
+            "trustAnchorArn",
+            "profileArn",
+            "roleArn"
+          ]
+        },
+        {
+          "required": [
+            "type",
+            "name",
+            "description",
+            "languages",
+            "credentials"
+          ]
         }
       ]
     },

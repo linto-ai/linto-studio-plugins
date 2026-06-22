@@ -205,6 +205,9 @@ class BrokerClient extends Component {
         return;
       }
       this.botOwnership.set(`${botData.session.id}_${botData.channel.id}`, botservice.uniqueId);
+      // Persist ownership so a stopbot can still be routed (and orphans reaped)
+      // after a Scheduler restart, when the in-memory map is gone.
+      await Model.Bot.update({ botservice: botservice.uniqueId }, { where: { id: botId } });
       this.client.publish(`botservice/in/${botservice.uniqueId}/startbot`, botData, 2, false, true);
       logger.debug(`Bot ${botId} scheduled on BotService ${botservice.uniqueId} (${botData.botType}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
@@ -220,12 +223,14 @@ class BrokerClient extends Component {
     // matches the Transcriber's stream validation (which sorts channels by id).
     const ownChannel = await Model.Channel.findByPk(bot.channelId);
     if (!ownChannel) { logger.error(`Channel ${bot.channelId} not found for bot ${botId}`); return null; }
-    const session = await Model.Session.findByPk(ownChannel.sessionId, {
+    const session = ownChannel.sessionId ? await Model.Session.findByPk(ownChannel.sessionId, {
       include: [{ model: Model.Channel, as: 'channels', include: [Model.TranscriberProfile] }],
       order: [[{ model: Model.Channel, as: 'channels' }, 'id', 'ASC']]
-    });
-    const channels = session.channels;
+    }) : null;
+    if (!session) { logger.error(`Session for bot ${botId} (channel ${bot.channelId}) not found`); return null; }
+    const channels = session.channels || [];
     const channelIndex = channels.findIndex(c => c.id === bot.channelId);
+    if (channelIndex < 0) { logger.error(`Channel ${bot.channelId} not in session ${session.id} for bot ${botId}`); return null; }
     const channel = channels[channelIndex];
 
     return {
@@ -254,7 +259,9 @@ class BrokerClient extends Component {
         return;
       }
       const key = `${channel.sessionId}_${channel.id}`;
-      const owner = this.botOwnership.get(key);
+      // Prefer the in-memory map; fall back to the persisted owner so a stop
+      // survives a Scheduler restart that lost the map.
+      const owner = this.botOwnership.get(key) || bot.botservice;
       this.botOwnership.delete(key);
       if (owner) {
         this.client.publish(`botservice/in/${owner}/stopbot`, { sessionId: channel.sessionId, channelId: channel.id }, 2, false, true);
@@ -285,12 +292,20 @@ class BrokerClient extends Component {
     logger.debug(`BotService ${botservice.uniqueId} UP (capabilities: ${(botservice.capabilities || []).join(', ')})`);
   }
 
-  unregisterBotService(botservice) {
+  async unregisterBotService(botservice) {
     this.botservices = this.botservices.filter(b => b.uniqueId !== botservice.uniqueId);
     for (const [key, owner] of this.botOwnership) {
       if (owner === botservice.uniqueId) this.botOwnership.delete(key);
     }
-    logger.debug(`BotService ${botservice.uniqueId} DOWN`);
+    // The replica is gone: its bots died with it. Reap their now-orphaned rows so
+    // they don't linger (the channels deactivate via the Transcriber WS close).
+    try {
+      const reaped = await Model.Bot.destroy({ where: { botservice: botservice.uniqueId } });
+      if (reaped) logger.debug(`BotService ${botservice.uniqueId} DOWN — reaped ${reaped} orphaned bot row(s)`);
+      else logger.debug(`BotService ${botservice.uniqueId} DOWN`);
+    } catch (error) {
+      logger.error(`Error reaping bots for ${botservice.uniqueId}: ${error.message}`);
+    }
   }
 
   // Append a persistence task to the channel's serialized chain. The

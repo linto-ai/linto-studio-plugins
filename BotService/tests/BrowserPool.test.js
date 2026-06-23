@@ -190,22 +190,26 @@ describe('BrowserPool', () => {
       assert.equal(launchCount, 1) // a brand-new browser was launched
     })
 
-    it('stays usable after a destroy() that races an in-flight create', async () => {
-      // Kick off a create and tear the pool down before its launch settles, then
-      // confirm the pool can be driven again afterwards (the important contract).
-      //
-      // KNOWN GAP (reported, source not fixed here): destroy() does not cancel or
-      // await `this.launching`, so an in-flight launch that resolves AFTER destroy
-      // repopulates `this.browser` (and re-inserts the context that destroy already
-      // drained) — that browser is then never closed (leak) and the contexts map is
-      // left inconsistent with a "destroyed" pool. We therefore do NOT assert
-      // browser === null here; we assert the recoverability the caller relies on.
+    it('leaves no connected browser after a destroy() that races an in-flight create', async () => {
+      // T19: destroy() now marks the pool destroyed and awaits `this.launching`,
+      // and the launch path closes any browser that resolves after destroy instead
+      // of installing it (which would leak — nothing else would ever close it). The
+      // in-flight create likewise refuses to re-insert a context into a drained pool.
       const creating = pool.createContext('a')
       await pool.destroy()
-      await creating.catch(() => {}) // the in-flight create may resolve or reject; either is fine
+      const raced = await creating.catch(() => null) // resolves to null in a destroyed pool
 
+      // Leak is fixed: no connected browser left dangling, pool fully drained.
+      assert.equal(pool.browser, null, 'no browser installed after destroy')
+      assert.equal(pool.getActiveCount(), 0, 'no context re-inserted after destroy')
+      assert.equal(raced, null, 'the raced create yields no usable context')
+      // The orphaned browser launched mid-create must have been closed, not leaked.
+      if (currentBrowser) assert.equal(currentBrowser.isConnected(), false, 'orphaned browser closed')
+
+      // Recoverability: the pool can still be driven again afterwards.
       const ok = await pool.createContext('b')
       assert.ok(ok && ok.page, 'pool remains usable after a destroy/create race')
+      assert.equal(pool.getActiveCount(), 1)
       await pool.destroy()
     })
   })

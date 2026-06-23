@@ -91,7 +91,7 @@ test-integration-harness:
 # failure in one is visible and not swallowed by later output. `npm test`
 # requires node_modules; the `*-deps` prerequisite makes sure they exist.
 # ---------------------------------------------------------------------------
-UNIT_TEST_SERVICES := Transcriber Session-API Scheduler
+UNIT_TEST_SERVICES := Transcriber Session-API Scheduler BotService
 
 test-unit-deps:
 	@for svc in $(UNIT_TEST_SERVICES); do \
@@ -110,7 +110,10 @@ test-unit-sessionapi: test-unit-deps
 test-unit-scheduler: test-unit-deps
 	cd Scheduler && npm test
 
-test-unit: test-unit-transcriber test-unit-sessionapi test-unit-scheduler
+test-unit-botservice: test-unit-deps
+	cd BotService && npm test
+
+test-unit: test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-unit-botservice
 
 # ---------------------------------------------------------------------------
 # Full test suite — CI-style. Long but exhaustive.
@@ -137,4 +140,4 @@ test-all:
 .PHONY: run-docker-dev run-dev down-docker-dev run-docker-prod clean-node-modules clean-docker-node-modules check-linto-studio
 .PHONY: install-local $(PACKAGE_DIRS)
 .PHONY: test-integration test-integration-up test-integration-down test-integration-logs test-integration-smoke test-integration-harness
-.PHONY: test-unit-deps test-unit test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-all
+.PHONY: test-unit-deps test-unit test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-unit-botservice test-all

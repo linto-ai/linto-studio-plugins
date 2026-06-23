@@ -76,6 +76,28 @@ describe('SpeakerTracker (native diarization)', () => {
     assert.equal(t.lastKnownSpeaker, null, 'departed participant not used as fallback');
   });
 
+  it('does not stamp a segment with a participant who left before the read', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(9); // assigned to u1 while present
+    // Reordered events: participant-left arrives after the segment was assigned
+    // but before its speaker is read.
+    ref.now = 1300; // past grace, so the assignment is otherwise locked
+    t.updateParticipant({ action: 'leave', participant: { id: 'u1' } });
+    assert.equal(t.getSpeakerForSegment(9), null, 'departed participant is not surfaced for the segment');
+  });
+
+  it('assigns null when the current/last speaker has already left at assign time', () => {
+    const t = new SpeakerTracker();
+    t.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.updateParticipant({ action: 'leave', participant: { id: 'u1' } });
+    t.assignSpeakerToSegment(11); // u1 already departed -> must not be stamped
+    assert.equal(t.getSpeakerForSegment(11), null, 'departed participant not assigned');
+  });
+
   it('clears a segment and all state', () => {
     const t = new SpeakerTracker();
     t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });

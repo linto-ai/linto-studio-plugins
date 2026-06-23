@@ -18,19 +18,33 @@ const DEFAULT_GRACE_PERIOD_MS = 200
 class SpeakerTracker {
   constructor (options = {}) {
     this.participants = new Map() // id -> { id, name }
+    this.departed = new Set() // ids of participants that have left
     this.currentSpeaker = null
     this.lastKnownSpeaker = null
     this.segmentSpeakers = new Map() // segmentId -> { speaker, assignedAt }
     this.gracePeriodMs = options.gracePeriodMs != null ? options.gracePeriodMs : DEFAULT_GRACE_PERIOD_MS
   }
 
+  // A speaker can only be stamped onto a segment if it has not left the meeting.
+  // `participant-left` and `speakerChanged` are independent events, so a reorder
+  // can leave currentSpeaker/lastKnownSpeaker pointing at a departed participant.
+  // We only suppress participants we have actually seen leave (the `departed`
+  // set): speakers that were never explicitly tracked are passed through.
+  _presentSpeaker (speaker) {
+    if (!speaker) return null
+    if (this.departed.has(speaker.id) && !this.participants.has(speaker.id)) return null
+    return speaker
+  }
+
   updateParticipant (message) {
     if (message.action === 'join') {
       this.participants.set(message.participant.id, message.participant)
+      this.departed.delete(message.participant.id)
       logger.debug(`SpeakerTracker: participant joined ${message.participant.name || message.participant.id}`)
     } else if (message.action === 'leave') {
       const id = message.participant.id
       this.participants.delete(id)
+      this.departed.add(id)
       // Don't keep stamping a departed participant onto new segments.
       if (this.currentSpeaker && this.currentSpeaker.id === id) this.currentSpeaker = null
       if (this.lastKnownSpeaker && this.lastKnownSpeaker.id === id) this.lastKnownSpeaker = null
@@ -53,14 +67,16 @@ class SpeakerTracker {
   assignSpeakerToSegment (segmentId) {
     if (segmentId == null || this.segmentSpeakers.has(segmentId)) return
     this.segmentSpeakers.set(segmentId, {
-      speaker: this.currentSpeaker || this.lastKnownSpeaker,
+      speaker: this._presentSpeaker(this.currentSpeaker || this.lastKnownSpeaker),
       assignedAt: this._now()
     })
   }
 
   getSpeakerForSegment (segmentId) {
     const entry = this.segmentSpeakers.get(segmentId)
-    return entry ? entry.speaker : null
+    // A participant may have left between assignment and read (reordered events):
+    // never surface a departed participant for the segment.
+    return entry ? this._presentSpeaker(entry.speaker) : null
   }
 
   clearSegment (segmentId) {
@@ -69,6 +85,7 @@ class SpeakerTracker {
 
   clear () {
     this.participants.clear()
+    this.departed.clear()
     this.segmentSpeakers.clear()
     this.currentSpeaker = null
     this.lastKnownSpeaker = null

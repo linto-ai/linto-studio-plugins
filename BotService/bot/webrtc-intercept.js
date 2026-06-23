@@ -80,8 +80,36 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   function log() { if (DEBUG) console.log.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); }
 
+  // ── Sanitization (T15) ────────────────────────────────────────────────────
+  // Participant id/name come from the meeting page and flow into control
+  // messages → Node logs and the caption DB. Strip control/non-printable chars
+  // (defeats ANSI/newline log injection) and length-cap before sending.
+  var SANITIZE_MAX_LEN = 256;
+  function sanitizeText(value) {
+    if (value == null) return value;
+    var s = String(value);
+    // Drop C0/C1 control characters (incl. \\n \\r \\t and the ESC that starts
+    // ANSI sequences) and the DEL char; collapse to a single space.
+    s = s.replace(/[\\u0000-\\u001F\\u007F-\\u009F]/g, ' ').trim();
+    if (s.length > SANITIZE_MAX_LEN) s = s.slice(0, SANITIZE_MAX_LEN);
+    return s;
+  }
+  function sanitizeParticipant(p) {
+    if (!p || typeof p !== 'object') return p;
+    var out = {};
+    for (var k in p) { if (Object.prototype.hasOwnProperty.call(p, k)) out[k] = p[k]; }
+    if ('id' in out) out.id = sanitizeText(out.id);
+    if ('name' in out) out.name = sanitizeText(out.name);
+    return out;
+  }
+
   // ── Loopback WebSocket to the Node LocalAudioServer ───────────────────────
   let ws = null, wsReady = false, reconnectAttempts = 0, reconnectTimer = null, disposed = false;
+  // T6: remember mappings already announced (trackIndex -> participant) so that
+  // after a Node-side LocalAudioServer crash/restart we can re-emit them on
+  // reconnect (the browser kept its mappings; the Node AudioMixer lost them).
+  let hasConnectedOnce = false;
+  const sentMappings = new Map(); // trackIndex -> participant (sanitized)
   const headerBuf = new ArrayBuffer(4);
   const headerView = new DataView(headerBuf);
   const headerBytes = new Uint8Array(headerBuf);
@@ -91,7 +119,18 @@ function getInterceptScript (localWsUrl, platformConfig) {
     try {
       ws = new WebSocket(LOCAL_WS_URL);
       ws.binaryType = 'arraybuffer';
-      ws.onopen = function () { wsReady = true; reconnectAttempts = 0; log('ws connected'); };
+      ws.onopen = function () {
+        wsReady = true; reconnectAttempts = 0; log('ws connected');
+        // T6: on a RE-open (Node side restarted), replay mappings ONLY — no
+        // audio — so already-mapped tracks are re-announced to the new mixer.
+        if (hasConnectedOnce && sentMappings.size > 0) {
+          log('ws reconnected, replaying', sentMappings.size, 'participant mappings');
+          sentMappings.forEach(function (participant, trackIndex) {
+            sendJson({ type: 'participantMapping', trackIndex: trackIndex, participant: participant });
+          });
+        }
+        hasConnectedOnce = true;
+      };
       ws.onclose = function () {
         wsReady = false;
         if (disposed) return;
@@ -236,9 +275,11 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function mapTrack(trackId, participant) {
     const info = tracks.get(trackId);
     if (!info || info.participantId) return;
-    info.participantId = participant.id;
-    sendJson({ type: 'participantMapping', trackIndex: info.index, participant: participant });
-    log('mapped track', info.index, '->', participant.name);
+    const clean = sanitizeParticipant(participant); // T15: strip control chars + cap length
+    info.participantId = clean.id;
+    sentMappings.set(info.index, clean); // T6: remember for reconnect replay
+    sendJson({ type: 'participantMapping', trackIndex: info.index, participant: clean });
+    log('mapped track', info.index, '->', clean.name);
   }
 
   ${platformBlock}
@@ -339,16 +380,53 @@ const SFU_MAPPING_BLOCK = `
 const TEAMS_SPEAKER_BLOCK = `
   const known = new Map(); // mri -> { id, name }
   let currentSpeakerId = null, startTime = 0;
+  // T14: detect a prolonged disappearance of the (undocumented) callingDebug API
+  // and signal a degrade so the Node side can fall back to ASR diarization.
+  // 200ms poll → 25 consecutive misses ≈ 5s. Warnings are throttled (surfaced via
+  // the page-console bridge) so a missing API does not flood the logs, and the
+  // degrade is signalled once.
+  let missCount = 0, degradeSignalled = false, lastWarnAt = 0;
+  const NATIVE_DIAR_MISS_LIMIT = 25;
+  const WARN_THROTTLE_MS = 5000;
+  function warnTeams(message) {
+    const now = Date.now();
+    if (now - lastWarnAt < WARN_THROTTLE_MS) return;
+    lastWarnAt = now;
+    try { console.warn('[WebRTC-Intercept] Teams native diarization: ' + message); } catch (e) {}
+  }
+  function signalNativeDiarDegrade(reason) {
+    if (degradeSignalled) return;
+    degradeSignalled = true;
+    warnTeams('callingDebug unavailable after ' + missCount + ' polls (' + reason + '); falling back to ASR diarization');
+    sendJson({ type: 'diarizationDegraded', mode: 'asr', reason: reason });
+  }
+  function noteCallingDebugMissing(reason) {
+    missCount++;
+    warnTeams('callingDebug ' + reason + ' (miss ' + missCount + '/' + NATIVE_DIAR_MISS_LIMIT + ')');
+    if (missCount >= NATIVE_DIAR_MISS_LIMIT) signalNativeDiarDegrade(reason);
+  }
   function pollTeams() {
     if (!startTime) startTime = Date.now();
     const position = Date.now() - startTime;
+    let call;
     try {
-      const call = window.callingDebug && window.callingDebug.observableCall;
+      call = window.callingDebug && window.callingDebug.observableCall;
+    } catch (e) {
+      // The undocumented API threw (e.g. it was replaced/removed by an update).
+      noteCallingDebugMissing('threw: ' + (e && e.message ? e.message : 'unknown error'));
+      return;
+    }
+    try {
       if (!call || !call.participants) {
-        known.forEach(function (v, mri) { sendJson({ type: 'participantLeft', participant: { id: mri, name: v.name } }); });
+        // No live call yet OR the API surface vanished. Tear down known
+        // participants; count it toward the degrade detector.
+        known.forEach(function (v, mri) { sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: mri, name: v.name }) }); });
         known.clear();
+        noteCallingDebugMissing(window.callingDebug ? 'present but no observable call' : 'absent');
         return;
       }
+      // API is back / available again: reset the degrade detector.
+      missCount = 0;
       const seen = new Set();
       let domId = null, domName = null;
       call.participants.forEach(function (p) {
@@ -357,18 +435,20 @@ const TEAMS_SPEAKER_BLOCK = `
         const prev = known.get(p.mri);
         if (!prev || prev.name !== p.displayName) {
           known.set(p.mri, { id: p.mri, name: p.displayName });
-          sendJson({ type: 'participantMapping', trackIndex: 0, participant: { id: p.mri, name: p.displayName } });
+          sendJson({ type: 'participantMapping', trackIndex: 0, participant: sanitizeParticipant({ id: p.mri, name: p.displayName }) });
         }
         if (p.voiceLevel > 0 && !domId) { domId = p.mri; domName = p.displayName; }
       });
       known.forEach(function (v, mri) {
-        if (!seen.has(mri)) { known.delete(mri); sendJson({ type: 'participantLeft', participant: { id: mri, name: v.name } }); }
+        if (!seen.has(mri)) { known.delete(mri); sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: mri, name: v.name }) }); }
       });
       if (domId !== currentSpeakerId) {
         currentSpeakerId = domId;
-        sendJson({ type: 'speakerChanged', position: position, speaker: domId ? { id: domId, name: domName } : null });
+        sendJson({ type: 'speakerChanged', position: position, speaker: domId ? sanitizeParticipant({ id: domId, name: domName }) : null });
       }
-    } catch (e) { /* teams API not ready */ }
+    } catch (e) {
+      warnTeams('poll error: ' + (e && e.message ? e.message : 'unknown error'));
+    }
   }
   setTimeout(function () { intervals.push(setInterval(pollTeams, 200)); }, 3000);
 `

@@ -125,6 +125,27 @@ describe('Bot', () => {
       bot.handleJsonMessage({ type: 'speakerChanged', position: 100, speaker: { id: 'm1', name: 'Carol' } })
       assert.equal(ev.speaker.name, 'Carol')
     })
+
+    // T14 — native-diar fallback on degrade signal
+    it('falls back to ASR diarization on a diarizationDegraded signal', () => {
+      const bot = makeBot('teams')
+      assert.equal(bot.manifest.diarizationMode, 'native')
+      let degraded = null
+      bot.on('diarization-degraded', (e) => { degraded = e })
+      bot.handleJsonMessage({ type: 'diarizationDegraded', mode: 'asr', reason: 'absent' })
+      assert.equal(bot.manifest.diarizationMode, 'asr', 'manifest flipped to asr so reconnect-init advertises it')
+      assert.equal(bot.diarizationDegraded, true)
+      assert.deepEqual(degraded, { mode: 'asr', reason: 'absent' })
+    })
+
+    it('the diarizationDegraded handler is idempotent', () => {
+      const bot = makeBot('teams')
+      let count = 0
+      bot.on('diarization-degraded', () => { count++ })
+      bot.handleJsonMessage({ type: 'diarizationDegraded', mode: 'asr', reason: 'absent' })
+      bot.handleJsonMessage({ type: 'diarizationDegraded', mode: 'asr', reason: 'threw' })
+      assert.equal(count, 1, 'only the first degrade is acted on')
+    })
   })
 
   it('auto-leaves via the join watchdog when no participant is ever seen', (done) => {

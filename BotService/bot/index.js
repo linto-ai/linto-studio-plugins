@@ -56,6 +56,7 @@ class Bot extends EventEmitter {
     this.participants = new Map() // participantId -> { id, name }
     this.earlyAudio = new Map() // trackIndex -> [Buffer] buffered until mapped (SFU)
     this.hasSeenParticipant = false
+    this.diarizationDegraded = false // T14: native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
     this.joinWatchdog = null
     this.disposed = false
@@ -143,8 +144,15 @@ class Bot extends EventEmitter {
 
   _wirePageDiagnostics () {
     this.page.on('console', (msg) => {
-      if (msg.type() !== 'error') return
+      const type = msg.type()
       const text = msg.text()
+      // Surface interceptor warnings (e.g. T14 Teams native-diar unavailable) at
+      // warn level so degrade conditions are visible in the Node logs.
+      if (type === 'warning' && text.includes('[WebRTC-Intercept]')) {
+        logger.warn(`Bot[${this.contextId}] page: ${text}`)
+        return
+      }
+      if (type !== 'error') return
       if (!IGNORED_CONSOLE.some(p => text.includes(p))) logger.debug(`Bot[${this.contextId}] page: ${text}`)
     })
     this.page.on('crash', () => {
@@ -207,6 +215,12 @@ class Bot extends EventEmitter {
       case 'participantLeft':
         this._onParticipantLeft(json.participant)
         break
+      case 'diarizationDegraded':
+        // T14: the in-page Teams native-diar poller lost window.callingDebug for
+        // a prolonged period. Fall back to ASR diarization (or at least log it
+        // clearly) so captions are still attributed by the ASR provider.
+        this._onDiarizationDegraded(json)
+        break
       default:
         logger.debug(`Bot[${this.contextId}]: unknown control message ${json.type}`)
     }
@@ -236,6 +250,23 @@ class Bot extends EventEmitter {
 
   _onParticipantLeft (participant) {
     if (participant && participant.id) this._removeParticipant(participant.id, participant.name)
+  }
+
+  // T14: native (Teams) diarization went away (window.callingDebug missing for a
+  // prolonged period). Fall back to ASR diarization, fail-soft: flip the manifest
+  // mode so any future (reconnect) `init` advertises 'asr', and emit an event so
+  // consumers can react. Idempotent — only the first degrade is acted on.
+  _onDiarizationDegraded (json) {
+    if (this.diarizationDegraded) return
+    this.diarizationDegraded = true
+    const reason = (json && json.reason) || 'unknown'
+    if (this.manifest && this.manifest.diarizationMode === 'native') {
+      this.manifest.diarizationMode = 'asr'
+      logger.warn(`Bot[${this.contextId}]: native diarization unavailable (${reason}), falling back to ASR diarization`)
+    } else {
+      logger.warn(`Bot[${this.contextId}]: native diarization reported unavailable (${reason})`)
+    }
+    this.emit('diarization-degraded', { mode: 'asr', reason })
   }
 
   _removeParticipant (id, name) {

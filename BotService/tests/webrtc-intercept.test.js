@@ -48,4 +48,63 @@ describe('webrtc-intercept getInterceptScript()', () => {
     assert.ok(getInterceptScript(WS, { platformType: 'sfu', debug: true }).includes('const DEBUG = true'))
     assert.ok(getInterceptScript(WS, { platformType: 'sfu' }).includes('const DEBUG = false'))
   })
+
+  // T6 — loopback WS resync after LocalAudioServer restart
+  it('remembers sent mappings and replays them only on a reconnect (not first connect)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    assert.ok(s.includes('sentMappings'), 'records mappings already sent')
+    assert.ok(s.includes('hasConnectedOnce'), 'gates replay behind the first connect')
+    assert.ok(/hasConnectedOnce\s*&&\s*sentMappings\.size/.test(s), 'replays only after first connect')
+    assert.ok(s.includes('replaying'))
+    assert.ok(s.includes('hasConnectedOnce = true'))
+    assert.doesNotThrow(() => new Function(s))
+  })
+
+  // T14 — Teams native-diar fallback + logging
+  it('logs and signals a degrade when Teams callingDebug disappears', () => {
+    const teams = getInterceptScript(WS, { platformType: 'teams' })
+    assert.ok(teams.includes('console.warn'), 'warns via the page-console bridge')
+    assert.ok(teams.includes('diarizationDegraded'), 'signals a degrade control message')
+    assert.ok(teams.includes('NATIVE_DIAR_MISS_LIMIT'), 'detects prolonged unavailability')
+    assert.ok(teams.includes("mode: 'asr'") || teams.includes('mode: "asr"'), 'fallback to ASR')
+    assert.ok(teams.includes('noteCallingDebugMissing'), 'a throwing callingDebug is handled, not swallowed')
+    assert.doesNotThrow(() => new Function(teams))
+    // SFU build never ships the Teams degrade logic.
+    const sfu = getInterceptScript(WS, { platformType: 'sfu' })
+    assert.ok(!sfu.includes('diarizationDegraded'))
+  })
+
+  // T15 — sanitize participant id/name before sending
+  it('sanitizes participant id/name (control chars + length cap) before sending', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    assert.ok(s.includes('sanitizeParticipant'), 'sanitizes participants')
+    assert.ok(s.includes('SANITIZE_MAX_LEN'), 'length-caps the values')
+    assert.ok(/const clean = sanitizeParticipant/.test(s), 'mapTrack routes through the sanitizer')
+    const teams = getInterceptScript(WS, { platformType: 'teams' })
+    assert.ok(teams.includes('sanitizeParticipant'), 'Teams mappings go through the sanitizer')
+  })
+
+  it('the sanitizer strips control chars and caps length (behavioral)', () => {
+    // Extract and evaluate the sanitizeText implementation in isolation to prove
+    // the generated regex/logic actually scrubs ANSI/newline injection.
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    const start = s.indexOf('function sanitizeText')
+    assert.ok(start > -1, 'sanitizeText present')
+    const constLine = s.match(/var SANITIZE_MAX_LEN = \d+;/)[0]
+    const fnEnd = s.indexOf('function sanitizeParticipant')
+    const fnSrc = s.slice(start, fnEnd)
+    const sanitizeText = new Function(constLine + '\n' + fnSrc + '\nreturn sanitizeText;')()
+
+    const ESC = String.fromCharCode(27) // ANSI escape introducer
+    const NL = String.fromCharCode(10)
+    const CR = String.fromCharCode(13)
+    const out = sanitizeText('Alice' + ESC + '[31m' + CR + NL + 'Bob')
+    assert.ok(out.indexOf(ESC) === -1, 'ESC stripped')
+    assert.ok(out.indexOf(NL) === -1 && out.indexOf(CR) === -1, 'newlines stripped')
+    const controlRe = new RegExp('[\\u0000-\\u001F\\u007F-\\u009F]')
+    assert.ok(!controlRe.test(out), 'no control chars remain')
+    assert.equal(sanitizeText('x'.repeat(5000)).length, 256, 'length capped to 256')
+    assert.equal(sanitizeText(null), null, 'null passes through')
+    assert.equal(sanitizeText('  plain  '), 'plain', 'trims surrounding whitespace')
+  })
 })

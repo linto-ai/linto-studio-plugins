@@ -61,6 +61,25 @@ describe('TranscriberStream', () => {
     assert.deepEqual([...audio[2]], [5])
   })
 
+  it('counts pre-ack frames dropped past maxBuffer', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { maxBuffer: 3 })
+    ws2.emit('open')
+    // maxBuffer is 3. 5 frames -> 2 dropped (oldest first).
+    for (let i = 1; i <= 5; i++) bot2.emit('audio', Buffer.from([i]))
+    assert.equal(stream.getDroppedFrames(), 2)
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    assert.equal(stream.getDroppedFrames(), 2, 'drop count is stable after flush')
+  })
+
+  it('does not count drops when the buffer never overflows', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { maxBuffer: 10 })
+    ws2.emit('open')
+    for (let i = 1; i <= 5; i++) bot2.emit('audio', Buffer.from([i]))
+    assert.equal(stream.getDroppedFrames(), 0)
+  })
+
   it('forwards speakerChanged and participant events as soon as the socket is open (not ack-gated)', () => {
     // Control is NOT ack-gated: the Transcriber creates its SpeakerTracker while
     // processing init (before ack) and tolerates control before audio, so a

@@ -98,6 +98,48 @@ describe('SpeakerTracker (native diarization)', () => {
     assert.equal(t.getSpeakerForSegment(11), null, 'departed participant not assigned');
   });
 
+  it('records assignment and grace-correction events in the bounded ring', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1); // assign u1
+    ref.now = 1100; // within grace
+    t.addSpeakerChange({ position: 100, speaker: { id: 'u2', name: 'Bob' } }); // correct -> u2
+    const events = t.getRecentEvents();
+    assert.equal(events.length, 2);
+    assert.deepEqual({ position: events[0].position, action: events[0].action, speaker: events[0].speaker.id },
+      { position: 1, action: 'assign', speaker: 'u1' });
+    assert.deepEqual({ position: events[1].position, action: events[1].action, speaker: events[1].speaker.id },
+      { position: 1, action: 'correct', speaker: 'u2' });
+  });
+
+  it('caps the event ring at eventRingSize (FIFO)', () => {
+    const t = new SpeakerTracker({ eventRingSize: 3 });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    for (let i = 0; i < 10; i++) t.assignSpeakerToSegment(i);
+    const events = t.getRecentEvents();
+    assert.equal(events.length, 3, 'ring is bounded');
+    assert.deepEqual(events.map(e => e.position), [7, 8, 9], 'keeps the most recent');
+  });
+
+  it('getRecentEvents returns a copy that cannot mutate internal state', () => {
+    const t = new SpeakerTracker();
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1);
+    const snap = t.getRecentEvents();
+    snap.push({ position: 99 });
+    assert.equal(t.getRecentEvents().length, 1, 'caller mutation does not leak');
+  });
+
+  it('clears the event ring on clear()', () => {
+    const t = new SpeakerTracker();
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1);
+    assert.equal(t.getRecentEvents().length, 1);
+    t.clear();
+    assert.equal(t.getRecentEvents().length, 0);
+  });
+
   it('clears a segment and all state', () => {
     const t = new SpeakerTracker();
     t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });

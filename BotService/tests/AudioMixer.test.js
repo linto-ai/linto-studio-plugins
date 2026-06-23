@@ -126,6 +126,39 @@ describe('AudioMixer', () => {
     })
   })
 
+  describe('#getDroppedStats()', () => {
+    it('reports zero drops for a participant within the ring capacity', () => {
+      mixer.addAudio('p1', frame(1000, 320), 0)
+      const stats = mixer.getDroppedStats()
+      assert.equal(stats.length, 1)
+      assert.equal(stats[0].id, 'p1')
+      assert.equal(stats[0].droppedSamples, 0)
+      assert.equal(stats[0].droppedFrames, 0)
+    })
+
+    it('counts samples overwritten on ring-buffer overflow', () => {
+      // bufferSize = 320 samples/frame * 160 frames = 51200 samples.
+      // Write 51200 + 1000 samples without draining -> 1000 dropped.
+      const overflow = new AudioMixer({ bufferFrames: 160 })
+      const big = Buffer.from(new Int16Array(51200 + 1000).fill(1000).buffer)
+      overflow.addAudio('p1', big, 0)
+      const stats = overflow.getDroppedStats()
+      assert.equal(stats[0].droppedSamples, 1000)
+      assert.equal(stats[0].droppedFrames, Math.floor(1000 / 320))
+      overflow.stop()
+    })
+
+    it('does not count drops once frames are drained by the mix tick', () => {
+      // Fill exactly to capacity, drain one frame, then add one frame: no overflow.
+      const exact = new AudioMixer({ bufferFrames: 2 }) // 640-sample ring
+      exact.addAudio('p1', frame(1000, 640), 0) // fills the ring exactly
+      exact.mixAndEmit() // drains 320 samples
+      exact.addAudio('p1', frame(1000, 320), 0) // fits in the freed space
+      assert.equal(exact.getDroppedStats()[0].droppedSamples, 0)
+      exact.stop()
+    })
+  })
+
   describe('#getPositionMs()', () => {
     it('advances 20 ms per mixed frame', () => {
       assert.equal(mixer.getPositionMs(), 0)

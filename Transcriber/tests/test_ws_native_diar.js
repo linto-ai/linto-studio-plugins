@@ -1,7 +1,10 @@
 const assert = require('assert');
-const { describe, it, beforeEach } = require('mocha');
+const { describe, it, beforeEach, afterEach } = require('mocha');
 const MultiplexedWebsocketServer = require('../components/StreamingServer/websocket/WebsocketServer');
 const SpeakerTracker = require('../components/StreamingServer/SpeakerTracker');
+// Same singleton logger instance the WebsocketServer requires; stub its methods
+// to assert the rejected-control-message log paths fire.
+const logger = require('../logger');
 
 // The native-diarization PCM callback must split inline JSON control messages
 // (speakerChanged / participant) from binary audio robustly: a PCM frame that
@@ -48,6 +51,53 @@ describe('WebsocketServer native-diarization control routing', () => {
   it('getSpeakerTracker returns the channel tracker, null otherwise', () => {
     assert.equal(server.getSpeakerTracker('s', 'c'), tracker);
     assert.equal(server.getSpeakerTracker('x', 'y'), null);
+  });
+});
+
+// A well-formed JSON control message that cannot be applied (no tracker / unknown
+// type) must NOT be dropped silently — it warns; a '{"'-prefixed frame that fails
+// to parse falls through to PCM but is logged at debug.
+describe('WebsocketServer rejected control-message logging', () => {
+  let server, fd, warns, debugs, origWarn, origDebug;
+  beforeEach(() => {
+    server = new MultiplexedWebsocketServer({});
+    fd = { session: { id: 's' }, channel: { id: 'c' }, diarizationMode: 'native' };
+    warns = []; debugs = [];
+    origWarn = logger.warn; origDebug = logger.debug;
+    logger.warn = (msg) => warns.push(msg);
+    logger.debug = (msg) => debugs.push(msg);
+  });
+  afterEach(() => { logger.warn = origWarn; logger.debug = origDebug; });
+
+  it('warns and drops a well-formed control message when no tracker exists', () => {
+    // No tracker registered for s_c.
+    const msg = Buffer.from(JSON.stringify({ type: 'speakerChanged', speaker: { id: 'u1' } }));
+    assert.equal(server.handleControlMessage(fd, msg), false);
+    assert.equal(warns.length, 1);
+    assert.ok(/no SpeakerTracker/.test(warns[0]));
+  });
+
+  it('warns and drops a control message with an unknown type', () => {
+    server.speakerTrackers.set('s_c', new SpeakerTracker());
+    const msg = Buffer.from(JSON.stringify({ type: 'bogus' }));
+    assert.equal(server.handleControlMessage(fd, msg), false);
+    assert.equal(warns.length, 1);
+    assert.ok(/unknown type 'bogus'/.test(warns[0]));
+  });
+
+  it('logs at debug (not warn) when a {"-prefixed frame fails to parse, falling through to PCM', () => {
+    const pcm = Buffer.from([0x7B, 0x22, 0x10, 0xF0, 0x55, 0xAA]);
+    assert.equal(server.handleControlMessage(fd, pcm), false);
+    assert.equal(warns.length, 0, 'parse failure must not warn (could be coincidental PCM)');
+    assert.equal(debugs.length, 1);
+  });
+
+  it('does not log for a successfully routed control message', () => {
+    server.speakerTrackers.set('s_c', new SpeakerTracker());
+    const msg = Buffer.from(JSON.stringify({ type: 'speakerChanged', speaker: { id: 'u1' } }));
+    assert.equal(server.handleControlMessage(fd, msg), true);
+    assert.equal(warns.length, 0);
+    assert.equal(debugs.length, 0);
   });
 });
 

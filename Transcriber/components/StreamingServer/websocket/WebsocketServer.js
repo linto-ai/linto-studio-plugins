@@ -328,10 +328,20 @@ class MultiplexedWebsocketServer extends EventEmitter {
       try {
           data = JSON.parse(message.toString());
       } catch (e) {
+          // PCM that merely started with 0x7B22. Logged at debug only: this fires
+          // legitimately on audio whose first sample coincides with '{"', so it is
+          // not necessarily an error — but it is useful when localizing why a
+          // control message went missing.
+          logger.debug(`Native diarization: '{\"'-prefixed frame failed to parse as JSON, treating as PCM (session ${fd.session.id}, channel ${fd.channel.id})`);
           return false; // PCM that merely started with 0x7B22
       }
+      // Past this point the frame is a well-formed JSON control message; dropping
+      // it silently would hide a real diarization problem, so warn.
       const tracker = this.speakerTrackers.get(`${fd.session.id}_${fd.channel.id}`);
-      if (!tracker) return false;
+      if (!tracker) {
+          logger.warn(`Native diarization: dropping control message type '${data.type}' — no SpeakerTracker for session ${fd.session.id}, channel ${fd.channel.id}`);
+          return false;
+      }
       if (data.type === 'speakerChanged') {
           tracker.addSpeakerChange(data);
           return true;
@@ -340,6 +350,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
           tracker.updateParticipant(data);
           return true;
       }
+      logger.warn(`Native diarization: dropping control message with unknown type '${data.type}' (session ${fd.session.id}, channel ${fd.channel.id})`);
       return false;
   }
 

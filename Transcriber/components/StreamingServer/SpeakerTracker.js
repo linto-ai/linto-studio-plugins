@@ -1,6 +1,10 @@
 const { logger } = require('live-srt-lib')
 
 const DEFAULT_GRACE_PERIOD_MS = 200
+// Cap of the in-memory diarization-event ring kept for debugging. Bounded so a
+// long-running channel can never grow it without limit (one entry per
+// assignment/correction, dropped FIFO past this size).
+const DEFAULT_EVENT_RING_SIZE = 50
 
 /**
  * SpeakerTracker — native diarization for bot streams.
@@ -23,6 +27,28 @@ class SpeakerTracker {
     this.lastKnownSpeaker = null
     this.segmentSpeakers = new Map() // segmentId -> { speaker, assignedAt }
     this.gracePeriodMs = options.gracePeriodMs != null ? options.gracePeriodMs : DEFAULT_GRACE_PERIOD_MS
+    // Bounded ring of recent diarization events for offline debugging of locutor
+    // accuracy. Not on any hot path (one push per assignment/grace-correction).
+    this.eventRingSize = options.eventRingSize != null ? options.eventRingSize : DEFAULT_EVENT_RING_SIZE
+    this._events = [] // { position, action, speaker } — FIFO, capped at eventRingSize
+  }
+
+  // Record a diarization event into the bounded debug ring. `position` is the
+  // segmentId or speaker-change position, `action` a short tag, `speaker` the
+  // id/name pair (or null for silence).
+  _recordEvent (position, action, speaker) {
+    this._events.push({
+      position,
+      action,
+      speaker: speaker ? { id: speaker.id, name: speaker.name } : null
+    })
+    if (this._events.length > this.eventRingSize) this._events.shift()
+  }
+
+  // Snapshot of the recent diarization events (oldest first). Returns a copy so
+  // callers cannot mutate internal state.
+  getRecentEvents () {
+    return this._events.slice()
   }
 
   // A speaker can only be stamped onto a segment if it has not left the meeting.
@@ -59,17 +85,27 @@ class SpeakerTracker {
     // Reactively correct segments still within their grace window (the segment
     // may have been assigned to the previous speaker a few ms before this event).
     const now = this._now()
-    for (const entry of this.segmentSpeakers.values()) {
-      if (now - entry.assignedAt < this.gracePeriodMs) entry.speaker = event.speaker
+    for (const [segmentId, entry] of this.segmentSpeakers) {
+      if (now - entry.assignedAt < this.gracePeriodMs) {
+        const before = entry.speaker
+        entry.speaker = event.speaker
+        if (!before || before.id !== event.speaker.id) {
+          logger.debug(`SpeakerTracker: grace-period correction of segment ${segmentId} ${before ? before.id : 'null'} -> ${event.speaker.id}`)
+          this._recordEvent(segmentId, 'correct', event.speaker)
+        }
+      }
     }
   }
 
   assignSpeakerToSegment (segmentId) {
     if (segmentId == null || this.segmentSpeakers.has(segmentId)) return
+    const speaker = this._presentSpeaker(this.currentSpeaker || this.lastKnownSpeaker)
     this.segmentSpeakers.set(segmentId, {
-      speaker: this._presentSpeaker(this.currentSpeaker || this.lastKnownSpeaker),
+      speaker,
       assignedAt: this._now()
     })
+    logger.debug(`SpeakerTracker: assigned segment ${segmentId} -> ${speaker ? speaker.id : 'null'}`)
+    this._recordEvent(segmentId, 'assign', speaker)
   }
 
   getSpeakerForSegment (segmentId) {
@@ -89,6 +125,7 @@ class SpeakerTracker {
     this.segmentSpeakers.clear()
     this.currentSpeaker = null
     this.lastKnownSpeaker = null
+    this._events = []
   }
 
   _now () {

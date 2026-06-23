@@ -1,4 +1,10 @@
 const EventEmitter = require('events')
+const { logger } = require('live-srt-lib')
+
+// Emit at most one overflow warning per participant every this many dropped
+// frames, so a sustained capture/mix-rate mismatch is visible in the log
+// without flooding it (the drop itself is counted every time, lock-free).
+const DROP_WARN_EVERY = 500
 
 // Wire format shared with the Transcriber WS ingest and the in-browser capture:
 // 16 kHz, signed 16-bit little-endian, mono. 20 ms frames are the standard unit
@@ -71,6 +77,8 @@ class AudioMixer extends EventEmitter {
         writePos: 0,
         readPos: 0,
         samplesAvailable: 0,
+        droppedSamples: 0, // total samples overwritten on ring-buffer overflow
+        lastWarnedDrops: 0, // droppedSamples value at the last throttled warn
         name: participantName || participantId
       }
       this.participantBuffers.set(participantId, participant)
@@ -88,11 +96,21 @@ class AudioMixer extends EventEmitter {
       if (participant.samplesAvailable < this.bufferSize) {
         participant.samplesAvailable++
       } else {
-        // Buffer full: advance readPos so we keep the most recent audio.
+        // Buffer full: advance readPos so we keep the most recent audio. The
+        // overwritten oldest sample is lost — count it (no per-sample logging).
         participant.readPos = (participant.readPos + 1) % this.bufferSize
+        participant.droppedSamples++
       }
     }
     participant.lastTimestamp = timestamp
+
+    // Throttled overflow warning (outside the per-sample loop): a sustained
+    // mismatch between capture cadence and the 20 ms mix drain is the only way
+    // to accumulate drops, and a transcript gap can be localized from it.
+    if (participant.droppedSamples - participant.lastWarnedDrops >= DROP_WARN_EVERY) {
+      participant.lastWarnedDrops = participant.droppedSamples
+      logger.warn(`AudioMixer: participant ${participant.name} ring-buffer overflow, ${participant.droppedSamples} samples dropped`)
+    }
   }
 
   /** Start the periodic mix tick. Idempotent. */
@@ -205,6 +223,20 @@ class AudioMixer extends EventEmitter {
 
   getCurrentSpeaker () {
     return this.currentSpeaker
+  }
+
+  /**
+   * Per-participant count of samples dropped on ring-buffer overflow. A non-zero
+   * value localizes a transcript gap to a capture/mix-rate mismatch.
+   * @returns {Array<{id:string, name:string, droppedSamples:number, droppedFrames:number}>}
+   */
+  getDroppedStats () {
+    return Array.from(this.participantBuffers.entries()).map(([id, p]) => ({
+      id,
+      name: p.name,
+      droppedSamples: p.droppedSamples,
+      droppedFrames: Math.floor(p.droppedSamples / SAMPLES_PER_FRAME)
+    }))
   }
 
   /** Stop the mix tick and clear all state. Idempotent. */

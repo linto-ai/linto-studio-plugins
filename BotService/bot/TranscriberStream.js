@@ -1,5 +1,12 @@
+const { logger } = require('live-srt-lib')
+
 // WebSocket.readyState OPEN per the WHATWG spec (the `ws` package matches it).
 const OPEN = 1
+
+// Warn at most once per this many dropped pre-ack frames: a full buffer means
+// the ACK is slow/absent and the start of the transcript is being lost, which
+// is worth surfacing — but the drop is counted every time, the log is throttled.
+const DROP_WARN_EVERY = 100
 
 /**
  * TranscriberStream — bridges one Bot's output to one Transcriber over the
@@ -21,6 +28,10 @@ class TranscriberStream {
     this.maxBuffer = opts.maxBuffer || 500
     this.ready = false
     this.buffered = []
+    // Pre-ack frames dropped because the buffer was full (ACK slow/absent). A
+    // non-zero value localizes a gap at the very start of the transcript.
+    this.droppedFrames = 0
+    this._lastWarnedDrops = 0
     this._wire()
   }
 
@@ -52,8 +63,21 @@ class TranscriberStream {
   _sendAudio (buffer) {
     if (!this._isOpen()) return
     if (this.ready) { this.ws.send(buffer); return }
-    if (this.buffered.length >= this.maxBuffer) this.buffered.shift() // drop oldest
+    if (this.buffered.length >= this.maxBuffer) {
+      this.buffered.shift() // drop oldest
+      this.droppedFrames++
+      // Throttled: do not log on every dropped frame.
+      if (this.droppedFrames - this._lastWarnedDrops >= DROP_WARN_EVERY) {
+        this._lastWarnedDrops = this.droppedFrames
+        logger.warn(`TranscriberStream: pre-ack buffer full, ${this.droppedFrames} frames dropped (ACK slow/absent)`)
+      }
+    }
     this.buffered.push(buffer)
+  }
+
+  /** Number of pre-ack frames dropped because the buffer overflowed. */
+  getDroppedFrames () {
+    return this.droppedFrames
   }
 
   _sendControl (obj) {

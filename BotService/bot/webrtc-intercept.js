@@ -104,8 +104,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
     } catch (e) { log('ws connect failed', e && e.message); }
   }
 
+  function wsIsOpen() {
+    return wsReady && ws && ws.readyState === WebSocket.OPEN;
+  }
+
   function sendBinary(trackIdx, pcmInt16) {
-    if (!wsReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!wsIsOpen()) return;
     headerView.setUint16(0, trackIdx, false); // trackIndex, big-endian
     headerView.setUint16(2, 0, false);        // reserved
     const payload = new Uint8Array(4 + pcmInt16.byteLength);
@@ -115,7 +119,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
   }
 
   function sendJson(obj) {
-    if (!wsReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!wsIsOpen()) return;
     ws.send(JSON.stringify(obj));
   }
 

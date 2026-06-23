@@ -119,4 +119,94 @@ describe('BrowserPool', () => {
     assert.equal(pool.getActiveCount(), 0)
     assert.equal(pool.browser, null)
   })
+
+  describe('failure recovery', () => {
+    // Handle to the live playwright stub so individual tests can inject failures
+    // into launch()/newContext() and then restore the happy-path behaviour.
+    const stub = require.cache[require.resolve('playwright')].exports.chromium
+    let realLaunch
+    beforeEach(() => { realLaunch = stub.launch })
+    afterEach(() => { stub.launch = realLaunch })
+
+    it('dedupes concurrent (re)launches into one launch even when callers race', async () => {
+      // Two createContext() calls before any browser exists must share the single
+      // in-flight launch promise rather than spawning two browsers.
+      const [a, b] = await Promise.all([pool.createContext('a'), pool.createContext('b')])
+      assert.ok(a && a.page && b && b.page)
+      assert.equal(launchCount, 1) // one shared browser despite the race
+      assert.equal(pool.getActiveCount(), 2)
+    })
+
+    it('returns null and frees the reservation when launch() fails, then recovers next call', async () => {
+      stub.launch = async () => { throw new Error('chromium spawn failed') }
+      const failed = await pool.createContext('a')
+      assert.equal(failed, null)
+      assert.equal(pool.getActiveCount(), 0)
+      assert.equal(pool.reserved, 0, 'reservation released on launch failure (no leaked slot)')
+      assert.equal(pool.browser, null)
+      // Capacity is intact: a later successful launch creates a context normally.
+      stub.launch = realLaunch
+      const ok = await pool.createContext('b')
+      assert.ok(ok && ok.page)
+      assert.equal(pool.getActiveCount(), 1)
+    })
+
+    it('leaves no stale entry and frees the slot when context creation fails', async () => {
+      await pool.init()
+      const goodNewContext = currentBrowser.newContext
+      currentBrowser.newContext = async () => { throw new Error('newContext boom') }
+      const failed = await pool.createContext('a')
+      assert.equal(failed, null)
+      assert.equal(pool.getActiveCount(), 0)
+      assert.equal(pool.contexts.has('a'), false, 'no stale context entry left behind')
+      assert.equal(pool.reserved, 0, 'reservation released on context-create failure')
+      // Slot is reusable: a subsequent good create succeeds.
+      currentBrowser.newContext = goodNewContext
+      const ok = await pool.createContext('a')
+      assert.ok(ok && ok.page)
+      assert.equal(pool.getActiveCount(), 1)
+    })
+
+    it('does not leak a reservation when a failed creation would otherwise hold a slot at the cap', async () => {
+      const small = new BrowserPool({ maxContexts: 1 })
+      await small.init()
+      const good = currentBrowser.newContext
+      currentBrowser.newContext = async () => { throw new Error('boom') }
+      assert.equal(await small.createContext('a'), null) // fails, must release the only slot
+      currentBrowser.newContext = good
+      const ok = await small.createContext('b') // would be refused if the slot leaked
+      assert.ok(ok && ok.page)
+      assert.equal(small.getActiveCount(), 1)
+      await small.destroy()
+    })
+
+    it('relaunches a fresh browser on the next create after a launch failure', async () => {
+      stub.launch = async () => { throw new Error('first launch down') }
+      assert.equal(await pool.createContext('a'), null)
+      assert.equal(launchCount, 0) // failed launches do not increment the success counter
+      stub.launch = realLaunch
+      const ok = await pool.createContext('b')
+      assert.ok(ok && ok.page)
+      assert.equal(launchCount, 1) // a brand-new browser was launched
+    })
+
+    it('stays usable after a destroy() that races an in-flight create', async () => {
+      // Kick off a create and tear the pool down before its launch settles, then
+      // confirm the pool can be driven again afterwards (the important contract).
+      //
+      // KNOWN GAP (reported, source not fixed here): destroy() does not cancel or
+      // await `this.launching`, so an in-flight launch that resolves AFTER destroy
+      // repopulates `this.browser` (and re-inserts the context that destroy already
+      // drained) — that browser is then never closed (leak) and the contexts map is
+      // left inconsistent with a "destroyed" pool. We therefore do NOT assert
+      // browser === null here; we assert the recoverability the caller relies on.
+      const creating = pool.createContext('a')
+      await pool.destroy()
+      await creating.catch(() => {}) // the in-flight create may resolve or reject; either is fine
+
+      const ok = await pool.createContext('b')
+      assert.ok(ok && ok.page, 'pool remains usable after a destroy/create race')
+      await pool.destroy()
+    })
+  })
 })

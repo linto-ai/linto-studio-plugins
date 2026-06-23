@@ -118,6 +118,35 @@ describe('BrokerClient bot routing (BotService)', () => {
         assert.ok(destroys.some(d => d.where && d.where.botservice === 'bs1'));
       } finally { uninstallMocks(); }
     });
+
+    it('drops only the dead replica and keeps ownership of survivors', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        instance.registerBotService({ uniqueId: 'dead', activeBots: 1, capabilities: ['visio'] });
+        instance.registerBotService({ uniqueId: 'alive', activeBots: 1, capabilities: ['visio'] });
+        instance.botOwnership.set('s1_1', 'dead');
+        instance.botOwnership.set('s1_2', 'dead');
+        instance.botOwnership.set('s2_1', 'alive');
+        await instance.unregisterBotService({ uniqueId: 'dead' });
+        assert.deepEqual(instance.botservices.map(b => b.uniqueId), ['alive']);
+        assert.equal(instance.botOwnership.has('s1_1'), false);
+        assert.equal(instance.botOwnership.has('s1_2'), false);
+        assert.equal(instance.botOwnership.get('s2_1'), 'alive');
+      } finally { uninstallMocks(); }
+    });
+
+    it('logs without throwing when the orphan reap query fails', async () => {
+      // A DB hiccup during reaping must not crash the status handler — the replica
+      // is still removed from the in-memory list and the error is logged.
+      const model = buildModel({ Bot: { destroy: async () => { throw new Error('connection lost'); } } });
+      const { instance, logs } = await loadBrokerClient({ model });
+      try {
+        instance.registerBotService({ uniqueId: 'bs1', activeBots: 0, capabilities: ['visio'] });
+        await assert.doesNotReject(() => instance.unregisterBotService({ uniqueId: 'bs1' }));
+        assert.equal(instance.botservices.length, 0);
+        assert.ok(logs.some(l => l.level === 'error' && l.msg.includes('connection lost')));
+      } finally { uninstallMocks(); }
+    });
   });
 
   describe('#startBot()', () => {
@@ -207,6 +236,79 @@ describe('BrokerClient bot routing (BotService)', () => {
         // No botOwnership entry (simulating a Scheduler restart that lost the map).
         await instance.stopBot(42);
         assert.ok(mqttPublishes.find(p => p.topic === 'botservice/in/bs-persisted/stopbot'));
+      } finally { uninstallMocks(); }
+    });
+
+    it('prefers the live in-memory owner over a stale persisted column', async () => {
+      // The row still carries the original owner, but the in-memory map has been
+      // updated (e.g. a re-schedule). The live map must win so the stop reaches
+      // the replica that actually runs the bot.
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, botservice: 'bs-stale', channel: { id: 10, sessionId: 'sess-1' } }),
+          destroy: async () => [1, []]
+        }
+      });
+      const { instance, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        instance.botOwnership.set('sess-1_10', 'bs-live');
+        await instance.stopBot(42);
+        assert.ok(mqttPublishes.find(p => p.topic === 'botservice/in/bs-live/stopbot'));
+        assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/bs-stale/stopbot').length, 0);
+        assert.equal(instance.botOwnership.has('sess-1_10'), false);
+      } finally { uninstallMocks(); }
+    });
+
+    it('still destroys the row but routes nothing when no owner is known anywhere', async () => {
+      // Neither the in-memory map nor the persisted column carries an owner
+      // (bot already left / never fully scheduled). Row is reaped; a warning is
+      // logged and no stopbot is routed (nothing to stop).
+      const destroys = [];
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, botservice: null, channel: { id: 10, sessionId: 'sess-1' } }),
+          destroy: async (opts) => { destroys.push(opts); return [1, []]; }
+        }
+      });
+      const { instance, mqttPublishes, logs } = await loadBrokerClient({ model });
+      try {
+        await instance.stopBot(42);
+        assert.equal(destroys.length, 1);
+        assert.equal(mqttPublishes.filter(p => p.topic.startsWith('botservice/in/')).length, 0);
+        assert.ok(logs.some(l => l.level === 'warn' && l.msg.includes('not routed')));
+      } finally { uninstallMocks(); }
+    });
+
+    it('destroys the row but routes nothing when the bot has no channel', async () => {
+      const destroys = [];
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, channel: null }),
+          destroy: async (opts) => { destroys.push(opts); return [1, []]; }
+        }
+      });
+      const { instance, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        instance.botOwnership.set('sess-1_10', 'bs1'); // present but unreachable without a channel
+        await instance.stopBot(42);
+        assert.equal(destroys.length, 1);
+        assert.equal(mqttPublishes.filter(p => p.topic.startsWith('botservice/in/')).length, 0);
+      } finally { uninstallMocks(); }
+    });
+
+    it('is a no-op (no destroy, no publish) when the bot row is gone', async () => {
+      const destroys = [];
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => null,
+          destroy: async (opts) => { destroys.push(opts); return [0, []]; }
+        }
+      });
+      const { instance, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        await instance.stopBot(999);
+        assert.equal(destroys.length, 0);
+        assert.equal(mqttPublishes.filter(p => p.topic.startsWith('botservice/in/')).length, 0);
       } finally { uninstallMocks(); }
     });
   });

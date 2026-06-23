@@ -124,6 +124,140 @@ describe('AudioMixer', () => {
       mixer.mixAndEmit()
       assert.equal(count, 1)
     })
+
+    it('treats energy exactly AT the threshold as silence (strict >)', () => {
+      // A constant-amplitude frame has RMS == |amplitude|. At exactly 500 the
+      // `energy > energyThreshold` guard is false, so nobody becomes dominant.
+      const m = new AudioMixer({ energyThreshold: 500 })
+      m.addAudio('edge', frame(500), 0) // RMS == 500, NOT > 500
+      let changed = false
+      m.on('speakerChanged', () => { changed = true })
+      m.mixAndEmit()
+      assert.equal(changed, false)
+      assert.equal(m.getCurrentSpeaker(), null)
+      m.stop()
+    })
+
+    it('treats energy one above the threshold as speech', () => {
+      const m = new AudioMixer({ energyThreshold: 500 })
+      m.addAudio('edge', frame(501), 0) // RMS == 501, > 500
+      let speaker = null
+      m.on('speakerChanged', (ev) => { speaker = ev.speaker })
+      m.mixAndEmit()
+      assert.ok(speaker && speaker.id === 'edge')
+      m.stop()
+    })
+
+    it('breaks an exact energy tie in favour of the first-added participant', () => {
+      // Both frames carry identical RMS; the dominant-speaker scan uses a strict
+      // `energy > maxEnergy`, so the participant iterated first (insertion order
+      // in the Map) wins and the equal-energy latecomer never displaces them.
+      mixer.addAudio('first', frame(5000), 0)
+      mixer.addAudio('second', frame(5000), 0)
+      let speaker = null
+      mixer.on('speakerChanged', (ev) => { speaker = ev.speaker })
+      mixer.mixAndEmit()
+      assert.equal(speaker.id, 'first')
+    })
+
+    it('does not flip speaker on a marginally-louder-then-equal tie within a frame', () => {
+      // 'a' added first at a higher energy; 'b' added second exactly equal to 'a'
+      // would not win (strict >), and a strictly louder 'b' would. Verify the
+      // strictly-louder later participant DOES take over (sanity vs the tie case).
+      mixer.addAudio('a', frame(3000), 0)
+      mixer.addAudio('b', frame(6000), 0)
+      let speaker = null
+      mixer.on('speakerChanged', (ev) => { speaker = ev.speaker })
+      mixer.mixAndEmit()
+      assert.equal(speaker.id, 'b')
+    })
+  })
+
+  describe('ring-buffer wraparound', () => {
+    it('mixes the correct samples after the write pointer wraps past the end', () => {
+      // 640-sample ring. Fill it, drain one frame, then write another frame: the
+      // write pointer wraps to 0 and the second frame must be returned intact.
+      const m = new AudioMixer({ bufferFrames: 2 })
+      m.addAudio('p1', frame(1111, 640), 0) // fills the ring, writePos -> 0 (wrapped)
+      const first = []
+      m.on('audio', (buf) => { first.push(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)[0]) })
+      m.mixAndEmit() // drains frame #1 (value 1111), readPos -> 320
+      m.addAudio('p1', frame(2222, 320), 0) // written at writePos 0..319 (post-wrap region)
+      m.mixAndEmit() // drains frame #2 (value 1111, the remaining tail) ...
+      m.mixAndEmit() // ... then the wrapped frame (value 2222)
+      assert.deepEqual(first, [1111, 1111, 2222])
+      assert.equal(m.getDroppedStats()[0].droppedSamples, 0)
+      m.stop()
+    })
+
+    it('keeps the freshest audio (drops oldest) when both pointers wrap on overflow', () => {
+      // Ring holds 2 frames. Write 3 frames back-to-back without draining: the
+      // first frame is overwritten, so the next two mixed frames are #2 and #3.
+      const m = new AudioMixer({ bufferFrames: 2 })
+      m.addAudio('p1', frame(100, 320), 0) // frame #1 (will be dropped)
+      m.addAudio('p1', frame(200, 320), 0) // frame #2
+      m.addAudio('p1', frame(300, 320), 0) // frame #3 -> overflow, drops 320 oldest samples
+      const vals = []
+      m.on('audio', (buf) => { vals.push(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)[0]) })
+      m.mixAndEmit()
+      m.mixAndEmit()
+      assert.deepEqual(vals, [200, 300])
+      assert.equal(m.getDroppedStats()[0].droppedSamples, 320)
+      m.stop()
+    })
+  })
+
+  describe('silence/grace transitions', () => {
+    it('emits silence only after the grace period, then re-attributes on the next loud frame', () => {
+      // Two participants so the silence (null-speaker) transition is allowed.
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 40 }) // 2 ticks of grace
+      const events = []
+      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
+      m.addAudio('loud', frame(5000), 0)
+      m.addAudio('quiet', frame(10), 0)
+      m.mixAndEmit() // 'loud' becomes dominant -> ['loud']
+      // Now everyone silent: grace is 40ms == 2 ticks; silence emitted on the 2nd.
+      m.addAudio('loud', frame(10), 0); m.addAudio('quiet', frame(10), 0)
+      m.mixAndEmit() // silence tick 1 (20ms) -> no transition yet
+      m.addAudio('loud', frame(10), 0); m.addAudio('quiet', frame(10), 0)
+      m.mixAndEmit() // silence tick 2 (40ms >= grace) -> null transition
+      assert.deepEqual(events, ['loud', null])
+      assert.equal(m.getCurrentSpeaker(), null)
+      // A fresh loud frame re-attributes the speaker.
+      m.addAudio('loud', frame(5000), 0); m.addAudio('quiet', frame(10), 0)
+      m.mixAndEmit()
+      assert.deepEqual(events, ['loud', null, 'loud'])
+      m.stop()
+    })
+
+    it('never emits a silence transition for a lone participant (pauses are not boundaries)', () => {
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 })
+      const events = []
+      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
+      m.addAudio('solo', frame(5000), 0)
+      m.mixAndEmit() // -> ['solo']
+      // Long silence from the only participant: size > 1 guard blocks the null event.
+      for (let i = 0; i < 10; i++) { m.addAudio('solo', frame(10), 0); m.mixAndEmit() }
+      assert.deepEqual(events, ['solo'])
+      assert.equal(m.getCurrentSpeaker().id, 'solo')
+      m.stop()
+    })
+
+    it('resets the silence accumulator so an intra-speech pause never crosses the grace', () => {
+      // Speak, pause one tick (< grace), speak again: the silence counter resets
+      // on the loud frame, so no null transition is ever emitted.
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 40 })
+      const events = []
+      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
+      m.addAudio('a', frame(5000), 0); m.addAudio('b', frame(10), 0)
+      m.mixAndEmit() // ['a']
+      m.addAudio('a', frame(10), 0); m.addAudio('b', frame(10), 0)
+      m.mixAndEmit() // 20ms silence (< 40 grace) -> no transition
+      m.addAudio('a', frame(5000), 0); m.addAudio('b', frame(10), 0)
+      m.mixAndEmit() // 'a' loud again, same speaker -> no new transition, counter reset
+      assert.deepEqual(events, ['a'])
+      m.stop()
+    })
   })
 
   describe('#getDroppedStats()', () => {

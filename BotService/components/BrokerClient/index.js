@@ -12,6 +12,15 @@ const HEARTBEAT_MS = 15000
 // are not lost. Beyond the cap we drop oldest to bound memory.
 const MAX_AUDIO_BUFFER_CHUNKS = 500
 
+// Memory ceiling (T13): when rss/heap crosses this, the replica advertises EMPTY
+// capabilities so the Scheduler routes elsewhere, and refuses new startBot. 0 (or
+// an unparseable value) disables the ceiling. Default 2 GB is a sensible bound for
+// a browser-pool-backed replica before paging/OOM risk.
+const MAX_RSS_MB = (() => {
+  const v = parseInt(process.env.BOTSERVICE_MAX_RSS_MB || '2048', 10)
+  return Number.isFinite(v) && v > 0 ? v : 0
+})()
+
 const CAPABILITIES = (process.env.BOT_CAPABILITIES || Bot.KNOWN_BOT_TYPES.join(','))
   .split(',').map(s => s.trim()).filter(Boolean)
 
@@ -37,6 +46,20 @@ class BrokerClient extends Component {
     this.bots = new Map() // `${sessionId}_${channelId}` -> { bot, ws }
     this.heartbeatTimer = null
     this.lastPublishedCount = -1
+
+    // T13: under-pressure flag. When true the heartbeat advertises EMPTY
+    // capabilities (so Scheduler.selectBotService skips us) and startBot is
+    // refused. Recovers once memory drops back under the ceiling.
+    this.overloaded = false
+
+    // T9: lightweight in-memory lifecycle counters, reset never (cumulative over
+    // the process lifetime) — exposed in the heartbeat `metrics` object.
+    this.metrics = {
+      botJoinAttempts: 0,
+      botJoinSuccesses: 0,
+      botJoinFailures: 0,
+      participantChurn: 0
+    }
 
     this.browserPool = new BrowserPool({ maxContexts: parseInt(process.env.MAX_CONCURRENT_BOTS || '10', 10) })
     this.audioServer = new LocalAudioServer()
@@ -84,10 +107,41 @@ class BrokerClient extends Component {
     })
   }
 
+  // T13: re-evaluate the memory ceiling against the given memory snapshot.
+  // Sets/clears this.overloaded and logs on the transition edges.
+  _evaluatePressure (mem) {
+    if (!MAX_RSS_MB) return
+    const rssMb = mem.rss / (1024 * 1024)
+    const wasOverloaded = this.overloaded
+    this.overloaded = rssMb >= MAX_RSS_MB
+    if (this.overloaded && !wasOverloaded) {
+      logger.warn(`BotService: memory ceiling reached (rss ${rssMb.toFixed(0)}MB >= ${MAX_RSS_MB}MB) — advertising no capabilities, refusing new bots`)
+    } else if (!this.overloaded && wasOverloaded) {
+      logger.info(`BotService: memory back under ceiling (rss ${rssMb.toFixed(0)}MB < ${MAX_RSS_MB}MB) — capabilities restored`)
+    }
+  }
+
   _publishStatus (force = false) {
-    if (!force && this.bots.size === this.lastPublishedCount) return
+    // Memory must be re-checked on every heartbeat regardless of the dedup below,
+    // so backpressure transitions are not swallowed when activeBots is unchanged.
+    const mem = process.memoryUsage()
+    const prevOverloaded = this.overloaded
+    this._evaluatePressure(mem)
+    // T4/T13: an overload transition changes advertised capabilities, so it must
+    // always be published even if the bot count did not move.
+    const overloadChanged = prevOverloaded !== this.overloaded
+    if (!force && !overloadChanged && this.bots.size === this.lastPublishedCount) return
     this.lastPublishedCount = this.bots.size
-    this.client.publishStatus({ activeBots: this.bots.size, capabilities: this.capabilities })
+    this.client.publishStatus({
+      activeBots: this.bots.size,
+      // T4: report load so the Scheduler can weight routing by memory pressure.
+      rss: mem.rss,
+      heapUsed: mem.heapUsed,
+      // T9: cumulative lifecycle metrics.
+      metrics: { ...this.metrics },
+      // T13: advertise no capabilities while overloaded so we are skipped.
+      capabilities: this.overloaded ? [] : this.capabilities
+    })
   }
 
   // NOTE: enableDisplaySub / subSource are accepted for contract compatibility
@@ -96,8 +150,18 @@ class BrokerClient extends Component {
   // platforms' native captions and Studio's live captions; see the redesign notes).
   async startBot ({ session, channel, address, botType, websocketUrl, botId, enableDisplaySub, subSource }) {
     const key = `${session.id}_${channel.id}`
+    // T13: refuse new work while over the memory ceiling (we also advertise no
+    // capabilities, but a startbot may already be in flight when we crossed it).
+    if (this.overloaded) {
+      logger.warn(`BotService: refusing startBot ${key} — over memory ceiling (backpressure)`)
+      this._publishBotError(botId, 'botservice-overloaded')
+      return
+    }
     logger.info(`BotService: starting bot ${key} (${botType})`)
     await this.stopBot(session.id, channel.id) // replace any stale instance
+
+    // T9: every accepted startBot is a join attempt.
+    this.metrics.botJoinAttempts++
 
     const bot = new Bot({ session, channel, address, botType, browserPool: this.browserPool, audioServer: this.audioServer })
     const record = { bot, ws: null, botId }
@@ -107,6 +171,9 @@ class BrokerClient extends Component {
     // we don't want the Transcriber's connection-idle timeout to fire mid-join.
     const ok = await bot.init()
     if (!ok) {
+      // T9 + T10: a failed join is a fatal bot error.
+      this.metrics.botJoinFailures++
+      this._publishBotError(botId, 'join-failed')
       await this.stopBot(session.id, channel.id)
       return
     }
@@ -119,8 +186,16 @@ class BrokerClient extends Component {
       return
     }
 
+    // T9: the bot has joined the meeting successfully.
+    this.metrics.botJoinSuccesses++
     this._connectTranscriber(key, record, websocketUrl)
     this._publishStatus()
+  }
+
+  // T10: publish a structured fatal bot error so the Scheduler can record/log it.
+  _publishBotError (botId, reason) {
+    if (botId === undefined || botId === null) return
+    this.client.publish(`botservice/out/${botId}/bot-error`, { botId, reason }, 1, false, true)
   }
 
   _connectTranscriber (key, record, websocketUrl) {
@@ -135,8 +210,14 @@ class BrokerClient extends Component {
     ws.on('error', (err) => logger.error(`BotService: transcriber WS error for ${key}: ${err.message}`))
     bot.on('error', (error) => {
       logger.error(`BotService: bot ${key} error: ${error.message}`)
+      // T10: a runtime fatal error (page crash, browser disconnect, manifest
+      // load failure) is published structurally for the Scheduler.
+      this._publishBotError(botId, error.message || 'bot-error')
       this.stopBot(bot.session.id, bot.channel.id).catch(() => {})
     })
+    // T9: count participant churn (joins + leaves) reported by the bot.
+    bot.on('participant-joined', () => { this.metrics.participantChurn++ })
+    bot.on('participant-left', () => { this.metrics.participantChurn++ })
     bot.on('meeting-empty', () => {
       logger.info(`BotService: bot ${key} meeting empty, leaving`)
       this._requestSchedulerCleanup(botId)

@@ -17,7 +17,7 @@ class BrokerClient extends Component {
     this.uniqueId = 'scheduler'
     this.state = CONNECTING;
     this.pub = `scheduler`;
-    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `scheduler/in/#`, `translator/out/+/status`, `botservice/out/+/status`]
+    this.subs = [`transcriber/out/+/status`, `transcriber/out/+/+/final`, `transcriber/out/+/+/final/translations`, `transcriber/out/+/session`, `scheduler/in/#`, `translator/out/+/status`, `botservice/out/+/status`, `botservice/out/+/bot-error`]
     this.state = CONNECTING;
     this.timeoutId = null
     this.emit("connecting");
@@ -172,7 +172,12 @@ class BrokerClient extends Component {
   // ###### BOT ROUTING (to the dedicated BotService) ######
 
   // Pick a BotService that supports the requested provider, preferring more
-  // specialized replicas (fewest advertised capabilities) and the least loaded.
+  // specialized replicas (fewest advertised capabilities), then the least
+  // loaded. Load is primarily activeBots, but ties are broken by reported memory
+  // (rss) so a 30-participant Visio replica is preferred-against vs a 1-track
+  // Teams replica with the same bot count (T4). Replicas advertising no
+  // capabilities (e.g. under memory backpressure, T13) are excluded by the
+  // capability filter.
   selectBotService(provider) {
     const candidates = this.botservices.filter(bs =>
       bs.online && Array.isArray(bs.capabilities) && bs.capabilities.includes(provider));
@@ -180,7 +185,17 @@ class BrokerClient extends Component {
     const minCaps = Math.min(...candidates.map(bs => bs.capabilities.length));
     const specialists = candidates.filter(bs => bs.capabilities.length === minCaps);
     return specialists.reduce((best, bs) =>
-      (best === null || (bs.activeBots || 0) < (best.activeBots || 0)) ? bs : best, null);
+      (best === null || this._botLoadScore(bs) < this._botLoadScore(best)) ? bs : best, null);
+  }
+
+  // Composite load score for routing: activeBots dominates, rss (in MB) is a
+  // sub-unit tiebreaker so it only matters when bot counts are equal. Missing
+  // metrics fall back to 0 (treated as idle), preserving the prior least-loaded
+  // behavior for replicas that don't report memory.
+  _botLoadScore(bs) {
+    const activeBots = bs.activeBots || 0;
+    const rssMb = (bs.rss || 0) / (1024 * 1024);
+    return activeBots + Math.min(rssMb / 1e6, 0.999);
   }
 
   // Transcriber WS ingest URL a bot connects to. Any transcriber accepts any
@@ -275,19 +290,47 @@ class BrokerClient extends Component {
 
   // ###### BOTSERVICE STATUS ######
 
+  // T10: a bot failed fatally on a BotService (page crash, join timeout, manifest
+  // load failure, browser disconnect). Record the reason on the Bot row IF the
+  // model has an error_reason column; otherwise just log + emit (no migration
+  // added here). Always re-emit on system/out so consumers can react.
+  async recordBotError(botId, reason) {
+    if (botId === undefined || botId === null) return;
+    reason = reason || 'unknown';
+    logger.warn(`Bot ${botId} failed fatally on BotService: ${reason}`);
+    // Only attempt a persisted write when the column actually exists, so we don't
+    // throw on installations without the (intentionally not-added) migration.
+    const hasErrorReasonColumn = !!(Model.Bot.rawAttributes && Model.Bot.rawAttributes.error_reason);
+    if (hasErrorReasonColumn) {
+      try {
+        await Model.Bot.update({ error_reason: reason }, { where: { id: botId } });
+      } catch (error) {
+        logger.error(`Failed to record bot error for ${botId}: ${error.message}`);
+      }
+    }
+    this.client.publish('system/out/bots/error', { botId, reason }, 1, false, true);
+  }
+
   registerBotService(botservice) {
     const existing = this.botservices.find(b => b.uniqueId === botservice.uniqueId);
     if (existing) {
       existing.online = true;
       if (botservice.activeBots !== undefined) existing.activeBots = botservice.activeBots;
       if (botservice.capabilities !== undefined) existing.capabilities = botservice.capabilities;
+      // T4: track reported memory/load so routing can weight by it.
+      if (botservice.rss !== undefined) existing.rss = botservice.rss;
+      if (botservice.heapUsed !== undefined) existing.heapUsed = botservice.heapUsed;
+      if (botservice.metrics !== undefined) existing.metrics = botservice.metrics;
       return;
     }
     this.botservices.push({
       uniqueId: botservice.uniqueId,
       online: true,
       activeBots: botservice.activeBots || 0,
-      capabilities: botservice.capabilities || []
+      capabilities: botservice.capabilities || [],
+      rss: botservice.rss || 0,
+      heapUsed: botservice.heapUsed || 0,
+      metrics: botservice.metrics || null
     });
     logger.debug(`BotService ${botservice.uniqueId} UP (capabilities: ${(botservice.capabilities || []).join(', ')})`);
   }

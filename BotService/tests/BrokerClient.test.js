@@ -30,6 +30,16 @@ describe('BotService BrokerClient', () => {
     assert.deepEqual(ctx.statuses[0].capabilities, ['jitsi', 'bigbluebutton', 'teams', 'visio'])
   })
 
+  it('heartbeat reports memory (rss/heapUsed) and lifecycle metrics (T4/T9)', () => {
+    ctx.instance._publishStatus(true)
+    const s = ctx.statuses[0]
+    assert.equal(typeof s.rss, 'number')
+    assert.ok(s.rss > 0)
+    assert.equal(typeof s.heapUsed, 'number')
+    assert.ok(s.heapUsed > 0)
+    assert.deepEqual(s.metrics, { botJoinAttempts: 0, botJoinSuccesses: 0, botJoinFailures: 0, participantChurn: 0 })
+  })
+
   it('on broker ready: starts infra, publishes status, arms a heartbeat', async () => {
     ctx.mqttClient.emit('ready')
     await tick()
@@ -54,5 +64,65 @@ describe('BotService BrokerClient', () => {
 
   it('ignores malformed command payloads without throwing', () => {
     assert.doesNotThrow(() => ctx.mqttClient.emit('message', `botservice/in/${ctx.instance.uniqueId}/startbot`, Buffer.from('not json')))
+  })
+})
+
+describe('BotService BrokerClient — memory ceiling + backpressure (T13)', () => {
+  const realMemoryUsage = process.memoryUsage
+  let ctx
+
+  // Force a low ceiling and a high rss so the instance is over the ceiling.
+  beforeEach(() => {
+    process.env.BOTSERVICE_MAX_RSS_MB = '100'
+    process.memoryUsage = () => ({ rss: 500 * 1024 * 1024, heapUsed: 200 * 1024 * 1024, heapTotal: 0, external: 0, arrayBuffers: 0 })
+    ctx = loadBrokerClient()
+  })
+  afterEach(() => {
+    if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    process.memoryUsage = realMemoryUsage
+    delete process.env.BOTSERVICE_MAX_RSS_MB
+    uninstallMocks()
+  })
+
+  it('advertises EMPTY capabilities while over the ceiling, restores when under', () => {
+    ctx.instance._publishStatus(true)
+    assert.deepEqual(ctx.statuses[0].capabilities, [], 'no capabilities advertised while overloaded')
+    assert.equal(ctx.instance.overloaded, true)
+    // Drop back under the ceiling.
+    process.memoryUsage = () => ({ rss: 10 * 1024 * 1024, heapUsed: 5 * 1024 * 1024, heapTotal: 0, external: 0, arrayBuffers: 0 })
+    ctx.instance._publishStatus(true)
+    assert.deepEqual(ctx.statuses[1].capabilities, ['jitsi', 'bigbluebutton', 'teams', 'visio'])
+    assert.equal(ctx.instance.overloaded, false)
+  })
+
+  it('refuses a new startBot while over the ceiling and publishes a bot-error', async () => {
+    // _publishStatus sets overloaded; or it is set on the first startBot pressure check.
+    ctx.instance._publishStatus(true)
+    await ctx.instance.startBot({ session: { id: 's' }, channel: { id: 'c' }, botType: 'visio', websocketUrl: 'ws://t', botId: 99 })
+    assert.equal(ctx.instance.bots.size, 0, 'no bot was started')
+    const err = ctx.publishes.find(p => p.topic === 'botservice/out/99/bot-error')
+    assert.ok(err, 'a bot-error was published for the refused bot')
+    assert.deepEqual(err.payload, { botId: 99, reason: 'botservice-overloaded' })
+  })
+})
+
+describe('BotService BrokerClient — structured bot-error (T10)', () => {
+  let ctx
+  beforeEach(() => { ctx = loadBrokerClient() })
+  afterEach(() => {
+    if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    uninstallMocks()
+  })
+
+  it('_publishBotError emits botservice/out/<id>/bot-error with {botId, reason}', () => {
+    ctx.instance._publishBotError(7, 'Page crashed')
+    const pub = ctx.publishes.find(p => p.topic === 'botservice/out/7/bot-error')
+    assert.ok(pub)
+    assert.deepEqual(pub.payload, { botId: 7, reason: 'Page crashed' })
+  })
+
+  it('_publishBotError is a no-op when botId is missing', () => {
+    ctx.instance._publishBotError(undefined, 'whatever')
+    assert.equal(ctx.publishes.filter(p => p.topic.endsWith('/bot-error')).length, 0)
   })
 })

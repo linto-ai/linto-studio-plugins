@@ -31,6 +31,42 @@ describe('BrokerClient bot routing (BotService)', () => {
         assert.equal(instance.selectBotService('visio'), null);
       } finally { uninstallMocks(); }
     });
+
+    it('breaks an activeBots tie by lower reported memory (rss)', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        const MB = 1024 * 1024;
+        instance.botservices = [
+          // Same bot count, but the first carries a 30-participant Visio load.
+          { uniqueId: 'heavy', online: true, activeBots: 2, rss: 1800 * MB, capabilities: ['visio'] },
+          { uniqueId: 'light', online: true, activeBots: 2, rss: 300 * MB, capabilities: ['visio'] }
+        ];
+        assert.equal(instance.selectBotService('visio').uniqueId, 'light');
+      } finally { uninstallMocks(); }
+    });
+
+    it('activeBots dominates memory (a much lighter but busier replica is not preferred)', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        const MB = 1024 * 1024;
+        instance.botservices = [
+          { uniqueId: 'busy-light', online: true, activeBots: 5, rss: 100 * MB, capabilities: ['visio'] },
+          { uniqueId: 'idle-heavy', online: true, activeBots: 0, rss: 1900 * MB, capabilities: ['visio'] }
+        ];
+        assert.equal(instance.selectBotService('visio').uniqueId, 'idle-heavy');
+      } finally { uninstallMocks(); }
+    });
+
+    it('excludes a replica that advertised no capabilities (backpressure)', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        instance.botservices = [
+          { uniqueId: 'overloaded', online: true, activeBots: 0, capabilities: [] },
+          { uniqueId: 'healthy', online: true, activeBots: 3, capabilities: ['visio'] }
+        ];
+        assert.equal(instance.selectBotService('visio').uniqueId, 'healthy');
+      } finally { uninstallMocks(); }
+    });
   });
 
   describe('#registerBotService()/#unregisterBotService()', () => {
@@ -43,6 +79,20 @@ describe('BrokerClient bot routing (BotService)', () => {
         assert.equal(instance.botservices.length, 1);
         assert.equal(instance.botservices[0].activeBots, 3);
         assert.deepEqual(instance.botservices[0].capabilities, ['visio', 'teams']);
+      } finally { uninstallMocks(); }
+    });
+
+    it('stores reported memory/load and metrics on register and heartbeat', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        instance.registerBotService({ uniqueId: 'bs1', activeBots: 1, rss: 1000, heapUsed: 500, metrics: { botJoinAttempts: 2 }, capabilities: ['visio'] });
+        assert.equal(instance.botservices[0].rss, 1000);
+        assert.equal(instance.botservices[0].heapUsed, 500);
+        assert.deepEqual(instance.botservices[0].metrics, { botJoinAttempts: 2 });
+        instance.registerBotService({ uniqueId: 'bs1', activeBots: 2, rss: 2000, heapUsed: 800, metrics: { botJoinAttempts: 5 }, capabilities: ['visio'] });
+        assert.equal(instance.botservices[0].rss, 2000);
+        assert.equal(instance.botservices[0].heapUsed, 800);
+        assert.deepEqual(instance.botservices[0].metrics, { botJoinAttempts: 5 });
       } finally { uninstallMocks(); }
     });
 
@@ -157,6 +207,49 @@ describe('BrokerClient bot routing (BotService)', () => {
         // No botOwnership entry (simulating a Scheduler restart that lost the map).
         await instance.stopBot(42);
         assert.ok(mqttPublishes.find(p => p.topic === 'botservice/in/bs-persisted/stopbot'));
+      } finally { uninstallMocks(); }
+    });
+  });
+
+  describe('#recordBotError() (T10)', () => {
+    it('logs and re-emits the error, persisting only when the column exists', async () => {
+      const updates = [];
+      const model = buildModel({
+        Bot: { update: async (values, opts) => { updates.push({ values, opts }); return [1, []]; } }
+      });
+      // No error_reason column declared -> no persisted write attempted.
+      model.Bot.rawAttributes = { id: {}, provider: {} };
+      const { instance, logs, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        await instance.recordBotError(42, 'Page crashed');
+        assert.equal(updates.length, 0, 'no DB write without the column');
+        assert.ok(logs.some(l => l.level === 'warn' && l.msg.includes('42') && l.msg.includes('Page crashed')));
+        const pub = mqttPublishes.find(p => p.topic === 'system/out/bots/error');
+        assert.ok(pub, 'error re-emitted on system/out');
+        assert.deepEqual(pub.payload, { botId: 42, reason: 'Page crashed' });
+      } finally { uninstallMocks(); }
+    });
+
+    it('persists error_reason on the Bot row when the column exists', async () => {
+      const updates = [];
+      const model = buildModel({
+        Bot: { update: async (values, opts) => { updates.push({ values, opts }); return [1, []]; } }
+      });
+      model.Bot.rawAttributes = { id: {}, error_reason: {} };
+      const { instance } = await loadBrokerClient({ model });
+      try {
+        await instance.recordBotError(7, 'join-timeout');
+        assert.equal(updates.length, 1);
+        assert.equal(updates[0].values.error_reason, 'join-timeout');
+        assert.equal(updates[0].opts.where.id, 7);
+      } finally { uninstallMocks(); }
+    });
+
+    it('ignores a null botId', async () => {
+      const { instance, mqttPublishes } = await loadBrokerClient();
+      try {
+        await instance.recordBotError(null, 'whatever');
+        assert.equal(mqttPublishes.filter(p => p.topic === 'system/out/bots/error').length, 0);
       } finally { uninstallMocks(); }
     });
   });

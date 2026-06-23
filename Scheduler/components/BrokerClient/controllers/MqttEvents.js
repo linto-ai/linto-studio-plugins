@@ -73,6 +73,11 @@ module.exports = async function () {
             this.unregisterBotService(botservice);
           }
         }
+        // botservice/out/<botId>/bot-error — a bot failed fatally (T10).
+        if (action === 'bot-error') {
+          const { botId, reason } = JSON.parse(message.toString());
+          await this.recordBotError(botId, reason);
+        }
         break;
       default:
         logger.debug(`Received message for unknown type ${type}`);

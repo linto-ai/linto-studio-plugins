@@ -35,6 +35,39 @@ class MultiplexedWebsocketServer extends EventEmitter {
     // Native diarization: per-channel SpeakerTracker, created on `init` when a
     // bot announces diarizationMode='native'. Keyed by `${sessionId}_${channelId}`.
     this.speakerTrackers = new Map();
+    // Periodic reaper: drops trackers whose channel is no longer running (orphans
+    // that escaped cleanupWebsocket). Held so stop()/tests can clear it.
+    this.reaperInterval = null;
+    this.reaperIntervalMs = 60000;
+  }
+
+  // Drop trackers whose channel is no longer in runningChannels. A live tracker
+  // is only valid while its channel streams; an entry for a channel that is gone
+  // is an orphan that cleanupWebsocket missed (e.g. an init that failed without
+  // an fd). Safe to call repeatedly.
+  reapOrphanTrackers() {
+    for (const key of this.speakerTrackers.keys()) {
+      // key is `${sessionId}_${channelId}`; channelId is the last segment.
+      const channelId = key.slice(key.lastIndexOf('_') + 1);
+      if (!this.runningChannels[channelId]) {
+        logger.info(`Reaping orphan speaker tracker for channel ${channelId} (key ${key})`);
+        this.speakerTrackers.delete(key);
+      }
+    }
+  }
+
+  startReaper() {
+    if (this.reaperInterval) return;
+    this.reaperInterval = setInterval(() => this.reapOrphanTrackers(), this.reaperIntervalMs);
+    // Do not keep the event loop alive solely for the reaper.
+    if (this.reaperInterval.unref) this.reaperInterval.unref();
+  }
+
+  stopReaper() {
+    if (this.reaperInterval) {
+      clearInterval(this.reaperInterval);
+      this.reaperInterval = null;
+    }
   }
 
   // To verify incoming streamId and other details, controlled by streaming server forwarding from broker
@@ -69,10 +102,21 @@ class MultiplexedWebsocketServer extends EventEmitter {
               this.onConnection(ws, req);
           });
           this.isRunning = true;
+          this.startReaper();
           logger.info(`WS server started on ${STREAMING_HOST}:${STREAMING_WS_TCP_PORT}`);
       } catch (error) {
           logger.error("Error starting WS server", error);
       }
+  }
+
+  async stop() {
+      this.stopReaper();
+      if (this.wss) {
+          this.wss.close();
+          this.wss = null;
+      }
+      this.isRunning = false;
+      logger.info("WS server stopped");
   }
 
   stripStreamPrefix(streamId) {
@@ -214,17 +258,32 @@ class MultiplexedWebsocketServer extends EventEmitter {
         // initPcm() emits 'session-start', so the StreamingServer can hand it to
         // the ASR as it is created. Must run before the callback is built.
         fd.diarizationMode = initMessage.diarizationMode || 'asr';
+        const trackerKey = `${fd.session.id}_${fd.channel.id}`;
         if (fd.diarizationMode === 'native') {
-            const key = `${fd.session.id}_${fd.channel.id}`;
             const tracker = new SpeakerTracker();
             for (const participant of (initMessage.participants || [])) {
                 tracker.updateParticipant({ action: 'join', participant });
             }
-            this.speakerTrackers.set(key, tracker);
+            this.speakerTrackers.set(trackerKey, tracker);
             logger.info(`Native diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${(initMessage.participants || []).length} initial participants)`);
         }
 
-        const callback = initMessage.encoding == 'pcm' ? this.initPcm(ws, fd) : this.initWorker(ws, fd);
+        // Any failure AFTER the tracker is registered must drop it, otherwise the
+        // entry leaks: cleanupWebsocket only runs for callbacks it was given an
+        // fd for, and the null-return path in onConnection calls it without fd.
+        let callback;
+        try {
+            callback = initMessage.encoding == 'pcm' ? this.initPcm(ws, fd) : this.initWorker(ws, fd);
+        } catch (error) {
+            logger.error(`Init failed for session ${fd.session.id}, channel ${fd.channel.id}`, error);
+            this.speakerTrackers.delete(trackerKey);
+            ws.send(JSON.stringify({ type: 'error', message: `Init failed: ${error}.` }));
+            return null;
+        }
+        if (!callback) {
+            this.speakerTrackers.delete(trackerKey);
+            return null;
+        }
 
         ws.send(JSON.stringify({ type: 'ack', message: 'Init done' }));
 

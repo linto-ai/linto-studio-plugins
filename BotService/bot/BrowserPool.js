@@ -40,6 +40,7 @@ class BrowserPool extends EventEmitter {
     this.browser = null
     this.launching = null // in-flight launch promise (dedupes concurrent (re)launches)
     this.contexts = new Map() // id -> { context, page }
+    this.reserved = 0 // slots claimed by in-flight createContext() calls not yet in `contexts`
   }
 
   async init () {
@@ -83,24 +84,41 @@ class BrowserPool extends EventEmitter {
       logger.warn(`BrowserPool: context ${id} already exists, replacing`)
       await this.destroyContext(id)
     }
-    if (this.contexts.size >= this.maxContexts) {
+
+    // Reserve a slot SYNCHRONOUSLY (no await between the cap check and the
+    // increment) so that concurrent createContext() calls cannot all pass the
+    // check before any of them registers a context and overflow the pool. The
+    // cap counts both live contexts and in-flight reservations; the slot is
+    // released on any failure path below.
+    if (this.contexts.size + this.reserved >= this.maxContexts) {
       logger.warn(`BrowserPool: max contexts (${this.maxContexts}) reached, refusing ${id}`)
       return null
     }
+    this.reserved++
 
     let browser
     try {
       browser = await this._ensureBrowser()
     } catch (e) {
+      this.reserved--
       logger.error(`BrowserPool: failed to launch Chromium: ${e.message}`)
       return null
     }
 
-    const context = await browser.newContext(CONTEXT_OPTIONS)
-    const page = await context.newPage()
-    this.contexts.set(id, { context, page })
-    logger.info(`BrowserPool: context created for ${id} (${this.contexts.size}/${this.maxContexts})`)
-    return { context, page }
+    let context
+    try {
+      context = await browser.newContext(CONTEXT_OPTIONS)
+      const page = await context.newPage()
+      this.contexts.set(id, { context, page })
+      logger.info(`BrowserPool: context created for ${id} (${this.contexts.size}/${this.maxContexts})`)
+      return { context, page }
+    } catch (e) {
+      if (context) { try { await context.close() } catch (_) { /* best effort */ } }
+      logger.error(`BrowserPool: failed to create context for ${id}: ${e.message}`)
+      return null
+    } finally {
+      this.reserved--
+    }
   }
 
   async destroyContext (id) {

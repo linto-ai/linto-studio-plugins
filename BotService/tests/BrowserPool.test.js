@@ -73,6 +73,17 @@ describe('BrowserPool', () => {
     assert.equal(pool.getActiveCount(), 3)
   })
 
+  it('never exceeds maxContexts under concurrent createContext() calls', async () => {
+    const n = 10 // > maxContexts (3)
+    const results = await Promise.all(
+      Array.from({ length: n }, (_, i) => pool.createContext(`c${i}`))
+    )
+    const ok = results.filter(r => r && r.page)
+    assert.equal(ok.length, pool.maxContexts) // exactly maxContexts succeed
+    assert.equal(pool.getActiveCount(), pool.maxContexts) // pool never overflows
+    assert.equal(launchCount, 1) // still one shared browser
+  })
+
   it('destroyContext decrements the count and is a no-op for unknown ids', async () => {
     await pool.createContext('a')
     await pool.createContext('b')

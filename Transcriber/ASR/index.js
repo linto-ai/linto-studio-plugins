@@ -6,6 +6,8 @@ const logger = require('../logger')
 const ffmpeg = require('fluent-ffmpeg');
 const ASR_ERROR = require('./error.js');
 const FakeTranscriber = require('./fake/index.js');
+const { Security } = require("live-srt-lib");
+const REDACTED = '[REDACTED]';
 
 
 function loadAsr(provider) {
@@ -135,7 +137,7 @@ class ASR extends eventEmitter {
       this.handleASREvents();
       await this.provider.start();
     } catch (error) {
-      this.logger.error(error);
+      this.logger.error(this._redactSecrets(error));
       this.state = ASR.states.ERROR;
       this.emit('error', error);
     }
@@ -174,6 +176,47 @@ class ASR extends eventEmitter {
     }
   }
 
+  // Build the set of secret values that must never reach the logs: the channel's
+  // configured provider key/credentials AS STORED (possibly encrypted) and their
+  // DECRYPTED form (what a provider SDK actually uses and can leak into an error
+  // message). Fail-soft: any decrypt error is swallowed and the at-rest value is
+  // still redacted. Cached after first build.
+  _secretValues() {
+    if (this._secrets) return this._secrets;
+    const secrets = new Set();
+    try {
+      const cfg = this.channel && this.channel.transcriberProfile && this.channel.transcriberProfile.config;
+      if (cfg) {
+        const candidates = [cfg.key, cfg.apiKey, cfg.credentials, cfg.password, cfg.token];
+        const security = new Security();
+        for (const raw of candidates) {
+          if (typeof raw !== 'string' || raw.length === 0) continue;
+          secrets.add(raw);
+          try {
+            const dec = security.safeDecrypt(raw);
+            if (typeof dec === 'string' && dec.length > 0) secrets.add(dec);
+          } catch (e) { /* fail-soft: keep the at-rest value redacted */ }
+        }
+      }
+    } catch (e) { /* never let redaction setup break error logging */ }
+    this._secrets = secrets;
+    return secrets;
+  }
+
+  // Redact any known secret value from a loggable string. Only redacts non-trivial
+  // tokens (length >= 6) to avoid scrubbing incidental short substrings.
+  _redactSecrets(value) {
+    let str = value && value.message ? value.message : value;
+    if (typeof str !== 'string') {
+      try { str = String(str); } catch (e) { return value; }
+    }
+    for (const secret of this._secretValues()) {
+      if (secret.length < 6) continue;
+      if (str.includes(secret)) str = str.split(secret).join(REDACTED);
+    }
+    return str;
+  }
+
   handleASREvents() {
     this.provider.on('connecting', () => {
       this.state = ASR.states.CONNECTING;
@@ -182,7 +225,9 @@ class ASR extends eventEmitter {
       this.state = ASR.states.READY;
     });
     this.provider.on('error', error => {
-      this.logger.error(error);
+      // A decrypted provider key can surface in error.message (SDK auth errors
+      // echo the credential). Redact it before it reaches the logs.
+      this.logger.error(this._redactSecrets(error));
       const msg = ASR_ERROR[error] || ASR_ERROR['RUNTIME_ERROR'];
       const final = {
         "segmentId": this.segmentId,

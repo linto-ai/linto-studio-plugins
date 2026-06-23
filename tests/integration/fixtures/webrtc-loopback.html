@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<!--
+  webrtc-loopback.html — a self-contained, login-free "meeting" page used by the
+  bot real-path integration test (tests/integration/scenarios/19-bot-real-path.sh
+  via tests/integration/harness/bot-real-path.js).
+
+  It stands in for a real Visio/Jitsi/Teams room WITHOUT any external service: on
+  load it builds an in-page RTCPeerConnection loopback (pcSender -> pcReceiver,
+  offer/answer to itself) and publishes a synthetic audio track (a loud-ish
+  oscillator) on the sender. The receiver therefore fires a real `track` event
+  carrying a real inbound MediaStreamTrack.
+
+  Because the bot injects webrtc-intercept's getInterceptScript() via
+  page.addInitScript() BEFORE this page runs, window.RTCPeerConnection is already
+  the patched constructor by the time we `new RTCPeerConnection()` here. So the
+  receiver PC is intercepted exactly as a real meeting client's PC would be, and
+  the captured PCM flows through the real LocalAudioServer -> Bot -> AudioMixer/
+  pass-through -> TranscriberStream chain. Nothing here is a mock of bot code; it
+  is only a synthetic audio *source*, which is what a real meeting peer is too.
+
+  window.__loopbackState is exposed so the Node harness can assert from the page
+  that the loopback actually connected and a remote track was received.
+-->
+<html>
+<head><meta charset="utf-8"><title>WebRTC loopback test room</title></head>
+<body>
+<h1>WebRTC loopback test room</h1>
+<pre id="status">starting…</pre>
+<script>
+(function () {
+  'use strict';
+  const state = {
+    started: false,
+    connected: false,
+    remoteTrack: false,
+    error: null
+  };
+  window.__loopbackState = state;
+
+  function setStatus(t) {
+    try { document.getElementById('status').textContent = t; } catch (e) {}
+  }
+
+  async function start() {
+    try {
+      state.started = true;
+      // A synthetic, audible audio track: an oscillator at a comfortable gain so
+      // the captured PCM has real (non-silent) energy. This is the "remote
+      // participant's microphone" from the bot's point of view.
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC();
+      try { if (ac.state !== 'running') await ac.resume(); } catch (e) {}
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = 440;
+      const gain = ac.createGain();
+      gain.gain.value = 0.5; // well above the AudioMixer energy threshold
+      const dest = ac.createMediaStreamDestination();
+      osc.connect(gain); gain.connect(dest); osc.start();
+      const localStream = dest.stream;
+
+      // Two PeerConnections wired to each other on this same page = a loopback.
+      // NOTE: `RTCPeerConnection` here is the bot-patched constructor (injected
+      // via addInitScript), so pcReceiver's inbound track is intercepted.
+      const pcSender = new RTCPeerConnection();
+      const pcReceiver = new RTCPeerConnection();
+
+      pcReceiver.addEventListener('track', function (ev) {
+        if (ev.track && ev.track.kind === 'audio') {
+          state.remoteTrack = true;
+          setStatus('remote audio track received');
+        }
+      });
+
+      pcSender.addEventListener('icecandidate', function (e) {
+        if (e.candidate) pcReceiver.addIceCandidate(e.candidate).catch(function () {});
+      });
+      pcReceiver.addEventListener('icecandidate', function (e) {
+        if (e.candidate) pcSender.addIceCandidate(e.candidate).catch(function () {});
+      });
+      pcReceiver.addEventListener('connectionstatechange', function () {
+        if (pcReceiver.connectionState === 'connected') {
+          state.connected = true;
+          setStatus('peer connection connected');
+        }
+      });
+
+      for (const track of localStream.getAudioTracks()) {
+        pcSender.addTrack(track, localStream);
+      }
+
+      const offer = await pcSender.createOffer();
+      await pcSender.setLocalDescription(offer);
+      await pcReceiver.setRemoteDescription(offer);
+      const answer = await pcReceiver.createAnswer();
+      await pcReceiver.setLocalDescription(answer);
+      await pcSender.setRemoteDescription(answer);
+
+      setStatus('loopback negotiated');
+    } catch (e) {
+      state.error = (e && e.message) || String(e);
+      setStatus('error: ' + state.error);
+    }
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>

@@ -8,6 +8,12 @@ const OPEN = 1
 // is worth surfacing — but the drop is counted every time, the log is throttled.
 const DROP_WARN_EVERY = 100
 
+// T17a: how long to wait for the `ack` after sending `init` before treating the
+// socket as failed. A Transcriber that accepts the connection but never acks
+// (hung) would otherwise have the bot buffer to maxBuffer and then silently drop
+// the start of the transcript forever. env-overridable.
+const ACK_TIMEOUT_MS = parseInt(process.env.TRANSCRIBER_ACK_TIMEOUT_SECONDS || '10', 10) * 1000
+
 /**
  * TranscriberStream — bridges one Bot's output to one Transcriber over the
  * existing WS ingest protocol, decoupled from how the socket is created so it
@@ -33,7 +39,10 @@ class TranscriberStream {
     this.ws = ws
     this.bot = bot
     this.maxBuffer = opts.maxBuffer || 500
+    this.ackTimeoutMs = opts.ackTimeoutMs || ACK_TIMEOUT_MS
     this.ready = false
+    this._ackTimer = null
+    this._disposed = false
     // T8: ACK-gated frames + dropped-frames counter live in a shared state object
     // so they outlive this stream across a reconnect. Default to a private one.
     this.state = opts.buffer || { buffered: [], droppedFrames: 0 }
@@ -50,14 +59,17 @@ class TranscriberStream {
   set droppedFrames (v) { this.state.droppedFrames = v }
 
   _wire () {
-    this.ws.on('open', () => this._sendInit())
+    // T17a: send init AND arm the ack watchdog together — the handshake is now
+    // in flight, so a Transcriber that never acks must not hang us forever.
+    this.ws.on('open', () => { this._sendInit(); this._armAckWatchdog() })
     this.ws.on('message', (message) => {
-      try { if (JSON.parse(message.toString()).type === 'ack') { this.ready = true; this._flush() } } catch (e) { /* non-JSON */ }
+      try { if (JSON.parse(message.toString()).type === 'ack') { this._cancelAckWatchdog(); this.ready = true; this._flush() } } catch (e) { /* non-JSON */ }
     })
     // T8: on socket close, drop back to ack-gated buffering so audio produced
     // during the reconnect gap is retained in the shared buffer (instead of being
     // sent to a dead socket and lost) until the replacement stream flushes it.
-    this.ws.on('close', () => { this.ready = false })
+    // T17a: the handshake is over (failed or otherwise) — cancel the watchdog.
+    this.ws.on('close', () => { this.ready = false; this._cancelAckWatchdog() })
     // T8: keep references to the bound bot handlers so detach() can remove them.
     // On reconnect the BrokerClient replaces this stream; without detaching, the
     // dead stream would keep buffering/forwarding bot events alongside the new one.
@@ -81,6 +93,50 @@ class TranscriberStream {
     this.bot.removeListener('speakerChanged', this._onSpeaker)
     this.bot.removeListener('participant-joined', this._onJoin)
     this.bot.removeListener('participant-left', this._onLeave)
+    // T17a: a detached stream is being replaced (reconnect) — its watchdog is moot
+    // and must not fire against a socket nobody is listening to anymore.
+    this._cancelAckWatchdog()
+  }
+
+  /**
+   * T17a: arm the init-ack watchdog. If the Transcriber accepts the socket but
+   * never sends `{type:'ack'}` within ackTimeoutMs, declare the handshake failed:
+   * close the socket (whose 'close' drives the BrokerClient's T8 reconnect-or-stop
+   * logic) and emit a non-fatal 'transcriber-error' for observability. We emit a
+   * dedicated event rather than 'error' so a listener-less bot does not throw the
+   * unhandled-'error' exception EventEmitter raises by default. No-op if already
+   * ready or disposed.
+   */
+  _armAckWatchdog () {
+    if (this.ready || this._disposed) return
+    this._cancelAckWatchdog()
+    this._ackTimer = setTimeout(() => {
+      this._ackTimer = null
+      if (this.ready || this._disposed) return
+      logger.warn(`TranscriberStream: no ack within ${this.ackTimeoutMs / 1000}s, treating handshake as failed`)
+      const err = new Error('TranscriberStream: init ack timeout')
+      // Surface as an error so the owner (BrokerClient) decides reconnect vs stop.
+      if (this.bot && typeof this.bot.emit === 'function') this.bot.emit('transcriber-error', err)
+      try { if (typeof this.ws.close === 'function') this.ws.close() } catch (e) { /* best effort */ }
+    }, this.ackTimeoutMs)
+    if (this._ackTimer && typeof this._ackTimer.unref === 'function') this._ackTimer.unref()
+  }
+
+  _cancelAckWatchdog () {
+    if (!this._ackTimer) return
+    clearTimeout(this._ackTimer)
+    this._ackTimer = null
+  }
+
+  /**
+   * T17a: tear this stream down — stop bridging the bot and cancel the watchdog
+   * so no timer leaks past the stream's life. Idempotent.
+   */
+  dispose () {
+    if (this._disposed) return
+    this._disposed = true
+    this._cancelAckWatchdog()
+    this.detach()
   }
 
   _isOpen () {

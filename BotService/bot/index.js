@@ -13,6 +13,12 @@ const KNOWN_BOT_TYPES = ['jitsi', 'bigbluebutton', 'teams', 'visio']
 // so the bot's first words are attributed instead of dropped.
 const MAX_EARLY_FRAMES = 150
 
+// T17b: how long an early-audio buffer may linger before the reaper drops it.
+// A track whose mapping never arrives (and which is never `trackRemoved`) would
+// otherwise hold ~tens of KB forever; reap the stale ones periodically.
+const EARLY_AUDIO_MAX_AGE_MS = parseInt(process.env.EARLY_AUDIO_MAX_AGE_SECONDS || '30', 10) * 1000
+const EARLY_AUDIO_REAP_INTERVAL_MS = EARLY_AUDIO_MAX_AGE_MS
+
 // Page-console noise from meeting SPAs we never want in our logs.
 const IGNORED_CONSOLE = [
   'Content Security Policy', 'ERR_UNKNOWN_URL_SCHEME', 'net::ERR_', 'Failed to load resource',
@@ -55,6 +61,8 @@ class Bot extends EventEmitter {
     this.trackParticipants = new Map() // trackIndex -> { id, name }
     this.participants = new Map() // participantId -> { id, name }
     this.earlyAudio = new Map() // trackIndex -> [Buffer] buffered until mapped (SFU)
+    this.earlyAudioFirstSeen = new Map() // T17b: trackIndex -> ts of first buffered frame (reaper)
+    this.earlyAudioReaper = null // T17b: interval dropping stale unmapped early-audio
     this.hasSeenParticipant = false
     this.diarizationDegraded = false // T14: native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
@@ -184,17 +192,54 @@ class Bot extends EventEmitter {
 
   _bufferEarlyAudio (trackIndex, pcmBuffer) {
     let buf = this.earlyAudio.get(trackIndex)
-    if (!buf) { buf = []; this.earlyAudio.set(trackIndex, buf) }
+    if (!buf) {
+      buf = []
+      this.earlyAudio.set(trackIndex, buf)
+      this.earlyAudioFirstSeen.set(trackIndex, Date.now()) // T17b: age for the reaper
+    }
     if (buf.length < MAX_EARLY_FRAMES) buf.push(pcmBuffer)
+    this._armEarlyAudioReaper() // T17b: ensure stale buffers get dropped eventually
+  }
+
+  // T17b: drop a track's early-audio buffer and its age marker together so the
+  // two maps never diverge. Called on map/flush, on track removal, and by the reaper.
+  _dropEarlyAudio (trackIndex) {
+    this.earlyAudio.delete(trackIndex)
+    this.earlyAudioFirstSeen.delete(trackIndex)
   }
 
   _flushEarlyAudio (trackIndex, participant) {
     const buffered = this.earlyAudio.get(trackIndex)
-    if (!buffered || !this.audioMixer) return
+    if (!buffered || !this.audioMixer) { this._dropEarlyAudio(trackIndex); return }
     for (const pcm of buffered) {
       this.audioMixer.addAudio(participant.id, pcm, Date.now(), participant.name)
     }
-    this.earlyAudio.delete(trackIndex)
+    this._dropEarlyAudio(trackIndex)
+  }
+
+  // T17b: periodically drop early-audio buffers whose track was never mapped (and
+  // never `trackRemoved`) so they cannot linger and leak. The interval is lazily
+  // armed when the first early-audio appears and torn down once nothing is buffered
+  // (or on dispose); it is .unref()'d so it never keeps the process alive.
+  _armEarlyAudioReaper () {
+    if (this.earlyAudioReaper || this.disposed) return
+    this.earlyAudioReaper = setInterval(() => this._reapEarlyAudio(), EARLY_AUDIO_REAP_INTERVAL_MS)
+    if (typeof this.earlyAudioReaper.unref === 'function') this.earlyAudioReaper.unref()
+  }
+
+  _reapEarlyAudio (now = Date.now()) {
+    for (const [trackIndex, firstSeen] of [...this.earlyAudioFirstSeen.entries()]) {
+      if (now - firstSeen < EARLY_AUDIO_MAX_AGE_MS) continue
+      logger.debug(`Bot[${this.contextId}]: reaping stale early-audio for track ${trackIndex} (never mapped)`)
+      this._dropEarlyAudio(trackIndex)
+    }
+    if (this.earlyAudio.size === 0) this._cancelEarlyAudioReaper()
+  }
+
+  _cancelEarlyAudioReaper () {
+    if (!this.earlyAudioReaper) return
+    clearInterval(this.earlyAudioReaper)
+    this.earlyAudioReaper = null
   }
 
   handleJsonMessage (json) {
@@ -241,7 +286,9 @@ class Bot extends EventEmitter {
   _onTrackRemoved (trackIndex) {
     const removed = this.trackParticipants.get(trackIndex)
     this.trackParticipants.delete(trackIndex)
-    this.earlyAudio.delete(trackIndex)
+    // T17b: always clean the early-audio buffer (and its age marker) for a removed
+    // track, mapped or not, so it can never linger.
+    this._dropEarlyAudio(trackIndex)
     if (!this.isSfu || !removed) return
     // SFU: a participant is gone once they have no remaining mapped tracks.
     const stillPresent = [...this.trackParticipants.values()].some(p => p.id === removed.id)
@@ -378,6 +425,9 @@ class Bot extends EventEmitter {
     this.disposed = true
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
+    this._cancelEarlyAudioReaper() // T17b: no timer outlives the bot
+    this.earlyAudio.clear()
+    this.earlyAudioFirstSeen.clear()
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
     // Best-effort graceful leave before tearing the context down (skip if the page
     // is already gone, e.g. an init failure or a browser crash).

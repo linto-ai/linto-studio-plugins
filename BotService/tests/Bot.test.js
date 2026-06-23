@@ -98,6 +98,45 @@ describe('Bot', () => {
       bot._onParticipantLeft({ id: 'u1', name: 'Alice' })
     })
 
+    it('T17b: cleans the early-audio buffer when its track is removed before any mapping', () => {
+      bot.handleAudioData(0, Buffer.alloc(640))
+      bot.handleAudioData(0, Buffer.alloc(640))
+      assert.equal(bot.earlyAudio.get(0).length, 2)
+      assert.equal(bot.earlyAudioFirstSeen.has(0), true, 'age marker recorded')
+      bot._onTrackRemoved(0)
+      assert.equal(bot.earlyAudio.has(0), false, 'early-audio dropped on track removal')
+      assert.equal(bot.earlyAudioFirstSeen.has(0), false, 'age marker dropped too (maps stay in sync)')
+    })
+
+    it('T17b: the reaper drops stale early-audio whose track was never mapped', () => {
+      bot.handleAudioData(0, Buffer.alloc(640)) // stale: first seen "long ago"
+      bot.handleAudioData(1, Buffer.alloc(640)) // fresh: first seen "now"
+      // Backdate track 0 past the max age, leave track 1 fresh.
+      bot.earlyAudioFirstSeen.set(0, Date.now() - 60000)
+      assert.notEqual(bot.earlyAudioReaper, null, 'reaper armed while early-audio is buffered')
+      bot._reapEarlyAudio() // runs the reaper body deterministically (no wall-clock wait)
+      assert.equal(bot.earlyAudio.has(0), false, 'stale track 0 reaped')
+      assert.equal(bot.earlyAudio.has(1), true, 'fresh track 1 kept')
+    })
+
+    it('T17b: the reaper stops itself once nothing is buffered', () => {
+      bot.handleAudioData(0, Buffer.alloc(640))
+      bot.earlyAudioFirstSeen.set(0, Date.now() - 60000)
+      assert.notEqual(bot.earlyAudioReaper, null)
+      bot._reapEarlyAudio()
+      assert.equal(bot.earlyAudio.size, 0)
+      assert.equal(bot.earlyAudioReaper, null, 'reaper interval cleared when empty (no leak)')
+    })
+
+    it('T17b: dispose clears early-audio state and the reaper timer', async () => {
+      bot.handleAudioData(0, Buffer.alloc(640))
+      assert.notEqual(bot.earlyAudioReaper, null)
+      await bot.dispose()
+      assert.equal(bot.earlyAudioReaper, null, 'reaper cleared on dispose')
+      assert.equal(bot.earlyAudio.size, 0)
+      assert.equal(bot.earlyAudioFirstSeen.size, 0)
+    })
+
     it('cancels the empty-meeting timer when a new participant joins', () => {
       bot.emptyMeetingTimeoutMs = 10000
       bot._onParticipantMapping(0, { id: 'u1', name: 'Alice' })

@@ -4,8 +4,11 @@ const { describe, it, beforeEach } = require('mocha')
 const TranscriberStream = require('../bot/TranscriberStream')
 
 class FakeWs extends EventEmitter {
-  constructor () { super(); this.readyState = TranscriberStream.OPEN; this.sent = [] }
+  constructor () { super(); this.readyState = TranscriberStream.OPEN; this.sent = []; this.closed = false }
   send (data) { this.sent.push(data) }
+  // Mirror the real ws: close() flips state and emits 'close' so the watchdog's
+  // teardown drives the same path a real socket close would.
+  close () { this.closed = true; this.readyState = 3; this.emit('close') }
 }
 
 function fakeBot () {
@@ -142,6 +145,50 @@ describe('TranscriberStream', () => {
     assert.deepEqual([...audio[1]], [2])
     assert.deepEqual([...audio[2]], [3])
     assert.equal(shared.buffered.length, 0, 'buffer drained after flush')
+  })
+
+  it('T17a: fires the init-ack watchdog when no ack arrives, closing the socket and signalling an error', (done) => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    let errored = null
+    bot2.on('transcriber-error', (e) => { errored = e })
+    new TranscriberStream(ws2, bot2, { ackTimeoutMs: 15 })
+    ws2.emit('open') // init sent, watchdog armed; NO ack will come
+    setTimeout(() => {
+      assert.ok(errored instanceof Error, 'a transcriber-error was emitted on ack timeout')
+      assert.equal(ws2.closed, true, 'the hung socket was closed so the reconnect-or-stop path engages')
+      done()
+    }, 40)
+  })
+
+  it('T17a: does NOT fire the watchdog once an ack arrives (happy path)', (done) => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    let errored = false
+    bot2.on('transcriber-error', () => { errored = true })
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 15 })
+    ws2.emit('open')
+    ws2.emit('message', JSON.stringify({ type: 'ack' })) // ack before the timeout
+    assert.equal(stream._ackTimer, null, 'watchdog cancelled on ack')
+    setTimeout(() => {
+      assert.equal(errored, false, 'no error fired after a timely ack')
+      assert.equal(ws2.closed, false, 'socket not closed on the happy path')
+      done()
+    }, 40)
+  })
+
+  it('T17a: cancels the watchdog on close and on dispose (no leaked timer)', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    ws2.emit('open')
+    assert.notEqual(stream._ackTimer, null, 'watchdog armed on open')
+    ws2.emit('close')
+    assert.equal(stream._ackTimer, null, 'watchdog cancelled on socket close')
+
+    const ws3 = new FakeWs(); const bot3 = fakeBot()
+    const stream3 = new TranscriberStream(ws3, bot3, { ackTimeoutMs: 1000 })
+    ws3.emit('open')
+    stream3.dispose()
+    assert.equal(stream3._ackTimer, null, 'watchdog cancelled on dispose')
+    assert.equal(stream3._disposed, true)
   })
 
   it('T8: the dropped-frames counter is preserved across a reconnect', () => {

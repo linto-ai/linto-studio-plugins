@@ -12,6 +12,14 @@ const HEARTBEAT_MS = 15000
 // are not lost. Beyond the cap we drop oldest to bound memory.
 const MAX_AUDIO_BUFFER_CHUNKS = 500
 
+// T8: Transcriber WS reconnect resilience. A transient Transcriber blip (socket
+// closed without an intentional stop) should NOT kill the bot: we retry the
+// connection with a bounded backoff, re-run the init handshake and flush the
+// retained audio buffer on the new ack. Only after exhausting the retries do we
+// give up and stopBot. Overridable for fast unit tests.
+const RECONNECT_MAX_RETRIES = parseInt(process.env.BOTSERVICE_WS_RECONNECT_RETRIES || '3', 10)
+const RECONNECT_BASE_MS = parseInt(process.env.BOTSERVICE_WS_RECONNECT_BASE_MS || '1000', 10)
+
 // Memory ceiling (T13): when rss/heap crosses this, the replica advertises EMPTY
 // capabilities so the Scheduler routes elsewhere, and refuses new startBot. 0 (or
 // an unparseable value) disables the ceiling. Default 2 GB is a sensible bound for
@@ -164,7 +172,23 @@ class BrokerClient extends Component {
     this.metrics.botJoinAttempts++
 
     const bot = new Bot({ session, channel, address, botType, browserPool: this.browserPool, audioServer: this.audioServer })
-    const record = { bot, ws: null, botId }
+    // T8: the ACK-gated audio buffer (and its dropped-frames counter) lives on the
+    // record, not inside TranscriberStream, so it survives a transient WS close
+    // and reconnect — the new stream reuses this same object and flushes it.
+    const record = {
+      bot,
+      ws: null,
+      botId,
+      websocketUrl,
+      stream: null,
+      audioBuffer: { buffered: [], droppedFrames: 0 },
+      // T8: reconnect bookkeeping. `stopping` distinguishes an intentional stop
+      // (meeting empty / explicit stopbot / fatal error) from a transient drop:
+      // only a transient drop triggers a reconnect.
+      stopping: false,
+      reconnectAttempts: 0,
+      reconnectTimer: null
+    }
     this.bots.set(key, record)
 
     // Join the meeting BEFORE opening the Transcriber WS: login can be slow and
@@ -200,14 +224,11 @@ class BrokerClient extends Component {
 
   _connectTranscriber (key, record, websocketUrl) {
     const { bot, botId } = record
-    const ws = new WebSocket(websocketUrl)
-    record.ws = ws
-    // Data plane: handshake + ACK-gated audio + speaker/participant forwarding.
-    record.stream = new TranscriberStream(ws, bot, { maxBuffer: MAX_AUDIO_BUFFER_CHUNKS })
 
-    // Control plane: lifecycle (a closed transcriber socket ends the stream).
-    ws.on('close', () => this.stopBot(bot.session.id, bot.channel.id))
-    ws.on('error', (err) => logger.error(`BotService: transcriber WS error for ${key}: ${err.message}`))
+    // Bot-lifecycle wiring is per-bot, NOT per-socket: it must be installed once,
+    // or a T8 reconnect (which opens a fresh socket) would re-register these and
+    // double-count churn / double-fire stops. The socket wiring below is redone
+    // on every (re)connect.
     bot.on('error', (error) => {
       logger.error(`BotService: bot ${key} error: ${error.message}`)
       // T10: a runtime fatal error (page crash, browser disconnect, manifest
@@ -223,6 +244,54 @@ class BrokerClient extends Component {
       this._requestSchedulerCleanup(botId)
       this.stopBot(bot.session.id, bot.channel.id).catch(() => {})
     })
+
+    this._openSocket(key, record, websocketUrl)
+  }
+
+  // T8: open (or re-open) the Transcriber WS for a record and wire its data plane.
+  // The audio buffer lives on the record, so a fresh stream over a new socket
+  // re-runs the init handshake and flushes the retained frames on the new ack.
+  _openSocket (key, record, websocketUrl) {
+    const { bot } = record
+    // T8: detach the previous stream's bot listeners so a reconnect does not leave
+    // a dead stream double-buffering/forwarding alongside the fresh one. The shared
+    // audio buffer stays on the record, so the new stream flushes it on re-ack.
+    if (record.stream) { try { record.stream.detach() } catch (e) { /* best-effort */ } }
+    const ws = new WebSocket(websocketUrl)
+    record.ws = ws
+    // Data plane: handshake + ACK-gated audio + speaker/participant forwarding.
+    record.stream = new TranscriberStream(ws, bot, { maxBuffer: MAX_AUDIO_BUFFER_CHUNKS, buffer: record.audioBuffer })
+
+    ws.on('open', () => { record.reconnectAttempts = 0 }) // a clean open resets backoff
+    // Control plane: a transcriber socket close ends the stream — but a transient
+    // blip (not an intentional stop) triggers a bounded reconnect first (T8).
+    ws.on('close', () => {
+      // Only act for the socket still attached to this record (a stale socket from
+      // a previous attempt must not drive lifecycle).
+      if (record.ws !== ws) return
+      if (record.stopping) return // intentional stop already tearing the bot down
+      if (this.bots.get(key) !== record) return // record gone (stopBot raced ahead)
+      this._scheduleReconnect(key, record)
+    })
+    ws.on('error', (err) => logger.error(`BotService: transcriber WS error for ${key}: ${err.message}`))
+  }
+
+  // T8: schedule a reconnect with bounded exponential backoff. After the retries
+  // are exhausted we give up and stopBot — a sustained Transcriber outage is fatal.
+  _scheduleReconnect (key, record) {
+    if (record.reconnectAttempts >= RECONNECT_MAX_RETRIES) {
+      logger.warn(`BotService: transcriber WS for ${key} gave up after ${record.reconnectAttempts} reconnect attempts, stopping bot`)
+      this.stopBot(record.bot.session.id, record.bot.channel.id).catch(() => {})
+      return
+    }
+    record.reconnectAttempts++
+    const delay = RECONNECT_BASE_MS * Math.pow(2, record.reconnectAttempts - 1)
+    logger.warn(`BotService: transcriber WS for ${key} closed, reconnect attempt ${record.reconnectAttempts}/${RECONNECT_MAX_RETRIES} in ${delay}ms`)
+    record.reconnectTimer = setTimeout(() => {
+      record.reconnectTimer = null
+      if (record.stopping || this.bots.get(key) !== record) return
+      this._openSocket(key, record, record.websocketUrl)
+    }, delay)
   }
 
   // On autonomous leave (empty meeting), ask the Scheduler to delete the Bot row
@@ -237,6 +306,10 @@ class BrokerClient extends Component {
     const record = this.bots.get(key)
     if (!record) return
     this.bots.delete(key) // delete first to make event-driven re-entry a no-op
+    // T8: mark intentional stop so the socket-close handler does NOT reconnect,
+    // and cancel any pending reconnect from an earlier transient drop.
+    record.stopping = true
+    if (record.reconnectTimer) { clearTimeout(record.reconnectTimer); record.reconnectTimer = null }
     logger.info(`BotService: stopping bot ${key}`)
     if (record.ws) { try { record.ws.close() } catch (e) { /* already closing */ } }
     if (record.bot) { try { await record.bot.dispose() } catch (e) { logger.error(`BotService: dispose ${key}: ${e.message}`) } }

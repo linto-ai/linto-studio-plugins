@@ -1,4 +1,5 @@
 const assert = require('assert')
+const EventEmitter = require('events')
 const { describe, it, beforeEach, afterEach } = require('mocha')
 const { loadBrokerClient, uninstallMocks } = require('./helpers')
 
@@ -124,5 +125,164 @@ describe('BotService BrokerClient — structured bot-error (T10)', () => {
   it('_publishBotError is a no-op when botId is missing', () => {
     ctx.instance._publishBotError(undefined, 'whatever')
     assert.equal(ctx.publishes.filter(p => p.topic.endsWith('/bot-error')).length, 0)
+  })
+})
+
+// T8: Transcriber WS reconnect resilience. We mock the `ws` module so a socket
+// close/open is driven from the test, and drive `_connectTranscriber` directly
+// with a fake bot (no real browser/Bot is needed for the reconnect machinery).
+describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)', () => {
+  const OPEN = 1
+  const CLOSED = 3
+  const wsPath = require.resolve('ws')
+  let realWsCacheEntry
+  let created // fake sockets created, in order
+
+  class FakeWs extends EventEmitter {
+    constructor (url) { super(); this.url = url; this.readyState = OPEN; this.sent = []; this.closed = false; created.push(this) }
+    send (data) { this.sent.push(data) }
+    close () { this.closed = true; this.readyState = CLOSED }
+    // Simulate a peer-driven socket close (transient drop or otherwise).
+    drop () { this.readyState = CLOSED; this.emit('close') }
+  }
+
+  function fakeBot () {
+    const bot = new EventEmitter()
+    bot.session = { id: 's' }
+    bot.channel = { id: 'c' }
+    bot.manifest = { diarizationMode: 'native' }
+    bot.getParticipantsList = () => []
+    bot.dispose = async () => {}
+    return bot
+  }
+
+  function makeRecord (bot, botId = 1) {
+    return {
+      bot,
+      ws: null,
+      botId,
+      websocketUrl: 'ws://transcriber',
+      stream: null,
+      audioBuffer: { buffered: [], droppedFrames: 0 },
+      stopping: false,
+      reconnectAttempts: 0,
+      reconnectTimer: null
+    }
+  }
+
+  let ctx
+  let realSetTimeout
+  beforeEach(() => {
+    created = []
+    // Swap the `ws` module for the fake BEFORE the BrokerClient is (re)required.
+    realWsCacheEntry = require.cache[wsPath]
+    require.cache[wsPath] = { id: wsPath, filename: wsPath, loaded: true, exports: FakeWs }
+    // Tight, deterministic backoff for the test.
+    process.env.BOTSERVICE_WS_RECONNECT_RETRIES = '2'
+    process.env.BOTSERVICE_WS_RECONNECT_BASE_MS = '10'
+    ctx = loadBrokerClient()
+    realSetTimeout = global.setTimeout
+  })
+  afterEach(() => {
+    if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    if (realWsCacheEntry) require.cache[wsPath] = realWsCacheEntry; else delete require.cache[wsPath]
+    delete process.env.BOTSERVICE_WS_RECONNECT_RETRIES
+    delete process.env.BOTSERVICE_WS_RECONNECT_BASE_MS
+    global.setTimeout = realSetTimeout
+    uninstallMocks()
+  })
+
+  const audioFrames = (ws) => ws.sent.filter(x => Buffer.isBuffer(x))
+
+  it('on a transient WS drop it reconnects (does not stopBot) and flushes the retained buffer on re-ack', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+
+    let stopped = false
+    ctx.instance.stopBot = async () => { stopped = true }
+
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    const ws1 = created[0]
+    ws1.emit('open')
+    ws1.emit('message', JSON.stringify({ type: 'ack' }))
+    // Audio flows on the live socket.
+    bot.emit('audio', Buffer.from([1]))
+    assert.equal(audioFrames(ws1).length, 1)
+
+    // Transient drop: more audio arrives during the gap, before the reconnect.
+    ws1.drop()
+    bot.emit('audio', Buffer.from([2]))
+    bot.emit('audio', Buffer.from([3]))
+    assert.equal(stopped, false, 'a transient drop does NOT stop the bot')
+    assert.ok(record.reconnectTimer, 'a reconnect is scheduled')
+
+    // Let the backoff timer fire.
+    await new Promise((r) => realSetTimeout(r, 30))
+    assert.equal(created.length, 2, 'a new socket was opened on reconnect')
+    const ws2 = created[1]
+    ws2.emit('open')
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    const audio = audioFrames(ws2)
+    assert.equal(audio.length, 2, 'frames buffered during the gap flushed on re-ack')
+    assert.deepEqual([...audio[0]], [2])
+    assert.deepEqual([...audio[1]], [3])
+    assert.equal(stopped, false)
+  })
+
+  it('a clean reconnect resets the backoff counter', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+    ctx.instance.stopBot = async () => {}
+
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    created[0].drop()
+    assert.equal(record.reconnectAttempts, 1)
+    await new Promise((r) => realSetTimeout(r, 30))
+    created[1].emit('open') // clean open resets the counter
+    assert.equal(record.reconnectAttempts, 0, 'backoff reset after a successful open')
+  })
+
+  it('gives up and stopBot after the reconnect retries are exhausted', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+
+    let stopCalls = 0
+    ctx.instance.stopBot = async () => { stopCalls++; ctx.instance.bots.delete('s_c') }
+
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    // RETRIES = 2. Drop, then drop each reconnected socket without a clean open.
+    created[0].drop() // attempt 1 scheduled
+    await new Promise((r) => realSetTimeout(r, 30))
+    assert.equal(created.length, 2)
+    created[1].drop() // attempt 2 scheduled
+    await new Promise((r) => realSetTimeout(r, 50))
+    assert.equal(created.length, 3)
+    created[2].drop() // attempts exhausted -> give up
+    assert.equal(stopCalls, 1, 'stopBot called once after retries exhausted')
+  })
+
+  it('an intentional stop tears down immediately and never reconnects', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    const ws1 = created[0]
+    ws1.emit('open')
+
+    // Explicit stop: real stopBot path (closes ws, marks stopping, cancels timer).
+    await ctx.instance.stopBot('s', 'c')
+    assert.equal(record.stopping, true)
+    assert.equal(ws1.closed, true, 'socket closed by the intentional stop')
+    assert.equal(ctx.instance.bots.has('s_c'), false)
+
+    // The close that the real stopBot triggers must NOT schedule a reconnect.
+    ws1.emit('close')
+    await new Promise((r) => realSetTimeout(r, 30))
+    assert.equal(created.length, 1, 'no reconnect socket opened after intentional stop')
+    assert.equal(record.reconnectTimer, null)
   })
 })

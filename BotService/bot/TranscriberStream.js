@@ -17,9 +17,16 @@ const DROP_WARN_EVERY = 100
  * the Transcriber replies `{type:'ack'}` (ACK-gating), at which point buffered
  * frames are flushed. Speaker/participant control messages are forwarded as JSON.
  *
+ * T8 (reconnect resilience): the ACK-gated audio buffer (and its dropped-frames
+ * counter) is held in an injected shared state object so it survives a socket
+ * teardown. On a transient Transcriber WS close the BrokerClient builds a fresh
+ * TranscriberStream over a new socket reusing the SAME `opts.buffer`; the init
+ * handshake re-runs and the retained frames are flushed in order on the new ack.
+ * When no buffer is injected the stream owns its own (standalone behavior).
+ *
  * @param {object} ws   a ws-like object: on(event,cb), send(data), readyState
  * @param {EventEmitter} bot  emits 'audio' | 'speakerChanged' | 'participant-joined' | 'participant-left'
- * @param {object} [opts] { maxBuffer }
+ * @param {object} [opts] { maxBuffer, buffer } where buffer is { buffered:[], droppedFrames:0 }
  */
 class TranscriberStream {
   constructor (ws, bot, opts = {}) {
@@ -27,23 +34,53 @@ class TranscriberStream {
     this.bot = bot
     this.maxBuffer = opts.maxBuffer || 500
     this.ready = false
-    this.buffered = []
-    // Pre-ack frames dropped because the buffer was full (ACK slow/absent). A
-    // non-zero value localizes a gap at the very start of the transcript.
-    this.droppedFrames = 0
-    this._lastWarnedDrops = 0
+    // T8: ACK-gated frames + dropped-frames counter live in a shared state object
+    // so they outlive this stream across a reconnect. Default to a private one.
+    this.state = opts.buffer || { buffered: [], droppedFrames: 0 }
+    if (!Array.isArray(this.state.buffered)) this.state.buffered = []
+    if (typeof this.state.droppedFrames !== 'number') this.state.droppedFrames = 0
+    this._lastWarnedDrops = this.state.droppedFrames
     this._wire()
   }
+
+  // Accessors kept for backward-compat: tests/other code read .buffered directly.
+  get buffered () { return this.state.buffered }
+  set buffered (v) { this.state.buffered = v }
+  get droppedFrames () { return this.state.droppedFrames }
+  set droppedFrames (v) { this.state.droppedFrames = v }
 
   _wire () {
     this.ws.on('open', () => this._sendInit())
     this.ws.on('message', (message) => {
       try { if (JSON.parse(message.toString()).type === 'ack') { this.ready = true; this._flush() } } catch (e) { /* non-JSON */ }
     })
-    this.bot.on('audio', (buffer) => this._sendAudio(buffer))
-    this.bot.on('speakerChanged', (event) => this._sendControl(event))
-    this.bot.on('participant-joined', (p) => this._sendControl({ type: 'participant', action: 'join', participant: { id: p.identity, name: p.name } }))
-    this.bot.on('participant-left', (p) => this._sendControl({ type: 'participant', action: 'leave', participant: { id: p.identity, name: p.name } }))
+    // T8: on socket close, drop back to ack-gated buffering so audio produced
+    // during the reconnect gap is retained in the shared buffer (instead of being
+    // sent to a dead socket and lost) until the replacement stream flushes it.
+    this.ws.on('close', () => { this.ready = false })
+    // T8: keep references to the bound bot handlers so detach() can remove them.
+    // On reconnect the BrokerClient replaces this stream; without detaching, the
+    // dead stream would keep buffering/forwarding bot events alongside the new one.
+    this._onAudio = (buffer) => this._sendAudio(buffer)
+    this._onSpeaker = (event) => this._sendControl(event)
+    this._onJoin = (p) => this._sendControl({ type: 'participant', action: 'join', participant: { id: p.identity, name: p.name } })
+    this._onLeave = (p) => this._sendControl({ type: 'participant', action: 'leave', participant: { id: p.identity, name: p.name } })
+    this.bot.on('audio', this._onAudio)
+    this.bot.on('speakerChanged', this._onSpeaker)
+    this.bot.on('participant-joined', this._onJoin)
+    this.bot.on('participant-left', this._onLeave)
+  }
+
+  /**
+   * T8: stop bridging this bot — used when the BrokerClient swaps in a fresh
+   * stream on reconnect. Removes the bot listeners (the shared audio buffer is
+   * intentionally left intact so the replacement stream can flush it).
+   */
+  detach () {
+    this.bot.removeListener('audio', this._onAudio)
+    this.bot.removeListener('speakerChanged', this._onSpeaker)
+    this.bot.removeListener('participant-joined', this._onJoin)
+    this.bot.removeListener('participant-left', this._onLeave)
   }
 
   _isOpen () {
@@ -61,23 +98,24 @@ class TranscriberStream {
   }
 
   _sendAudio (buffer) {
-    if (!this._isOpen()) return
-    if (this.ready) { this.ws.send(buffer); return }
-    if (this.buffered.length >= this.maxBuffer) {
-      this.buffered.shift() // drop oldest
-      this.droppedFrames++
+    // T8: while not yet ack'd on the (re)connected socket, retain frames even if
+    // the socket is not open, so audio produced during a reconnect gap survives.
+    if (this.ready) { if (this._isOpen()) this.ws.send(buffer); return }
+    if (this.state.buffered.length >= this.maxBuffer) {
+      this.state.buffered.shift() // drop oldest
+      this.state.droppedFrames++
       // Throttled: do not log on every dropped frame.
-      if (this.droppedFrames - this._lastWarnedDrops >= DROP_WARN_EVERY) {
-        this._lastWarnedDrops = this.droppedFrames
-        logger.warn(`TranscriberStream: pre-ack buffer full, ${this.droppedFrames} frames dropped (ACK slow/absent)`)
+      if (this.state.droppedFrames - this._lastWarnedDrops >= DROP_WARN_EVERY) {
+        this._lastWarnedDrops = this.state.droppedFrames
+        logger.warn(`TranscriberStream: pre-ack buffer full, ${this.state.droppedFrames} frames dropped (ACK slow/absent)`)
       }
     }
-    this.buffered.push(buffer)
+    this.state.buffered.push(buffer)
   }
 
   /** Number of pre-ack frames dropped because the buffer overflowed. */
   getDroppedFrames () {
-    return this.droppedFrames
+    return this.state.droppedFrames
   }
 
   _sendControl (obj) {
@@ -89,8 +127,8 @@ class TranscriberStream {
   }
 
   _flush () {
-    for (const buffer of this.buffered) { if (this._isOpen()) this.ws.send(buffer) }
-    this.buffered = []
+    for (const buffer of this.state.buffered) { if (this._isOpen()) this.ws.send(buffer) }
+    this.state.buffered = []
   }
 }
 

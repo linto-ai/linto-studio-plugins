@@ -111,4 +111,49 @@ describe('TranscriberStream', () => {
     bot.emit('audio', Buffer.from([1]))
     assert.equal(audioFrames(ws).length, 0)
   })
+
+  it('T8: retains the audio buffer across a reconnect and flushes it in order on the new ack', () => {
+    // A shared buffer object survives the socket teardown (the BrokerClient owns
+    // it on the bot record); a fresh stream over a new socket reuses it.
+    const shared = { buffered: [], droppedFrames: 0 }
+    const ws1 = new FakeWs(); const bot1 = fakeBot()
+    const s1 = new TranscriberStream(ws1, bot1, { maxBuffer: 10, buffer: shared })
+    ws1.emit('open')
+    // No ack yet: frames produced during the (about-to-drop) connection are held.
+    bot1.emit('audio', Buffer.from([1]))
+    bot1.emit('audio', Buffer.from([2]))
+    assert.equal(audioFrames(ws1).length, 0, 'not flushed without ack')
+    // Socket drops; the shared buffer is NOT cleared (no _flush ran). The dead
+    // stream detaches from the bot (as the BrokerClient does on reconnect).
+    ws1.readyState = 3
+    s1.detach()
+    assert.equal(shared.buffered.length, 2, 'buffer retained across the drop')
+
+    // Reconnect: a new stream over a new socket, reusing the same buffer.
+    const ws2 = new FakeWs(); new TranscriberStream(ws2, bot1, { maxBuffer: 10, buffer: shared })
+    ws2.emit('open')
+    // More audio arrives during the gap, before the re-ack: also retained.
+    bot1.emit('audio', Buffer.from([3]))
+    assert.equal(audioFrames(ws2).length, 0, 'still ack-gated on the new socket')
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    const audio = audioFrames(ws2)
+    assert.equal(audio.length, 3, 'all retained frames flushed on re-ack')
+    assert.deepEqual([...audio[0]], [1])
+    assert.deepEqual([...audio[1]], [2])
+    assert.deepEqual([...audio[2]], [3])
+    assert.equal(shared.buffered.length, 0, 'buffer drained after flush')
+  })
+
+  it('T8: the dropped-frames counter is preserved across a reconnect', () => {
+    const shared = { buffered: [], droppedFrames: 0 }
+    const ws1 = new FakeWs(); const bot1 = fakeBot()
+    const s1 = new TranscriberStream(ws1, bot1, { maxBuffer: 2, buffer: shared })
+    ws1.emit('open')
+    for (let i = 1; i <= 5; i++) bot1.emit('audio', Buffer.from([i])) // cap 2 -> 3 dropped
+    assert.equal(s1.getDroppedFrames(), 3)
+    ws1.readyState = 3
+
+    const ws2 = new FakeWs(); const s2 = new TranscriberStream(ws2, bot1, { maxBuffer: 2, buffer: shared })
+    assert.equal(s2.getDroppedFrames(), 3, 'drop count carried over to the reconnected stream')
+  })
 })

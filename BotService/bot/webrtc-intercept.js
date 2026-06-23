@@ -35,6 +35,44 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const LOCAL_WS_URL = ${JSON.stringify(localWsUrl)};
   const PLATFORM_TYPE = ${JSON.stringify(platformType)};
   const DEBUG = ${JSON.stringify(debug)};
+
+  // getUserMedia shim. Headless Chromium has no real capture device, so the
+  // meeting SPA's getUserMedia throws NotFoundError and the join never finalizes
+  // (the bot connects the signaling WS but is never admitted as a participant and
+  // receives no remote tracks). Return synthetic SILENT audio + a blank video
+  // track so the join completes; the bot only subscribes to others' tracks, it
+  // never needs to publish real media.
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const _gumAC = new (window.AudioContext || window.webkitAudioContext)();
+      navigator.mediaDevices.getUserMedia = function (constraints) {
+        try {
+          const tracks = [];
+          if (constraints && constraints.audio) {
+            const osc = _gumAC.createOscillator();
+            const gain = _gumAC.createGain(); gain.gain.value = 0; // silent
+            const dest = _gumAC.createMediaStreamDestination();
+            osc.connect(gain); gain.connect(dest); osc.start();
+            tracks.push(dest.stream.getAudioTracks()[0]);
+          }
+          if (constraints && constraints.video) {
+            const cv = Object.assign(document.createElement('canvas'), { width: 320, height: 240 });
+            cv.getContext('2d').fillRect(0, 0, 320, 240);
+            tracks.push(cv.captureStream(5).getVideoTracks()[0]);
+          }
+          return Promise.resolve(new MediaStream(tracks));
+        } catch (e) { return Promise.reject(e); }
+      };
+      if (navigator.mediaDevices.enumerateDevices) {
+        navigator.mediaDevices.enumerateDevices = function () {
+          return Promise.resolve([
+            { deviceId: 'default', kind: 'audioinput', label: 'Bot Mic', groupId: 'bot', toJSON() { return this; } },
+            { deviceId: 'default', kind: 'videoinput', label: 'Bot Cam', groupId: 'bot', toJSON() { return this; } }
+          ]);
+        };
+      }
+    }
+  } catch (e) {}
   const TARGET_SAMPLE_RATE = 16000;
   const MAX_RECONNECT_RETRIES = 10;
   const RECONNECT_DELAY_MS = 1000;
@@ -113,13 +151,27 @@ function getInterceptScript (localWsUrl, platformConfig) {
   let trackIndexSeq = 0;
   const tracks = new Map(); // trackId -> { index, participantId }
   const processedTracks = new Set();
-  let sharedCtx = null, workletReady = false;
+  let sharedCtx = null, workletReady = false, audioSinks = [];
 
   async function setupTrackCapture(track, tIdx) {
     if (!sharedCtx) sharedCtx = new AudioContext();
     const ctx = sharedCtx;
+    // Headless Chromium starts the AudioContext suspended (no audio output to
+    // drive it); without resuming, the AudioWorklet never pulls samples and no
+    // PCM is ever captured.
+    try { if (ctx.state !== 'running') await ctx.resume(); } catch (e) {}
     const sourceRate = ctx.sampleRate;
-    const source = ctx.createMediaStreamSource(new MediaStream([track]));
+    const ms = new MediaStream([track]);
+    // Chrome quirk: a remote WebRTC audio track does NOT feed a
+    // MediaStreamAudioSourceNode unless it is ALSO attached to a playing
+    // HTMLMediaElement. Without this sink, process() receives only silence.
+    try {
+      const sink = document.createElement('audio');
+      sink.srcObject = ms; sink.muted = true; sink.autoplay = true;
+      sink.play().catch(function () {});
+      (audioSinks = audioSinks || []).push(sink);
+    } catch (e) {}
+    const source = ctx.createMediaStreamSource(ms);
 
     try {
       if (!workletReady) {
@@ -220,49 +272,62 @@ const SFU_MAPPING_BLOCK = `
   }
 
   // LiveKit/Visio: find the Room object by walking the React fiber tree for the
-  // characteristic { remoteParticipants, localParticipant, activeSpeakers } shape.
+  // characteristic { remoteParticipants, localParticipant } shape. Walk every
+  // element's fiber (memoizedProps + memoizedState) up the return chain — this is
+  // robust across Meet's component structure.
   let livekitRoom = null;
   function findLivekitRoom() {
     try {
-      const root = document.getElementById('root');
-      if (!root) return null;
-      const key = Object.keys(root).find(function (k) { return k.indexOf('__reactContainer') === 0 || k.indexOf('__reactFiber') === 0; });
-      if (!key) return null;
-      const seen = new Set();
-      const queue = [root[key]];
-      let qi = 0;
-      while (qi < queue.length) {
-        const fiber = queue[qi++];
-        if (!fiber || seen.has(fiber)) continue;
-        seen.add(fiber);
-        if (seen.size > 5000) break;
-        let state = fiber.memoizedState, depth = 0;
-        while (state && depth < 20) {
-          const s = state.queue && state.queue.lastRenderedState;
-          if (s && typeof s === 'object' && s.remoteParticipants && s.localParticipant && s.activeSpeakers) return s;
-          state = state.next; depth++;
+      const els = document.querySelectorAll('*');
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        let fk = null;
+        for (const k in el) { if (k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0) { fk = k; break; } }
+        if (!fk) continue;
+        let f = el[fk], depth = 0;
+        while (f && depth < 60) {
+          const objs = [f.memoizedProps, f.memoizedState];
+          for (let oi = 0; oi < objs.length; oi++) {
+            const o = objs[oi];
+            if (o && typeof o === 'object') {
+              for (const key in o) {
+                try {
+                  const v = o[key];
+                  if (v && typeof v === 'object' && v.localParticipant && (v.remoteParticipants || v.participants)) return v;
+                } catch (e) { /* getter threw */ }
+              }
+            }
+          }
+          f = f.return; depth++;
         }
-        if (fiber.child) queue.push(fiber.child);
-        if (fiber.sibling) queue.push(fiber.sibling);
       }
     } catch (e) { /* ignore */ }
     return null;
   }
   function pollLivekit() {
-    if (tracks.size === 0 || !hasUnmappedTrack()) return;
+    // Runs unconditionally (NOT gated on tracks) so it can find the Room and
+    // FORCE subscription: a headless bot has no UI, so adaptive-stream never
+    // subscribes on its own and no inbound tracks would ever arrive.
     if (window.APP && window.APP.conference) return; // Jitsi handles its own mapping
     if (!livekitRoom) { livekitRoom = findLivekitRoom(); if (!livekitRoom) return; log('LiveKit Room found'); }
-    if (livekitRoom.state !== 'connected') { livekitRoom = null; return; }
+    if (livekitRoom.state && livekitRoom.state !== 'connected') { livekitRoom = null; return; }
     try {
-      livekitRoom.remoteParticipants.forEach(function (p) {
+      const remotes = livekitRoom.remoteParticipants || livekitRoom.participants;
+      remotes.forEach(function (p) {
         p.trackPublications.forEach(function (pub) {
-          if (pub.kind !== 'audio' || !pub.track || !pub.track.mediaStreamTrack) return;
-          mapTrack(pub.track.mediaStreamTrack.id, { id: p.identity, name: p.name || p.identity });
+          if (pub.kind !== 'audio') return;
+          // Force subscription to every remote audio track (adaptive-stream off).
+          if (!pub.isSubscribed && typeof pub.setSubscribed === 'function') {
+            try { pub.setSubscribed(true); } catch (e) { /* ignore */ }
+          }
+          if (pub.track && pub.track.mediaStreamTrack) {
+            mapTrack(pub.track.mediaStreamTrack.id, { id: p.identity, name: p.name || p.identity });
+          }
         });
       });
     } catch (e) { /* ignore */ }
   }
-  setTimeout(function () { intervals.push(setInterval(pollJitsi, 2000)); intervals.push(setInterval(pollLivekit, 2000)); }, 5000);
+  setTimeout(function () { intervals.push(setInterval(pollJitsi, 2000)); intervals.push(setInterval(pollLivekit, 1500)); }, 3000);
 `
 
 // ── Teams speaker detection (MCU: one mixed track, speaker from page state) ──

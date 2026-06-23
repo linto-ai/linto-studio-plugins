@@ -8,7 +8,17 @@ const LAUNCH_ARGS = [
   '--disable-gpu',
   '--mute-audio',
   '--use-fake-ui-for-media-stream', // auto-accept the mic/camera permission prompt
-  '--autoplay-policy=no-user-gesture-required'
+  // Provide a synthetic mic/camera so getUserMedia succeeds in headless Chromium.
+  // Without a capture device the meeting SPA's getUserMedia throws NotFoundError,
+  // which on LiveKit-based clients (Visio) aborts the join before the signaling
+  // WebSocket falls back to the working endpoint — the bot then never connects.
+  '--use-fake-device-for-media-capture',
+  '--autoplay-policy=no-user-gesture-required',
+  // The in-page interceptor connects back to the loopback audio server over
+  // ws://127.0.0.1; the meeting page's CSP (connect-src) / mixed-content policy
+  // otherwise blocks that loopback so no captured PCM ever reaches Node.
+  '--disable-web-security',
+  '--allow-running-insecure-content'
 ]
 
 const CONTEXT_OPTIONS = {

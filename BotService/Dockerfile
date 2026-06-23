@@ -8,17 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu \
 
 COPY lib/ /usr/src/app/lib
 COPY .envdefault /usr/src/app/
-COPY BotService/ /usr/src/app/botservice
-
 RUN cd /usr/src/app/lib && npm ci
 
-# Install JS deps, then the Playwright Chromium + its system libraries into a
-# world-readable shared path so the dropped runtime user can launch it.
+# Install JS deps + Playwright Chromium FIRST (keyed only on the lockfiles) so a
+# source-only change does not re-download the browser. Copy the app code after.
+COPY BotService/package.json BotService/package-lock.json /usr/src/app/botservice/
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN cd /usr/src/app/botservice && npm ci \
-  && npx playwright install-deps chromium \
+  && npx playwright install --with-deps chromium \
   && chmod -R 755 /opt/playwright-browsers \
   && npm cache clean --force
+
+COPY BotService/ /usr/src/app/botservice
 
 COPY wait-for-it.sh /
 COPY BotService/docker-entrypoint.sh /

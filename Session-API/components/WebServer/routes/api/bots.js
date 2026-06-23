@@ -1,4 +1,5 @@
 const { Model } = require("live-srt-lib")
+const { validateBotUrl } = require("./bots.helpers")
 
 module.exports = (webserver) => {
     return [
@@ -53,6 +54,13 @@ module.exports = (webserver) => {
                 const { url, channelId, provider, async: botAsync} = req.body;
                 if (!url || channelId === undefined || !provider) {
                     return res.status(400).json({ error: "url, channelId, and provider are required" });
+                }
+                // SSRF guard: the url is later handed to a headless Chromium via
+                // Playwright page.goto(), so reject loopback/private/metadata/non-http
+                // targets before creating the bot.
+                const urlError = validateBotUrl(url);
+                if (urlError) {
+                    return res.status(urlError.status).json({ error: urlError.error });
                 }
                 const channel = await Model.Channel.findByPk(channelId);
                 if (!channel) {

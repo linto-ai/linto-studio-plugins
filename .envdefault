@@ -17,10 +17,11 @@ TRANSCRIBER_COMPONENTS=BrokerClient,StreamingServer,Healthcheck # Comma separate
 SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, they load in this order
 SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
-BOTSERVICE_COMPONENTS=BrokerClient
+BOTSERVICE_COMPONENTS=BrokerClient,Healthcheck # Comma separated list of components to run, they load in this order
 
 # ── BotService (dedicated meeting-bot service) ───────────────────────────────
 MAX_CONCURRENT_BOTS=10 # max simultaneous browser bots per BotService replica
+BOTSERVICE_HEALTHCHECK_HTTP=8080 # HTTP port for the liveness endpoint (JSON: status/activeBots/browserConnected/audioServerListening)
 EMPTY_MEETING_TIMEOUT_SECONDS=60 # auto-leave a meeting this long after the last participant leaves
 BOT_DISPLAY_NAME=LinTO Bot # name the bot shows when joining a meeting
 # BOT_CAPABILITIES=jitsi,bigbluebutton,teams,visio # advertised providers (defaults to all)

@@ -98,7 +98,7 @@ describe('Bot', () => {
       bot._onParticipantLeft({ id: 'u1', name: 'Alice' })
     })
 
-    it('T17b: cleans the early-audio buffer when its track is removed before any mapping', () => {
+    it('cleans the early-audio buffer when its track is removed before any mapping', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
       bot.handleAudioData(0, Buffer.alloc(640))
       assert.equal(bot.earlyAudio.get(0).length, 2)
@@ -108,7 +108,7 @@ describe('Bot', () => {
       assert.equal(bot.earlyAudioFirstSeen.has(0), false, 'age marker dropped too (maps stay in sync)')
     })
 
-    it('T17b: the reaper drops stale early-audio whose track was never mapped', () => {
+    it('the reaper drops stale early-audio whose track was never mapped', () => {
       bot.handleAudioData(0, Buffer.alloc(640)) // stale: first seen "long ago"
       bot.handleAudioData(1, Buffer.alloc(640)) // fresh: first seen "now"
       // Backdate track 0 past the max age, leave track 1 fresh.
@@ -119,7 +119,7 @@ describe('Bot', () => {
       assert.equal(bot.earlyAudio.has(1), true, 'fresh track 1 kept')
     })
 
-    it('T17b: the reaper stops itself once nothing is buffered', () => {
+    it('the reaper stops itself once nothing is buffered', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
       bot.earlyAudioFirstSeen.set(0, Date.now() - 60000)
       assert.notEqual(bot.earlyAudioReaper, null)
@@ -128,7 +128,7 @@ describe('Bot', () => {
       assert.equal(bot.earlyAudioReaper, null, 'reaper interval cleared when empty (no leak)')
     })
 
-    it('T17b: dispose clears early-audio state and the reaper timer', async () => {
+    it('dispose clears early-audio state and the reaper timer', async () => {
       bot.handleAudioData(0, Buffer.alloc(640))
       assert.notEqual(bot.earlyAudioReaper, null)
       await bot.dispose()
@@ -157,6 +157,17 @@ describe('Bot', () => {
       assert.ok(got && got.length === 640)
     })
 
+    it('holds Teams audio until admitted (no streaming from the lobby)', () => {
+      const bot = makeBot('teams')
+      let got = null
+      bot.on('audio', (buf) => { got = buf })
+      bot.handleAudioData(0, Buffer.alloc(640))
+      assert.equal(got, null, 'no audio while still in the Teams lobby (not admitted)')
+      bot.hasSeenParticipant = true // admitted: a participant was detected
+      bot.handleAudioData(0, Buffer.alloc(640))
+      assert.ok(got && got.length === 640, 'audio flows once admitted')
+    })
+
     it('forwards Teams page-polled speakerChanged', () => {
       const bot = makeBot('teams')
       let ev = null
@@ -165,7 +176,6 @@ describe('Bot', () => {
       assert.equal(ev.speaker.name, 'Carol')
     })
 
-    // T14 — native-diar fallback on degrade signal
     it('falls back to ASR diarization on a diarizationDegraded signal', () => {
       const bot = makeBot('teams')
       assert.equal(bot.manifest.diarizationMode, 'native')
@@ -188,9 +198,8 @@ describe('Bot', () => {
   })
 
   it('auto-leaves via the join watchdog (join-timeout) when no participant is ever seen', (done) => {
-    // Section 3: a never-admitted leave is a FAILURE, emitted as a distinct
-    // 'join-timeout' event (not the clean 'meeting-empty') so it is not counted
-    // as success.
+    // A never-admitted leave is a FAILURE, emitted as a distinct 'join-timeout'
+    // event (not the clean 'meeting-empty') so it is not counted as success.
     const bot = makeBot('visio')
     bot.joinTimeoutMs = 10
     bot.on('join-timeout', () => done())
@@ -220,9 +229,9 @@ describe('Bot', () => {
     assert.equal(bot._template('static'), 'static')
   })
 
-  // E8: audio-silence watchdog — once admitted the bot expects a steady PCM flow;
+  // Audio-silence watchdog — once admitted the bot expects a steady PCM flow;
   // a prolonged gap means the capture pipe died, so emit a fatal 'error'.
-  describe('audio-silence watchdog (E8)', () => {
+  describe('audio-silence watchdog', () => {
     it('emits error when no audio arrives within the silence timeout after admission', () => {
       const bot = makeBot('visio')
       let err = null

@@ -313,7 +313,7 @@ describe('BrokerClient bot routing (BotService)', () => {
     });
   });
 
-  describe('#recordBotError() (T10)', () => {
+  describe('#recordBotError()', () => {
     it('logs and re-emits the error, persisting only when the column exists', async () => {
       const updates = [];
       const model = buildModel({

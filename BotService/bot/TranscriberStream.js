@@ -8,10 +8,9 @@ const OPEN = 1
 // is worth surfacing — but the drop is counted every time, the log is throttled.
 const DROP_WARN_EVERY = 100
 
-// T17a: how long to wait for the `ack` after sending `init` before treating the
-// socket as failed. A Transcriber that accepts the connection but never acks
-// (hung) would otherwise have the bot buffer to maxBuffer and then silently drop
-// the start of the transcript forever. env-overridable.
+// How long to wait for the `ack` after sending `init` before treating the socket
+// as failed. A Transcriber that accepts the connection but never acks would
+// otherwise buffer to maxBuffer and silently drop the start of the transcript.
 const ACK_TIMEOUT_MS = parseInt(process.env.TRANSCRIBER_ACK_TIMEOUT_SECONDS || '10', 10) * 1000
 
 /**
@@ -23,7 +22,7 @@ const ACK_TIMEOUT_MS = parseInt(process.env.TRANSCRIBER_ACK_TIMEOUT_SECONDS || '
  * the Transcriber replies `{type:'ack'}` (ACK-gating), at which point buffered
  * frames are flushed. Speaker/participant control messages are forwarded as JSON.
  *
- * T8 (reconnect resilience): the ACK-gated audio buffer (and its dropped-frames
+ * Reconnect resilience: the ACK-gated audio buffer (and its dropped-frames
  * counter) is held in an injected shared state object so it survives a socket
  * teardown. On a transient Transcriber WS close the BrokerClient builds a fresh
  * TranscriberStream over a new socket reusing the SAME `opts.buffer`; the init
@@ -42,10 +41,10 @@ class TranscriberStream {
     this.ackTimeoutMs = opts.ackTimeoutMs || ACK_TIMEOUT_MS
     this.ready = false
     this._ackTimer = null
-    this._ackedOnce = false // 1a: latch the "first ack" info log
+    this._ackedOnce = false // latch the "first ack" info log
     this._disposed = false
-    // T8: ACK-gated frames + dropped-frames counter live in a shared state object
-    // so they outlive this stream across a reconnect. Default to a private one.
+    // ACK-gated frames + dropped-frames counter live in a shared state object so
+    // they outlive this stream across a reconnect. Default to a private one.
     this.state = opts.buffer || { buffered: [], droppedFrames: 0 }
     if (!Array.isArray(this.state.buffered)) this.state.buffered = []
     if (typeof this.state.droppedFrames !== 'number') this.state.droppedFrames = 0
@@ -60,14 +59,14 @@ class TranscriberStream {
   set droppedFrames (v) { this.state.droppedFrames = v }
 
   _wire () {
-    // T17a: send init AND arm the ack watchdog together — the handshake is now
-    // in flight, so a Transcriber that never acks must not hang us forever.
+    // Send init and arm the ack watchdog together so a Transcriber that never
+    // acks cannot hang us forever.
     this.ws.on('open', () => { this._sendInit(); this._armAckWatchdog() })
     this.ws.on('message', (message) => {
       try {
         if (JSON.parse(message.toString()).type === 'ack') {
           this._cancelAckWatchdog()
-          // 1a: log the first ack only (a reconnect re-acks; do not re-announce).
+          // Log the first ack only (a reconnect re-acks; do not re-announce).
           if (!this._ackedOnce) {
             this._ackedOnce = true
             logger.info(`TranscriberStream: transcriber ack received, ${this.state.buffered.length} buffered frames flushed`)
@@ -77,14 +76,13 @@ class TranscriberStream {
         }
       } catch (e) { /* non-JSON */ }
     })
-    // T8: on socket close, drop back to ack-gated buffering so audio produced
-    // during the reconnect gap is retained in the shared buffer (instead of being
-    // sent to a dead socket and lost) until the replacement stream flushes it.
-    // T17a: the handshake is over (failed or otherwise) — cancel the watchdog.
+    // On socket close, drop back to ack-gated buffering so audio produced during
+    // the reconnect gap is retained in the shared buffer until the replacement
+    // stream flushes it; the handshake is over, so cancel the watchdog.
     this.ws.on('close', () => { this.ready = false; this._cancelAckWatchdog() })
-    // T8: keep references to the bound bot handlers so detach() can remove them.
-    // On reconnect the BrokerClient replaces this stream; without detaching, the
-    // dead stream would keep buffering/forwarding bot events alongside the new one.
+    // Keep references to the bound bot handlers so detach() can remove them. On
+    // reconnect the BrokerClient replaces this stream; without detaching, the dead
+    // stream would keep buffering/forwarding bot events alongside the new one.
     this._onAudio = (buffer) => this._sendAudio(buffer)
     this._onSpeaker = (event) => this._sendControl(event)
     this._onJoin = (p) => this._sendControl({ type: 'participant', action: 'join', participant: { id: p.identity, name: p.name } })
@@ -96,28 +94,27 @@ class TranscriberStream {
   }
 
   /**
-   * T8: stop bridging this bot — used when the BrokerClient swaps in a fresh
-   * stream on reconnect. Removes the bot listeners (the shared audio buffer is
-   * intentionally left intact so the replacement stream can flush it).
+   * Stop bridging this bot — used when the BrokerClient swaps in a fresh stream
+   * on reconnect. Removes the bot listeners (the shared audio buffer is left
+   * intact so the replacement stream can flush it).
    */
   detach () {
     this.bot.removeListener('audio', this._onAudio)
     this.bot.removeListener('speakerChanged', this._onSpeaker)
     this.bot.removeListener('participant-joined', this._onJoin)
     this.bot.removeListener('participant-left', this._onLeave)
-    // T17a: a detached stream is being replaced (reconnect) — its watchdog is moot
-    // and must not fire against a socket nobody is listening to anymore.
+    // A detached stream is being replaced; its watchdog must not fire against a
+    // socket nobody is listening to anymore.
     this._cancelAckWatchdog()
   }
 
   /**
-   * T17a: arm the init-ack watchdog. If the Transcriber accepts the socket but
-   * never sends `{type:'ack'}` within ackTimeoutMs, declare the handshake failed:
-   * close the socket (whose 'close' drives the BrokerClient's T8 reconnect-or-stop
-   * logic) and emit a non-fatal 'transcriber-error' for observability. We emit a
-   * dedicated event rather than 'error' so a listener-less bot does not throw the
-   * unhandled-'error' exception EventEmitter raises by default. No-op if already
-   * ready or disposed.
+   * Arm the init-ack watchdog. If the Transcriber accepts the socket but never
+   * sends `{type:'ack'}` within ackTimeoutMs, declare the handshake failed: close
+   * the socket (whose 'close' drives the BrokerClient's reconnect-or-stop logic)
+   * and emit a non-fatal 'transcriber-error'. A dedicated event rather than
+   * 'error' avoids the unhandled-'error' throw EventEmitter raises by default.
+   * No-op if already ready or disposed.
    */
   _armAckWatchdog () {
     if (this.ready || this._disposed) return
@@ -141,8 +138,8 @@ class TranscriberStream {
   }
 
   /**
-   * T17a: tear this stream down — stop bridging the bot and cancel the watchdog
-   * so no timer leaks past the stream's life. Idempotent.
+   * Tear this stream down — stop bridging the bot and cancel the watchdog so no
+   * timer leaks past the stream's life. Idempotent.
    */
   dispose () {
     if (this._disposed) return
@@ -166,8 +163,8 @@ class TranscriberStream {
   }
 
   _sendAudio (buffer) {
-    // T8: while not yet ack'd on the (re)connected socket, retain frames even if
-    // the socket is not open, so audio produced during a reconnect gap survives.
+    // While not yet ack'd on the (re)connected socket, retain frames even if the
+    // socket is not open, so audio produced during a reconnect gap survives.
     if (this.ready) { if (this._isOpen()) this.ws.send(buffer); return }
     if (this.state.buffered.length >= this.maxBuffer) {
       this.state.buffered.shift() // drop oldest

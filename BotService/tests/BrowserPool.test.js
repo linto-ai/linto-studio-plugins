@@ -191,10 +191,10 @@ describe('BrowserPool', () => {
     })
 
     it('leaves no connected browser after a destroy() that races an in-flight create', async () => {
-      // T19: destroy() now marks the pool destroyed and awaits `this.launching`,
-      // and the launch path closes any browser that resolves after destroy instead
-      // of installing it (which would leak — nothing else would ever close it). The
-      // in-flight create likewise refuses to re-insert a context into a drained pool.
+      // destroy() marks the pool destroyed and awaits `this.launching`, and the
+      // launch path closes any browser that resolves after destroy instead of
+      // installing it (which would leak). The in-flight create likewise refuses
+      // to re-insert a context into a drained pool.
       const creating = pool.createContext('a')
       await pool.destroy()
       const raced = await creating.catch(() => null) // resolves to null in a destroyed pool

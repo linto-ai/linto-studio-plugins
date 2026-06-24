@@ -88,14 +88,13 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const intervals = [];
 
   function log() { if (DEBUG) console.log.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); }
-  // 1b/E8: critical in-page faults must reach the Node logs regardless of DEBUG.
+  // Critical in-page faults must reach the Node logs regardless of DEBUG.
   // console.warn is bridged to logger.warn by the page-console handler in
-  // bot/index.js (it surfaces '[WebRTC-Intercept]' warnings at warn level), so an
-  // otherwise-invisible failure (capture pipe permanently dead, worklet fallback,
-  // Room never found) becomes greppable. Each call site latches to avoid flooding.
+  // bot/index.js, so an otherwise-invisible failure (capture pipe dead, worklet
+  // fallback, Room never found) becomes greppable. Call sites latch to avoid flooding.
   function warn() { try { console.warn.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); } catch (e) {} }
 
-  // ── Sanitization (T15) ────────────────────────────────────────────────────
+  // ── Sanitization ───────────────────────────────────────────────────────────
   // Participant id/name come from the meeting page and flow into control
   // messages → Node logs and the caption DB. Strip control/non-printable chars
   // (defeats ANSI/newline log injection) and length-cap before sending.
@@ -120,9 +119,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   // ── Loopback WebSocket to the Node LocalAudioServer ───────────────────────
   let ws = null, wsReady = false, reconnectAttempts = 0, reconnectTimer = null, disposed = false;
-  // T6: remember mappings already announced (trackIndex -> participant) so that
-  // after a Node-side LocalAudioServer crash/restart we can re-emit them on
-  // reconnect (the browser kept its mappings; the Node AudioMixer lost them).
+  // Remember mappings already announced (trackIndex -> participant) so that after
+  // a Node-side LocalAudioServer crash/restart we can re-emit them on reconnect
+  // (the browser kept its mappings; the Node AudioMixer lost them).
   let hasConnectedOnce = false;
   const sentMappings = new Map(); // trackIndex -> participant (sanitized)
   const headerBuf = new ArrayBuffer(4);
@@ -136,8 +135,8 @@ function getInterceptScript (localWsUrl, platformConfig) {
       ws.binaryType = 'arraybuffer';
       ws.onopen = function () {
         wsReady = true; reconnectAttempts = 0; log('ws connected');
-        // T6: on a RE-open (Node side restarted), replay mappings ONLY — no
-        // audio — so already-mapped tracks are re-announced to the new mixer.
+        // On a RE-open (Node side restarted), replay mappings ONLY — no audio —
+        // so already-mapped tracks are re-announced to the new mixer.
         if (hasConnectedOnce && sentMappings.size > 0) {
           log('ws reconnected, replaying', sentMappings.size, 'participant mappings');
           sentMappings.forEach(function (participant, trackIndex) {
@@ -153,9 +152,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
           reconnectAttempts++;
           reconnectTimer = setTimeout(connectWs, RECONNECT_DELAY_MS);
         } else {
-          // 1b/E8: giving up here permanently kills audio capture (disposed=true
-          // stops every reconnect) — this was invisible at non-DEBUG. Warn so the
-          // Node side (E8 silence watchdog) and operators learn the pipe is dead.
+          // Giving up here permanently kills audio capture (disposed=true stops
+          // every reconnect). Warn so the Node-side silence watchdog and
+          // operators learn the pipe is dead.
           warn('loopback ws gave up after ' + MAX_RECONNECT_RETRIES + ' retries — audio capture permanently stopped');
           disposed = true;
         }
@@ -251,7 +250,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
       node.port.onmessage = function (e) { sendBinary(tIdx, float32ToInt16(resample(e.data, sourceRate))); };
       log('AudioWorklet capture for track', tIdx);
     } catch (e) {
-      // 1b: the ScriptProcessor path is deprecated and degraded — surface the
+      // The ScriptProcessor path is deprecated and degraded — surface the
       // fallback at warn (independent of DEBUG) so it is visible in the Node logs.
       warn('AudioWorklet unavailable, falling back to ScriptProcessor (track ' + tIdx + '): ' + (e && e.message ? e.message : 'unknown'));
       const proc = ctx.createScriptProcessor(4096, 1, 1);
@@ -298,9 +297,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function mapTrack(trackId, participant) {
     const info = tracks.get(trackId);
     if (!info || info.participantId) return;
-    const clean = sanitizeParticipant(participant); // T15: strip control chars + cap length
+    const clean = sanitizeParticipant(participant); // strip control chars + cap length
     info.participantId = clean.id;
-    sentMappings.set(info.index, clean); // T6: remember for reconnect replay
+    sentMappings.set(info.index, clean); // remember for reconnect replay
     sendJson({ type: 'participantMapping', trackIndex: info.index, participant: clean });
     log('mapped track', info.index, '->', clean.name);
   }
@@ -323,11 +322,10 @@ function getInterceptScript (localWsUrl, platformConfig) {
 // Emitted only for platformType === 'sfu'. Relies on shared helpers
 // (tracks, hasUnmappedTrack, mapTrack, sendJson, intervals, log).
 const SFU_MAPPING_BLOCK = `
-  // 1b/E8: if neither the Jitsi conference nor the LiveKit Room internal is ever
-  // found, no track is ever subscribed/mapped and the bot captures nothing. That
-  // was silent at non-DEBUG; count consecutive polls with no Room/conference and
-  // warn once after the limit so the failure (page structure changed / never
-  // joined) is visible. ~N polls of the 1.5s LiveKit interval.
+  // If neither the Jitsi conference nor the LiveKit Room internal is ever found,
+  // no track is subscribed/mapped and the bot captures nothing. Count consecutive
+  // polls with no Room/conference and warn once after the limit so the failure
+  // (page structure changed / never joined) is visible.
   var sfuNotFoundPolls = 0, sfuNotFoundWarned = false;
   var SFU_NOT_FOUND_LIMIT = 20;
   function noteSfuInternal(found) {
@@ -431,11 +429,10 @@ const TEAMS_SPEAKER_BLOCK = `
   // (no voiceLevel>0 for SILENCE_GRACE_MS) actually clears the speaker.
   const SILENCE_GRACE_MS = 800;
   let silentSince = 0;
-  // T14: detect a prolonged disappearance of the (undocumented) callingDebug API
-  // and signal a degrade so the Node side can fall back to ASR diarization.
-  // 200ms poll → 25 consecutive misses ≈ 5s. Warnings are throttled (surfaced via
-  // the page-console bridge) so a missing API does not flood the logs, and the
-  // degrade is signalled once.
+  // Detect a prolonged disappearance of the (undocumented) callingDebug API and
+  // signal a degrade so the Node side can fall back to ASR diarization. 200ms
+  // poll → 25 consecutive misses ≈ 5s. Warnings are throttled and the degrade is
+  // signalled once.
   let missCount = 0, degradeSignalled = false, lastWarnAt = 0;
   const NATIVE_DIAR_MISS_LIMIT = 25;
   const WARN_THROTTLE_MS = 5000;

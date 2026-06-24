@@ -73,7 +73,7 @@ module.exports = async function () {
             this.unregisterBotService(botservice);
           }
         }
-        // botservice/out/<botId>/bot-error — a bot failed fatally (T10).
+        // botservice/out/<botId>/bot-error — a bot failed fatally.
         if (action === 'bot-error') {
           const { botId, reason } = JSON.parse(message.toString());
           await this.recordBotError(botId, reason);

@@ -49,7 +49,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
     assert.ok(getInterceptScript(WS, { platformType: 'sfu' }).includes('const DEBUG = false'))
   })
 
-  // T6 — loopback WS resync after LocalAudioServer restart
+  // Loopback WS resync after LocalAudioServer restart.
   it('remembers sent mappings and replays them only on a reconnect (not first connect)', () => {
     const s = getInterceptScript(WS, { platformType: 'sfu' })
     assert.ok(s.includes('sentMappings'), 'records mappings already sent')
@@ -60,7 +60,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
     assert.doesNotThrow(() => new Function(s))
   })
 
-  // T14 — Teams native-diar fallback + logging
+  // Teams native-diar fallback + logging.
   it('logs and signals a degrade when Teams callingDebug disappears', () => {
     const teams = getInterceptScript(WS, { platformType: 'teams' })
     assert.ok(teams.includes('console.warn'), 'warns via the page-console bridge')
@@ -74,7 +74,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
     assert.ok(!sfu.includes('diarizationDegraded'))
   })
 
-  // T15 — sanitize participant id/name before sending
+  // Sanitize participant id/name before sending.
   it('sanitizes participant id/name (control chars + length cap) before sending', () => {
     const s = getInterceptScript(WS, { platformType: 'sfu' })
     assert.ok(s.includes('sanitizeParticipant'), 'sanitizes participants')

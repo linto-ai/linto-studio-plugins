@@ -115,7 +115,7 @@ describe('TranscriberStream', () => {
     assert.equal(audioFrames(ws).length, 0)
   })
 
-  it('T8: retains the audio buffer across a reconnect and flushes it in order on the new ack', () => {
+  it('retains the audio buffer across a reconnect and flushes it in order on the new ack', () => {
     // A shared buffer object survives the socket teardown (the BrokerClient owns
     // it on the bot record); a fresh stream over a new socket reuses it.
     const shared = { buffered: [], droppedFrames: 0 }
@@ -147,7 +147,7 @@ describe('TranscriberStream', () => {
     assert.equal(shared.buffered.length, 0, 'buffer drained after flush')
   })
 
-  it('T17a: fires the init-ack watchdog when no ack arrives, closing the socket and signalling an error', (done) => {
+  it('fires the init-ack watchdog when no ack arrives, closing the socket and signalling an error', (done) => {
     const ws2 = new FakeWs(); const bot2 = fakeBot()
     let errored = null
     bot2.on('transcriber-error', (e) => { errored = e })
@@ -160,7 +160,7 @@ describe('TranscriberStream', () => {
     }, 40)
   })
 
-  it('T17a: does NOT fire the watchdog once an ack arrives (happy path)', (done) => {
+  it('does NOT fire the watchdog once an ack arrives (happy path)', (done) => {
     const ws2 = new FakeWs(); const bot2 = fakeBot()
     let errored = false
     bot2.on('transcriber-error', () => { errored = true })
@@ -175,7 +175,7 @@ describe('TranscriberStream', () => {
     }, 40)
   })
 
-  it('T17a: cancels the watchdog on close and on dispose (no leaked timer)', () => {
+  it('cancels the watchdog on close and on dispose (no leaked timer)', () => {
     const ws2 = new FakeWs(); const bot2 = fakeBot()
     const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
     ws2.emit('open')
@@ -191,7 +191,7 @@ describe('TranscriberStream', () => {
     assert.equal(stream3._disposed, true)
   })
 
-  it('T8: the dropped-frames counter is preserved across a reconnect', () => {
+  it('the dropped-frames counter is preserved across a reconnect', () => {
     const shared = { buffered: [], droppedFrames: 0 }
     const ws1 = new FakeWs(); const bot1 = fakeBot()
     const s1 = new TranscriberStream(ws1, bot1, { maxBuffer: 2, buffer: shared })

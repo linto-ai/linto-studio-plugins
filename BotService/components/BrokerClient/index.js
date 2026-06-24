@@ -12,18 +12,14 @@ const HEARTBEAT_MS = 15000
 // are not lost. Beyond the cap we drop oldest to bound memory.
 const MAX_AUDIO_BUFFER_CHUNKS = 500
 
-// T8: Transcriber WS reconnect resilience. A transient Transcriber blip (socket
-// closed without an intentional stop) should NOT kill the bot: we retry the
-// connection with a bounded backoff, re-run the init handshake and flush the
-// retained audio buffer on the new ack. Only after exhausting the retries do we
-// give up and stopBot. Overridable for fast unit tests.
+// A transient Transcriber blip (socket closed without an intentional stop) must
+// not kill the bot: retry with bounded backoff, re-run the init handshake and
+// flush the retained audio buffer on the new ack; only give up after the retries.
 const RECONNECT_MAX_RETRIES = parseInt(process.env.BOTSERVICE_WS_RECONNECT_RETRIES || '3', 10)
 const RECONNECT_BASE_MS = parseInt(process.env.BOTSERVICE_WS_RECONNECT_BASE_MS || '1000', 10)
 
-// Memory ceiling (T13): when rss/heap crosses this, the replica advertises EMPTY
-// capabilities so the Scheduler routes elsewhere, and refuses new startBot. 0 (or
-// an unparseable value) disables the ceiling. Default 2 GB is a sensible bound for
-// a browser-pool-backed replica before paging/OOM risk.
+// Memory ceiling: when rss crosses this the replica advertises EMPTY capabilities
+// (so the Scheduler routes elsewhere) and refuses new startBot. 0 disables it.
 const MAX_RSS_MB = (() => {
   const v = parseInt(process.env.BOTSERVICE_MAX_RSS_MB || '2048', 10)
   return Number.isFinite(v) && v > 0 ? v : 0
@@ -55,13 +51,11 @@ class BrokerClient extends Component {
     this.heartbeatTimer = null
     this.lastPublishedCount = -1
 
-    // T13: under-pressure flag. When true the heartbeat advertises EMPTY
-    // capabilities (so Scheduler.selectBotService skips us) and startBot is
-    // refused. Recovers once memory drops back under the ceiling.
+    // Under-pressure flag: when true the heartbeat advertises EMPTY capabilities
+    // and startBot is refused. Recovers once memory drops back under the ceiling.
     this.overloaded = false
 
-    // T9: lightweight in-memory lifecycle counters, reset never (cumulative over
-    // the process lifetime) — exposed in the heartbeat `metrics` object.
+    // Cumulative lifecycle counters, exposed in the heartbeat `metrics` object.
     this.metrics = {
       botJoinAttempts: 0,
       botJoinSuccesses: 0,
@@ -95,10 +89,8 @@ class BrokerClient extends Component {
         await this.browserPool.init()
         await this.audioServer.start()
       } catch (err) {
-        // E5: without browser+audio infra this replica can never serve a bot, and
-        // it would sit as a zombie (no retry, no status, failing nothing). Exit so
-        // the orchestrator restarts us with a clean slate. Healthcheck (E6) also
-        // reports degraded, so a HEALTHCHECK probe would catch a wedged replica.
+        // Without browser+audio infra this replica can never serve a bot; exit so
+        // the orchestrator restarts us with a clean slate rather than leaving a zombie.
         logger.error(`BotService: failed to start infrastructure: ${err.message} — exiting for orchestrator restart`)
         process.exit(1)
         return
@@ -120,8 +112,7 @@ class BrokerClient extends Component {
     })
   }
 
-  // T13: re-evaluate the memory ceiling against the given memory snapshot.
-  // Sets/clears this.overloaded and logs on the transition edges.
+  // Re-evaluate the memory ceiling; sets/clears this.overloaded and logs on edges.
   _evaluatePressure (mem) {
     if (!MAX_RSS_MB) return
     const rssMb = mem.rss / (1024 * 1024)
@@ -140,19 +131,18 @@ class BrokerClient extends Component {
     const mem = process.memoryUsage()
     const prevOverloaded = this.overloaded
     this._evaluatePressure(mem)
-    // T4/T13: an overload transition changes advertised capabilities, so it must
-    // always be published even if the bot count did not move.
+    // An overload transition changes advertised capabilities, so it must always be
+    // published even if the bot count did not move.
     const overloadChanged = prevOverloaded !== this.overloaded
     if (!force && !overloadChanged && this.bots.size === this.lastPublishedCount) return
     this.lastPublishedCount = this.bots.size
     this.client.publishStatus({
       activeBots: this.bots.size,
-      // T4: report load so the Scheduler can weight routing by memory pressure.
+      // Report load so the Scheduler can weight routing by memory pressure.
       rss: mem.rss,
       heapUsed: mem.heapUsed,
-      // T9: cumulative lifecycle metrics.
       metrics: { ...this.metrics },
-      // T13: advertise no capabilities while overloaded so we are skipped.
+      // Advertise no capabilities while overloaded so we are skipped.
       capabilities: this.overloaded ? [] : this.capabilities
     })
   }
@@ -163,8 +153,8 @@ class BrokerClient extends Component {
   // platforms' native captions and Studio's live captions; see the redesign notes).
   async startBot ({ session, channel, address, botType, websocketUrl, botId, enableDisplaySub, subSource }) {
     const key = `${session.id}_${channel.id}`
-    // T13: refuse new work while over the memory ceiling (we also advertise no
-    // capabilities, but a startbot may already be in flight when we crossed it).
+    // Refuse new work while over the memory ceiling (a startbot may already have
+    // been in flight when we crossed it, despite advertising no capabilities).
     if (this.overloaded) {
       logger.warn(`BotService: refusing startBot ${key} — over memory ceiling (backpressure)`)
       this._publishBotError(botId, 'botservice-overloaded')
@@ -173,11 +163,10 @@ class BrokerClient extends Component {
     logger.info(`BotService: starting bot ${key} (${botType})`)
     await this.stopBot(session.id, channel.id) // replace any stale instance
 
-    // T9: every accepted startBot is a join attempt.
     this.metrics.botJoinAttempts++
 
     const bot = new Bot({ session, channel, address, botType, browserPool: this.browserPool, audioServer: this.audioServer })
-    // T8: the ACK-gated audio buffer (and its dropped-frames counter) lives on the
+    // The ACK-gated audio buffer (and its dropped-frames counter) lives on the
     // record, not inside TranscriberStream, so it survives a transient WS close
     // and reconnect — the new stream reuses this same object and flushes it.
     const record = {
@@ -187,7 +176,7 @@ class BrokerClient extends Component {
       websocketUrl,
       stream: null,
       audioBuffer: { buffered: [], droppedFrames: 0 },
-      // T8: reconnect bookkeeping. `stopping` distinguishes an intentional stop
+      // Reconnect bookkeeping. `stopping` distinguishes an intentional stop
       // (meeting empty / explicit stopbot / fatal error) from a transient drop:
       // only a transient drop triggers a reconnect.
       stopping: false,
@@ -200,7 +189,7 @@ class BrokerClient extends Component {
     // we don't want the Transcriber's connection-idle timeout to fire mid-join.
     const ok = await bot.init()
     if (!ok) {
-      // T9 + T10: a failed join is a fatal bot error.
+      // A failed join is a fatal bot error.
       this.metrics.botJoinFailures++
       this._publishBotError(botId, 'join-failed')
       await this.stopBot(session.id, channel.id)
@@ -215,13 +204,12 @@ class BrokerClient extends Component {
       return
     }
 
-    // T9: the bot has joined the meeting successfully.
     this.metrics.botJoinSuccesses++
     this._connectTranscriber(key, record, websocketUrl)
     this._publishStatus()
   }
 
-  // T10: publish a structured fatal bot error so the Scheduler can record/log it.
+  // Publish a structured fatal bot error so the Scheduler can record/log it.
   _publishBotError (botId, reason) {
     if (botId === undefined || botId === null) return
     this.client.publish(`botservice/out/${botId}/bot-error`, { botId, reason }, 1, false, true)
@@ -231,19 +219,19 @@ class BrokerClient extends Component {
     const { bot, botId } = record
 
     // Bot-lifecycle wiring is per-bot, NOT per-socket: it must be installed once,
-    // or a T8 reconnect (which opens a fresh socket) would re-register these and
+    // or a reconnect (which opens a fresh socket) would re-register these and
     // double-count churn / double-fire stops. The socket wiring below is redone
     // on every (re)connect.
     bot.on('error', (error) => {
       logger.error(`BotService: bot ${key} (botId ${botId}) error: ${error.message}`)
-      // T10: a runtime fatal error (page crash, browser disconnect, manifest
-      // load failure) is published structurally for the Scheduler.
+      // A runtime fatal error (page crash, browser disconnect, manifest load
+      // failure) is published structurally for the Scheduler.
       this._publishBotError(botId, error.message || 'bot-error')
-      // E3: surface a teardown failure instead of swallowing it (a silent failure
-      // leaks the browser context / mixer / ws).
+      // Surface a teardown failure instead of swallowing it (it would otherwise
+      // leak the browser context / mixer / ws).
       this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
-    // T9: count participant churn (joins + leaves) reported by the bot.
+    // Count participant churn (joins + leaves) reported by the bot.
     bot.on('participant-joined', () => { this.metrics.participantChurn++ })
     bot.on('participant-left', () => { this.metrics.participantChurn++ })
     bot.on('meeting-empty', () => {
@@ -251,23 +239,21 @@ class BrokerClient extends Component {
       this._requestSchedulerCleanup(botId)
       this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
-    // Section 3: a join-watchdog leave (never admitted: wrong link / not admitted /
-    // empty room) is a FAILURE, not a clean empty-meeting leave. Record it as a
-    // distinct bot-error so the Scheduler does not count it as a success.
+    // A join-watchdog leave (never admitted: wrong link / not admitted / empty
+    // room) is a FAILURE, not a clean empty-meeting leave. Record it as a distinct
+    // bot-error so the Scheduler does not count it as a success.
     bot.on('join-timeout', () => {
       logger.warn(`BotService: bot ${key} (botId ${botId}) never admitted (join timeout), leaving`)
       this._publishBotError(botId, 'join-timeout')
       this._requestSchedulerCleanup(botId)
       this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
-    // E1: the Teams native→ASR diarization fallback (T14) is a no-op unless the
-    // Transcriber actually switches modes. The Transcriber decides its diarization
-    // mode from the `init` frame's diarizationMode and has no mid-stream control to
-    // change it, so the cleanest fix is to reconnect: bot._onDiarizationDegraded
-    // already flipped manifest.diarizationMode to 'asr', so re-opening the socket
-    // re-runs the handshake advertising 'asr' and the Transcriber drops native
-    // diarization (no SpeakerTracker → ASR-attributed captions). Idempotent: the
-    // bot emits this once (latched), so we reconnect once.
+    // The Transcriber picks its diarization mode from the `init` frame and has no
+    // mid-stream control to change it, so the Teams native→ASR fallback only takes
+    // effect by reconnecting: the bot has already flipped manifest.diarizationMode
+    // to 'asr', so re-opening the socket re-runs the handshake advertising 'asr'
+    // and the Transcriber drops native diarization. The bot latches this event, so
+    // we reconnect once.
     bot.on('diarization-degraded', ({ reason } = {}) => {
       logger.warn(`BotService: bot ${key} (botId ${botId}) diarization degraded (${reason}), reconnecting transcriber in ASR diarization mode`)
       const current = this.bots.get(key)
@@ -277,10 +263,9 @@ class BrokerClient extends Component {
       if (record.ws) { try { record.ws.close() } catch (e) { /* already closing */ } }
       this._openSocket(key, record, record.websocketUrl)
     })
-    // E2: the TranscriberStream's init-ack watchdog (T17a) emits 'transcriber-error'
-    // on the bot. Wire a listener so it is at least observable (the socket it owns
-    // is already closed by the watchdog, which drives the T8 reconnect-or-stop via
-    // the close handler — so we only need to log here, not act).
+    // The TranscriberStream's init-ack watchdog emits 'transcriber-error' on the
+    // bot; just log it. The watchdog has already closed the socket it owns, which
+    // drives the reconnect-or-stop via the close handler, so nothing to act on here.
     bot.on('transcriber-error', (error) => {
       logger.warn(`BotService: bot ${key} (botId ${botId}) transcriber error: ${error && error.message ? error.message : error}`)
     })
@@ -289,14 +274,13 @@ class BrokerClient extends Component {
     logger.info(`BotService: bot ${key} (botId ${botId}) streaming to transcriber ${websocketUrl}`)
   }
 
-  // T8: open (or re-open) the Transcriber WS for a record and wire its data plane.
+  // Open (or re-open) the Transcriber WS for a record and wire its data plane.
   // The audio buffer lives on the record, so a fresh stream over a new socket
   // re-runs the init handshake and flushes the retained frames on the new ack.
   _openSocket (key, record, websocketUrl) {
     const { bot } = record
-    // T8: detach the previous stream's bot listeners so a reconnect does not leave
-    // a dead stream double-buffering/forwarding alongside the fresh one. The shared
-    // audio buffer stays on the record, so the new stream flushes it on re-ack.
+    // Detach the previous stream's bot listeners so a reconnect does not leave a
+    // dead stream double-buffering/forwarding alongside the fresh one.
     if (record.stream) { try { record.stream.detach() } catch (e) { /* best-effort */ } }
     const ws = new WebSocket(websocketUrl)
     record.ws = ws
@@ -305,7 +289,7 @@ class BrokerClient extends Component {
 
     ws.on('open', () => { record.reconnectAttempts = 0 }) // a clean open resets backoff
     // Control plane: a transcriber socket close ends the stream — but a transient
-    // blip (not an intentional stop) triggers a bounded reconnect first (T8).
+    // blip (not an intentional stop) triggers a bounded reconnect first.
     ws.on('close', () => {
       // Only act for the socket still attached to this record (a stale socket from
       // a previous attempt must not drive lifecycle).
@@ -317,14 +301,12 @@ class BrokerClient extends Component {
     ws.on('error', (err) => logger.error(`BotService: transcriber WS error for ${key}: ${err.message}`))
   }
 
-  // T8: schedule a reconnect with bounded exponential backoff. After the retries
-  // are exhausted we give up and stopBot — a sustained Transcriber outage is fatal.
+  // Schedule a reconnect with bounded exponential backoff. After the retries are
+  // exhausted we give up and stopBot — a sustained Transcriber outage is fatal.
   _scheduleReconnect (key, record) {
     if (record.reconnectAttempts >= RECONNECT_MAX_RETRIES) {
-      // Section 3: exhausting the reconnect retries is a FATAL outcome (the bot is
-      // about to be torn down), so log at ERROR — and publish a structured
-      // bot-error so the Scheduler records WHY the bot vanished (previously it did
-      // not, leaving the disappearance unexplained).
+      // Exhausting the retries is fatal (the bot is torn down), so publish a
+      // structured bot-error so the Scheduler records WHY the bot vanished.
       logger.error(`BotService: transcriber WS for ${key} (botId ${record.botId}) gave up after ${record.reconnectAttempts} reconnect attempts, stopping bot`)
       this._publishBotError(record.botId, 'transcriber-unreachable')
       this.stopBot(record.bot.session.id, record.bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${record.botId}): ${err.message}`))
@@ -352,8 +334,8 @@ class BrokerClient extends Component {
     const record = this.bots.get(key)
     if (!record) return
     this.bots.delete(key) // delete first to make event-driven re-entry a no-op
-    // T8: mark intentional stop so the socket-close handler does NOT reconnect,
-    // and cancel any pending reconnect from an earlier transient drop.
+    // Mark intentional stop so the socket-close handler does NOT reconnect, and
+    // cancel any pending reconnect from an earlier transient drop.
     record.stopping = true
     if (record.reconnectTimer) { clearTimeout(record.reconnectTimer); record.reconnectTimer = null }
     logger.info(`BotService: stopping bot ${key}`)

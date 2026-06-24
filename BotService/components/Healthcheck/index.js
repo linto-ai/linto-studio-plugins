@@ -24,9 +24,9 @@ class Healthcheck extends Component {
         const browser = bc && bc.browserPool && bc.browserPool.browser
         const browserConnected = !!(browser && browser.isConnected())
         const audioServerListening = !!(bc && bc.audioServer && bc.audioServer.getPort() > 0)
-        // E6: a replica with no live browser or a non-listening audio server cannot
-        // serve a bot — report 'degraded' (paired with a 503 over HTTP) so the
-        // Docker HEALTHCHECK fails and a wedged replica is restarted (pairs with E5).
+        // A replica with no live browser or a non-listening audio server cannot
+        // serve a bot — report 'degraded' (503 over HTTP) so the Docker HEALTHCHECK
+        // fails and a wedged replica is restarted.
         const healthy = browserConnected && audioServerListening
         return {
             status: healthy ? 'ok' : 'degraded',
@@ -40,7 +40,7 @@ class Healthcheck extends Component {
         this.healthCheckServer = http.createServer((req, res) => {
             const status = this.getStatus()
             const body = JSON.stringify(status)
-            // E6: 503 when degraded so the HEALTHCHECK probe treats it as unhealthy.
+            // 503 when degraded so the HEALTHCHECK probe treats it as unhealthy.
             const code = status.status === 'ok' ? 200 : 503
             res.writeHead(code, { 'Content-Type': 'application/json' })
             res.end(body)

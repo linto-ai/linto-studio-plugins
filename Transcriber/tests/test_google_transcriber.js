@@ -494,7 +494,7 @@ describe('GoogleTranscriber', () => {
         });
     });
 
-    describe('stale-stream isolation (M1)', () => {
+    describe('stale-stream isolation', () => {
         it('ignores buffered data delivered by an old stream after a restart', async () => {
             const t = new GoogleTranscriber({ id: 's' }, makeChannel());
             await t.start();

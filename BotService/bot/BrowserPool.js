@@ -41,7 +41,7 @@ class BrowserPool extends EventEmitter {
     this.launching = null // in-flight launch promise (dedupes concurrent (re)launches)
     this.contexts = new Map() // id -> { context, page }
     this.reserved = 0 // slots claimed by in-flight createContext() calls not yet in `contexts`
-    this.destroyed = false // T19: set by destroy(); launch/create must not repopulate after it
+    this.destroyed = false // set by destroy(); launch/create must not repopulate after it
   }
 
   async init () {
@@ -54,9 +54,9 @@ class BrowserPool extends EventEmitter {
 
     this.launching = chromium.launch({ headless: true, args: LAUNCH_ARGS })
       .then((browser) => {
-        // T19: the pool was destroyed while this launch was in flight. Do NOT
-        // install the browser (it would leak — destroy() already ran and nothing
-        // would ever close it); close it here and report it as unavailable.
+        // The pool was destroyed while this launch was in flight. Do NOT install
+        // the browser (destroy() already ran and nothing would ever close it);
+        // close it here and report it as unavailable.
         if (this.destroyed) {
           logger.info('BrowserPool: launch resolved after destroy, closing the orphaned browser')
           browser.close().catch(() => {})
@@ -118,9 +118,9 @@ class BrowserPool extends EventEmitter {
       return null
     }
 
-    // T19: destroy() may have run while the launch was in flight — _ensureBrowser
-    // then resolves to null (the orphaned browser was closed). Bail without
-    // inserting a context that destroy() already drained.
+    // destroy() may have run while the launch was in flight — _ensureBrowser then
+    // resolves to null (the orphaned browser was closed). Bail without inserting
+    // a context that destroy() already drained.
     if (this.destroyed || !browser) {
       this.reserved--
       logger.warn(`BrowserPool: pool destroyed during launch, refusing context ${id}`)
@@ -131,7 +131,7 @@ class BrowserPool extends EventEmitter {
     try {
       context = await browser.newContext(CONTEXT_OPTIONS)
       const page = await context.newPage()
-      // T19: a destroy() could still have raced the newContext()/newPage() awaits;
+      // A destroy() could still have raced the newContext()/newPage() awaits;
       // never re-insert into a destroyed pool — close the fresh context instead.
       if (this.destroyed) {
         try { await context.close() } catch (_) { /* best effort */ }
@@ -160,7 +160,7 @@ class BrowserPool extends EventEmitter {
   }
 
   async destroy () {
-    // T19: mark destroyed FIRST so any in-flight launch/create that resolves after
+    // Mark destroyed FIRST so any in-flight launch/create that resolves after
     // this point closes its browser/context instead of repopulating the pool.
     this.destroyed = true
     for (const id of [...this.contexts.keys()]) {
@@ -172,8 +172,8 @@ class BrowserPool extends EventEmitter {
       try { await browser.close() } catch (e) { /* already gone */ }
       logger.info('BrowserPool: browser closed')
     }
-    // T19: await the in-flight launch so the orphaned-browser close above has
-    // actually happened by the time destroy() returns (no connected browser left
+    // Await the in-flight launch so the orphaned-browser close above has actually
+    // happened by the time destroy() returns (no connected browser left
     // dangling). The launch path sees `destroyed` and closes its own browser.
     if (this.launching) {
       try { await this.launching } catch (e) { /* launch failure is fine here */ }

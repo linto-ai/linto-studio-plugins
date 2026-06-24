@@ -8,7 +8,7 @@
  * the live-srt-lib base class and MqttClient so the constructor doesn't reach
  * the real broker.
  *
- * Critical edge case (B3): a paused session that disappears from one snapshot
+ * Critical edge case: a paused session that disappears from one snapshot
  * (transient retained-message republish, Scheduler restart, ...) and reappears
  * with status='active' in a later snapshot must still trigger session-resumed.
  * Without keeping previously-paused sessions in the snapshot, prevStatus would
@@ -141,14 +141,13 @@ describe('BrokerClient.handleSessions snapshot diff', () => {
         assert.strictEqual(events[0].args[0].id, 'S1');
     });
 
-    it('B3 — emits session-resumed when paused session disappears then returns as active', () => {
-        // T0: session paused
+    it('emits session-resumed when paused session disappears then returns as active', () => {
         pushSnapshot([{ id: 'S1', status: 'paused' }]);
-        // T1: session disappears (transient retained-message republish, Scheduler restart, ...)
+        // Session disappears (transient retained-message republish, Scheduler restart, ...)
         pushSnapshot([]);
         emitted.length = 0;
-        // T2: session reappears as active. WITHOUT the snapshot-keep guard this
-        // never emits session-resumed because prevStatus is undefined.
+        // Reappears as active. WITHOUT the snapshot-keep guard this never emits
+        // session-resumed because prevStatus is undefined.
         pushSnapshot([{ id: 'S1', status: 'active' }]);
 
         const events = emitted.filter(e => e.event === 'session-resumed');
@@ -157,7 +156,7 @@ describe('BrokerClient.handleSessions snapshot diff', () => {
         assert.strictEqual(events[0].args[0].id, 'S1');
     });
 
-    it('B3 — keeps paused entry in snapshot when session disappears, drops it on resume', () => {
+    it('keeps paused entry in snapshot when session disappears, drops it on resume', () => {
         pushSnapshot([{ id: 'S1', status: 'paused' }]);
         assert.strictEqual(bcInstance._sessionStatusSnapshot.get('S1'), 'paused');
 

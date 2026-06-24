@@ -31,7 +31,7 @@ describe('BotService BrokerClient', () => {
     assert.deepEqual(ctx.statuses[0].capabilities, ['jitsi', 'bigbluebutton', 'teams', 'visio'])
   })
 
-  it('heartbeat reports memory (rss/heapUsed) and lifecycle metrics (T4/T9)', () => {
+  it('heartbeat reports memory (rss/heapUsed) and lifecycle metrics', () => {
     ctx.instance._publishStatus(true)
     const s = ctx.statuses[0]
     assert.equal(typeof s.rss, 'number')
@@ -68,7 +68,7 @@ describe('BotService BrokerClient', () => {
   })
 })
 
-describe('BotService BrokerClient — memory ceiling + backpressure (T13)', () => {
+describe('BotService BrokerClient — memory ceiling + backpressure', () => {
   const realMemoryUsage = process.memoryUsage
   let ctx
 
@@ -97,7 +97,6 @@ describe('BotService BrokerClient — memory ceiling + backpressure (T13)', () =
   })
 
   it('refuses a new startBot while over the ceiling and publishes a bot-error', async () => {
-    // _publishStatus sets overloaded; or it is set on the first startBot pressure check.
     ctx.instance._publishStatus(true)
     await ctx.instance.startBot({ session: { id: 's' }, channel: { id: 'c' }, botType: 'visio', websocketUrl: 'ws://t', botId: 99 })
     assert.equal(ctx.instance.bots.size, 0, 'no bot was started')
@@ -107,7 +106,7 @@ describe('BotService BrokerClient — memory ceiling + backpressure (T13)', () =
   })
 })
 
-describe('BotService BrokerClient — structured bot-error (T10)', () => {
+describe('BotService BrokerClient — structured bot-error', () => {
   let ctx
   beforeEach(() => { ctx = loadBrokerClient() })
   afterEach(() => {
@@ -128,10 +127,10 @@ describe('BotService BrokerClient — structured bot-error (T10)', () => {
   })
 })
 
-// T8: Transcriber WS reconnect resilience. We mock the `ws` module so a socket
+// Transcriber WS reconnect resilience. We mock the `ws` module so a socket
 // close/open is driven from the test, and drive `_connectTranscriber` directly
 // with a fake bot (no real browser/Bot is needed for the reconnect machinery).
-describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)', () => {
+describe('BotService BrokerClient — transcriber WS reconnect resilience', () => {
   const OPEN = 1
   const CLOSED = 3
   const wsPath = require.resolve('ws')
@@ -286,9 +285,9 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)',
     assert.equal(record.reconnectTimer, null)
   })
 
-  // E1: a diarization-degraded event reconnects the transcriber so a fresh init
+  // A diarization-degraded event reconnects the transcriber so a fresh init
   // advertises the (now ASR) diarization mode.
-  it('E1: reconnects the transcriber when the bot reports diarization degraded', async () => {
+  it('reconnects the transcriber when the bot reports diarization degraded', async () => {
     const bot = fakeBot()
     const record = makeRecord(bot)
     ctx.instance.bots.set('s_c', record)
@@ -311,8 +310,8 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)',
     assert.equal(init.diarizationMode, 'asr', 'reconnected init advertises ASR diarization')
   })
 
-  // E2: a transcriber-error from the stream watchdog is at least observable.
-  it('E2: listens for transcriber-error (does not throw on the unhandled error event)', () => {
+  // A transcriber-error from the stream watchdog is at least observable.
+  it('listens for transcriber-error (does not throw on the unhandled error event)', () => {
     const bot = fakeBot()
     const record = makeRecord(bot)
     ctx.instance.bots.set('s_c', record)
@@ -323,8 +322,8 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)',
     assert.ok(bot.listenerCount('transcriber-error') >= 1)
   })
 
-  // Section 3: a join-timeout (never admitted) publishes a structured bot-error.
-  it('Section 3: a join-timeout publishes a join-timeout bot-error and stops the bot', async () => {
+  // A join-timeout (never admitted) publishes a structured bot-error.
+  it('a join-timeout publishes a join-timeout bot-error and stops the bot', async () => {
     const bot = fakeBot()
     const record = makeRecord(bot, 42)
     ctx.instance.bots.set('s_c', record)
@@ -340,8 +339,8 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)',
     assert.equal(stopped, true, 'the bot is stopped after a join timeout')
   })
 
-  // Section 3: exhausting reconnect retries publishes a transcriber-unreachable error.
-  it('Section 3: publishes transcriber-unreachable when reconnect retries are exhausted', async () => {
+  // Exhausting reconnect retries publishes a transcriber-unreachable error.
+  it('publishes transcriber-unreachable when reconnect retries are exhausted', async () => {
     const bot = fakeBot()
     const record = makeRecord(bot, 7)
     ctx.instance.bots.set('s_c', record)

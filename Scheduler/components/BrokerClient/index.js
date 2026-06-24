@@ -24,12 +24,9 @@ class BrokerClient extends Component {
     this.transcribers = new Array(); // internal scheduler representation of system transcribers.
     this.botservices = new Array(); // registered BotService replicas {uniqueId, online, activeBots, capabilities}
     this.botOwnership = new Map(); // `${sessionId}_${channelId}` -> botservice uniqueId, for targeted stopbot
-    // Per-channel persistence chains: serialize caption/translation/status
-    // writes so the Postgres commit order matches the MQTT arrival order.
-    // The end-of-stream bot marker (published by the Transcriber after its
-    // provider flush) and the 'inactive' deactivate (published after the
-    // marker) then become true barriers: a reader that sees them committed is
-    // guaranteed to see every earlier final of the channel.
+    // Per-channel persistence chains: serialize writes so the Postgres commit
+    // order matches MQTT arrival order, making the end-of-stream marker and
+    // 'inactive' deactivate true barriers for readers.
     this.channelPersistChains = new Map();
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
@@ -143,10 +140,8 @@ class BrokerClient extends Component {
     });
 
     // Publish one terminal notification per auto-ended session so consumers
-    // (e.g. studio-api) can react via a load-balanced shared subscription
-    // without having to diff the statuses snapshot. The payload is kept
-    // intentionally minimal — consumers re-fetch the full session from the
-    // Session API when they need the details.
+    // (e.g. studio-api) can react without diffing the statuses snapshot. The
+    // payload is minimal — consumers re-fetch the full session when needed.
     for (const sessionId of endedSessionIds) {
       try {
         const endedSession = await Model.Session.findByPk(sessionId, {
@@ -173,11 +168,8 @@ class BrokerClient extends Component {
 
   // Pick a BotService that supports the requested provider, preferring more
   // specialized replicas (fewest advertised capabilities), then the least
-  // loaded. Load is primarily activeBots, but ties are broken by reported memory
-  // (rss) so a 30-participant Visio replica is preferred-against vs a 1-track
-  // Teams replica with the same bot count (T4). Replicas advertising no
-  // capabilities (e.g. under memory backpressure, T13) are excluded by the
-  // capability filter.
+  // loaded. Load is primarily activeBots, with memory (rss) as a tiebreaker.
+  // Replicas advertising no capabilities are excluded by the capability filter.
   selectBotService(provider) {
     const candidates = this.botservices.filter(bs =>
       bs.online && Array.isArray(bs.capabilities) && bs.capabilities.includes(provider));
@@ -188,10 +180,9 @@ class BrokerClient extends Component {
       (best === null || this._botLoadScore(bs) < this._botLoadScore(best)) ? bs : best, null);
   }
 
-  // Composite load score for routing: activeBots dominates, rss (in MB) is a
-  // sub-unit tiebreaker so it only matters when bot counts are equal. Missing
-  // metrics fall back to 0 (treated as idle), preserving the prior least-loaded
-  // behavior for replicas that don't report memory.
+  // Composite load score for routing: activeBots dominates, rss is a sub-unit
+  // tiebreaker so it only matters when bot counts are equal. Missing metrics
+  // fall back to 0 (treated as idle).
   _botLoadScore(bs) {
     const activeBots = bs.activeBots || 0;
     const rssMb = (bs.rss || 0) / (1024 * 1024);
@@ -224,12 +215,9 @@ class BrokerClient extends Component {
       // after a Scheduler restart, when the in-memory map is gone.
       await Model.Bot.update({ botservice: botservice.uniqueId }, { where: { id: botId } });
       this.client.publish(`botservice/in/${botservice.uniqueId}/startbot`, botData, 2, false, true);
-      // 1a: routing a bot is a lifecycle milestone — promote to info so the whole
-      // create→schedule→stream path is greppable at info level.
+      // Routing a bot is a lifecycle milestone, so log at info level.
       logger.info(`Bot ${botId} scheduled on BotService ${botservice.uniqueId} (${botData.botType}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
-      // 1b: format with the botId and error message (a positional Error object
-      // logs opaquely); include the stack when present.
       logger.error(`Failed to start bot ${botId}: ${error.message}`);
       if (error.stack) logger.debug(error.stack);
     }
@@ -289,8 +277,6 @@ class BrokerClient extends Component {
         logger.warn(`No BotService owner tracked for ${key}; stop not routed (bot may have already left)`);
       }
     } catch (error) {
-      // 1b: format with the botId and error message (a positional Error object
-      // logs opaquely); include the stack when present.
       logger.error(`Failed to stop bot ${botId}: ${error.message}`);
       if (error.stack) logger.debug(error.stack);
     }
@@ -298,16 +284,15 @@ class BrokerClient extends Component {
 
   // ###### BOTSERVICE STATUS ######
 
-  // T10: a bot failed fatally on a BotService (page crash, join timeout, manifest
-  // load failure, browser disconnect). Record the reason on the Bot row IF the
-  // model has an error_reason column; otherwise just log + emit (no migration
-  // added here). Always re-emit on system/out so consumers can react.
+  // A bot failed fatally on a BotService (page crash, join timeout, manifest
+  // load failure, browser disconnect). Record the reason on the Bot row when the
+  // error_reason column exists; always re-emit on system/out for consumers.
   async recordBotError(botId, reason) {
     if (botId === undefined || botId === null) return;
     reason = reason || 'unknown';
     logger.warn(`Bot ${botId} failed fatally on BotService: ${reason}`);
     // Only attempt a persisted write when the column actually exists, so we don't
-    // throw on installations without the (intentionally not-added) migration.
+    // throw on installations without the migration.
     const hasErrorReasonColumn = !!(Model.Bot.rawAttributes && Model.Bot.rawAttributes.error_reason);
     if (hasErrorReasonColumn) {
       try {
@@ -325,7 +310,7 @@ class BrokerClient extends Component {
       existing.online = true;
       if (botservice.activeBots !== undefined) existing.activeBots = botservice.activeBots;
       if (botservice.capabilities !== undefined) existing.capabilities = botservice.capabilities;
-      // T4: track reported memory/load so routing can weight by it.
+      // Track reported memory/load so routing can weight by it.
       if (botservice.rss !== undefined) existing.rss = botservice.rss;
       if (botservice.heapUsed !== undefined) existing.heapUsed = botservice.heapUsed;
       if (botservice.metrics !== undefined) existing.metrics = botservice.metrics;
@@ -360,10 +345,9 @@ class BrokerClient extends Component {
   }
 
   // Append a persistence task to the channel's serialized chain. The
-  // .catch(() => {}) guards keep one failed write from breaking the chain —
-  // saveTranscription/saveTranslation/updateSession already log their own
-  // errors. The map entry is pruned once the chain settles and is still the
-  // tail, so the map stays bounded.
+  // .catch(() => {}) guards keep one failed write from breaking the chain (the
+  // task fns log their own errors). The map entry is pruned once the chain
+  // settles and is still the tail, so the map stays bounded.
   chainChannelPersist(sessionId, channelId, fn) {
     const key = `${sessionId}_${channelId}`;
     const next = (this.channelPersistChains.get(key) || Promise.resolve())

@@ -380,6 +380,16 @@ const SFU_MAPPING_BLOCK = `
 const TEAMS_SPEAKER_BLOCK = `
   const known = new Map(); // mri -> { id, name }
   let currentSpeakerId = null, startTime = 0;
+  // Silence debounce for the active-speaker transition to "nobody speaking".
+  // Teams' MCU is a single mixed track and the page-polled voiceLevel drops to 0
+  // in the brief gaps BETWEEN words/turns. Emitting speakerChanged:null on every
+  // such gap thrashes the Transcriber's currentSpeaker (a segment whose first ASR
+  // partial happens to land in a gap would be pinned to null). The SFU path
+  // already debounces this in AudioMixer (_silenceMs/silenceGraceMs); mirror it
+  // here so a momentary lull does not wipe attribution. Only a sustained silence
+  // (no voiceLevel>0 for SILENCE_GRACE_MS) actually clears the speaker.
+  const SILENCE_GRACE_MS = 800;
+  let silentSince = 0;
   // T14: detect a prolonged disappearance of the (undocumented) callingDebug API
   // and signal a degrade so the Node side can fall back to ASR diarization.
   // 200ms poll → 25 consecutive misses ≈ 5s. Warnings are throttled (surfaced via
@@ -428,7 +438,12 @@ const TEAMS_SPEAKER_BLOCK = `
       // API is back / available again: reset the degrade detector.
       missCount = 0;
       const seen = new Set();
-      let domId = null, domName = null;
+      // Pick the LOUDEST speaker, not the first one in iteration order. With
+      // alternating speakers a just-stopped participant can still report a
+      // residual voiceLevel before it decays to 0, and a silent ghost/duplicate
+      // participant can sort ahead of the real one — "first with voiceLevel>0"
+      // then attributes the wrong guest. Max voiceLevel is stable against both.
+      let domId = null, domName = null, domLevel = 0;
       call.participants.forEach(function (p) {
         if (!p.mri || !p.displayName) return;
         seen.add(p.mri);
@@ -437,14 +452,29 @@ const TEAMS_SPEAKER_BLOCK = `
           known.set(p.mri, { id: p.mri, name: p.displayName });
           sendJson({ type: 'participantMapping', trackIndex: 0, participant: sanitizeParticipant({ id: p.mri, name: p.displayName }) });
         }
-        if (p.voiceLevel > 0 && !domId) { domId = p.mri; domName = p.displayName; }
+        const level = typeof p.voiceLevel === 'number' ? p.voiceLevel : 0;
+        if (level > 0 && level > domLevel) { domLevel = level; domId = p.mri; domName = p.displayName; }
       });
       known.forEach(function (v, mri) {
         if (!seen.has(mri)) { known.delete(mri); sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: mri, name: v.name }) }); }
       });
-      if (domId !== currentSpeakerId) {
-        currentSpeakerId = domId;
-        sendJson({ type: 'speakerChanged', position: position, speaker: domId ? sanitizeParticipant({ id: domId, name: domName }) : null });
+      // Debounce the transition to "nobody speaking": a momentary lull (one or a
+      // few polls with no voiceLevel>0) must NOT emit speakerChanged:null, only a
+      // sustained silence does. Switching directly between two speakers is still
+      // reported immediately. While debouncing we hold the previous speaker.
+      if (domId) {
+        silentSince = 0;
+        if (domId !== currentSpeakerId) {
+          currentSpeakerId = domId;
+          sendJson({ type: 'speakerChanged', position: position, speaker: sanitizeParticipant({ id: domId, name: domName }) });
+        }
+      } else if (currentSpeakerId !== null) {
+        if (!silentSince) silentSince = Date.now();
+        if (Date.now() - silentSince >= SILENCE_GRACE_MS) {
+          silentSince = 0;
+          currentSpeakerId = null;
+          sendJson({ type: 'speakerChanged', position: position, speaker: null });
+        }
       }
     } catch (e) {
       warnTeams('poll error: ' + (e && e.message ? e.message : 'unknown error'));

@@ -178,9 +178,10 @@ describe('Healthcheck', () => {
     const listenLog = logs.find(l => /HealthCheck server listening on port/.test(l.msg))
     assert.ok(listenLog, 'a listen log is emitted')
     assert.equal(listenLog.level, 'info')
-    // The logged port is the parsed BOTSERVICE_HEALTHCHECK_HTTP (0 here), NOT the
-    // resolved ephemeral port — asserting current behaviour.
-    assert.match(listenLog.msg, /listening on port 0$/)
+    // The log reports the RESOLVED port (port 0 binds an ephemeral one).
+    const resolved = hc.healthCheckServer.address().port
+    assert.ok(resolved > 0, 'an ephemeral port was bound')
+    assert.match(listenLog.msg, new RegExp(`listening on port ${resolved}$`))
     hc.healthCheckServer.close()
   })
 
@@ -258,23 +259,24 @@ describe('Healthcheck', () => {
     hc.healthCheckServer.close()
   })
 
-  // --- getStatus() exception propagation (current behaviour: no try/catch). ---
-  // The source does not guard browser.isConnected()/getPort() — a throw inside
-  // either propagates out of getStatus(). We assert that CURRENT behaviour and
-  // flag it: an unguarded throw here would crash the HTTP handler instead of
-  // reporting 'degraded'.
-  it('propagates an exception thrown by browser.isConnected() (unguarded)', () => {
-    const { brokerClient, hc } = loadHealthcheck()
+  // --- getStatus() never lets a probe-time error escape: it reports 'degraded'
+  // (and logs) instead of throwing into the HTTP handler. ---
+  it('reports degraded (no throw) when browser.isConnected() throws', () => {
+    const { brokerClient, hc, logs } = loadHealthcheck()
     brokerClient.browserPool.browser = { isConnected: () => { throw new Error('boom-isConnected') } }
-    assert.throws(() => hc.getStatus(), /boom-isConnected/)
+    const s = hc.getStatus()
+    assert.equal(s.status, 'degraded')
+    assert.ok(logs.find(l => l.level === 'error' && /boom-isConnected/.test(l.msg)), 'the failure is logged')
     hc.healthCheckServer.close()
   })
 
-  it('propagates an exception thrown by audioServer.getPort() (unguarded)', () => {
-    const { brokerClient, hc } = loadHealthcheck()
+  it('reports degraded (no throw) when audioServer.getPort() throws', () => {
+    const { brokerClient, hc, logs } = loadHealthcheck()
     brokerClient.browserPool.browser = { isConnected: () => true }
     brokerClient.audioServer.getPort = () => { throw new Error('boom-getPort') }
-    assert.throws(() => hc.getStatus(), /boom-getPort/)
+    const s = hc.getStatus()
+    assert.equal(s.status, 'degraded')
+    assert.ok(logs.find(l => l.level === 'error' && /boom-getPort/.test(l.msg)), 'the failure is logged')
     hc.healthCheckServer.close()
   })
 
@@ -288,32 +290,31 @@ describe('Healthcheck', () => {
     hc.healthCheckServer.close()
   })
 
-  it('throws ERR_SOCKET_BAD_PORT when BOTSERVICE_HEALTHCHECK_HTTP is unset (parseInt NaN)', () => {
-    // CURRENT behaviour: parseInt(undefined, 10) === NaN and server.listen(NaN)
-    // throws ERR_SOCKET_BAD_PORT synchronously in the constructor. Suspected bug:
-    // the component does not default the port nor validate the env var, so a
-    // missing/non-numeric BOTSERVICE_HEALTHCHECK_HTTP crashes startup instead of
-    // falling back to a sane default. We assert the present behaviour.
+  it('defaults to a valid port when BOTSERVICE_HEALTHCHECK_HTTP is unset (no crash)', () => {
+    // Unset → fall back to the default port instead of server.listen(NaN) →
+    // ERR_SOCKET_BAD_PORT crashing startup. The constructor must not throw.
     const { instance: brokerClient } = loadBrokerClient()
     const app = { components: { BrokerClient: brokerClient } }
     const saved = process.env.BOTSERVICE_HEALTHCHECK_HTTP
     delete process.env.BOTSERVICE_HEALTHCHECK_HTTP
     delete require.cache[healthcheckPath]
+    let hc
     try {
-      assert.throws(() => require(healthcheckPath)(app), /ERR_SOCKET_BAD_PORT|port should be/)
+      assert.doesNotThrow(() => { hc = require(healthcheckPath)(app) })
     } finally {
+      if (hc && hc.healthCheckServer) { try { hc.healthCheckServer.close() } catch (e) { /* noop */ } }
       if (saved !== undefined) process.env.BOTSERVICE_HEALTHCHECK_HTTP = saved
       else process.env.BOTSERVICE_HEALTHCHECK_HTTP = '0'
     }
   })
 
-  it('throws ERR_SOCKET_BAD_PORT when BOTSERVICE_HEALTHCHECK_HTTP is non-numeric (parseInt NaN)', () => {
+  it('throws a CLEAR error when BOTSERVICE_HEALTHCHECK_HTTP is non-numeric', () => {
     const { instance: brokerClient } = loadBrokerClient()
     const app = { components: { BrokerClient: brokerClient } }
     process.env.BOTSERVICE_HEALTHCHECK_HTTP = 'not-a-port'
     delete require.cache[healthcheckPath]
     try {
-      assert.throws(() => require(healthcheckPath)(app), /ERR_SOCKET_BAD_PORT|port should be/)
+      assert.throws(() => require(healthcheckPath)(app), /must be a port/)
     } finally {
       process.env.BOTSERVICE_HEALTHCHECK_HTTP = '0'
     }

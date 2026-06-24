@@ -249,6 +249,17 @@ describe('Bot', () => {
       bot.handleJsonMessage({ type: 'diarizationDegraded', mode: 'asr', reason: 'threw' })
       assert.equal(count, 1, 'only the first degrade is acted on')
     })
+
+    it('a degrade on one bot does NOT leak to another bot of the same type (manifest is per-instance)', () => {
+      // _loadManifest deep-clones the require()-cached JSON, so flipping one bot's
+      // diarizationMode to 'asr' must not contaminate other bots in the process.
+      const a = makeBot('teams')
+      const b = makeBot('teams')
+      a.handleJsonMessage({ type: 'diarizationDegraded', mode: 'asr', reason: 'absent' })
+      assert.equal(a.manifest.diarizationMode, 'asr', 'the degraded bot flips')
+      assert.equal(b.manifest.diarizationMode, 'native', 'the other bot is unaffected')
+      assert.notStrictEqual(a.manifest, b.manifest, 'each bot owns its manifest copy')
+    })
   })
 
   it('auto-leaves via the join watchdog (join-timeout) when no participant is ever seen', (done) => {
@@ -358,24 +369,26 @@ describe('Bot constructor env vars', () => {
     assert.equal(bot.joinTimeoutMs, 15 * 1000)
   })
 
-  it('a zero timeout produces 0ms (parseInt of "0")', () => {
+  it('a zero timeout falls back to the default (setTimeout(0) would fire immediately)', () => {
     process.env.EMPTY_MEETING_TIMEOUT_SECONDS = '0'
     process.env.JOIN_TIMEOUT_SECONDS = '0'
     const bot = makeBot('visio')
-    assert.equal(bot.emptyMeetingTimeoutMs, 0)
-    assert.equal(bot.joinTimeoutMs, 0)
+    assert.equal(bot.emptyMeetingTimeoutMs, 60 * 1000)
+    assert.equal(bot.joinTimeoutMs, 120 * 1000)
   })
 
-  it('a negative timeout passes through parseInt as a negative ms value', () => {
+  it('a negative timeout falls back to the default', () => {
     process.env.EMPTY_MEETING_TIMEOUT_SECONDS = '-5'
     const bot = makeBot('visio')
-    assert.equal(bot.emptyMeetingTimeoutMs, -5 * 1000)
+    assert.equal(bot.emptyMeetingTimeoutMs, 60 * 1000)
   })
 
-  it('a non-numeric timeout yields NaN ms (no default fallback in the constructor)', () => {
+  it('a non-numeric timeout falls back to the default (no NaN → no immediate fire)', () => {
     process.env.EMPTY_MEETING_TIMEOUT_SECONDS = 'abc'
+    process.env.JOIN_TIMEOUT_SECONDS = 'xyz'
     const bot = makeBot('visio')
-    assert.ok(Number.isNaN(bot.emptyMeetingTimeoutMs), 'parseInt("abc") is NaN — no clamp on this path')
+    assert.equal(bot.emptyMeetingTimeoutMs, 60 * 1000)
+    assert.equal(bot.joinTimeoutMs, 120 * 1000)
   })
 
   it('an empty BOT_DISPLAY_NAME falls back to the default ("" is falsy)', () => {
@@ -812,10 +825,9 @@ describe('Bot._removeParticipant', () => {
 describe('Bot._onDiarizationDegraded', () => {
   it('flips manifest.diarizationMode to asr only on the first degrade', () => {
     const bot = makeBot('teams')
-    // _loadManifest returns the require()-cached JSON object, which a prior
-    // degrade test may have already mutated in place; reset to the native start
-    // state so this test exercises the flip deterministically regardless of order.
-    bot.manifest.diarizationMode = 'native'
+    // _loadManifest deep-clones the manifest, so each bot starts at 'native'
+    // regardless of test order (no shared require()-cached object to reset).
+    assert.equal(bot.manifest.diarizationMode, 'native')
     bot._onDiarizationDegraded({ reason: 'x' })
     assert.equal(bot.manifest.diarizationMode, 'asr')
     // second degrade is ignored (latched) — mode stays asr, no re-flip logic runs.

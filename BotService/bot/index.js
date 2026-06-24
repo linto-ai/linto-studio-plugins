@@ -28,6 +28,15 @@ const AUDIO_SILENCE_TIMEOUT_MS = (() => {
 // How often the silence watchdog re-checks the last-audio timestamp.
 const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
 
+// Parse an env timeout (in seconds) to ms, falling back to the default for a
+// missing OR malformed value. Without the Number.isFinite guard a non-numeric env
+// var yields NaN, and setTimeout(fn, NaN) fires ~immediately — the bot would
+// leave the meeting on startup.
+function envTimeoutMs (name, defaultSeconds) {
+  const v = parseInt(process.env[name], 10)
+  return (Number.isFinite(v) && v > 0 ? v : defaultSeconds) * 1000
+}
+
 // Page-console noise from meeting SPAs we never want in our logs.
 const IGNORED_CONSOLE = [
   'Content Security Policy', 'ERR_UNKNOWN_URL_SCHEME', 'net::ERR_', 'Failed to load resource',
@@ -54,10 +63,10 @@ class Bot extends EventEmitter {
     this.contextId = `${session.id}_${channel.id}`
     this.wsPath = `/bot-${this.contextId}`
     this.botName = process.env.BOT_DISPLAY_NAME || 'LinTO Bot'
-    this.emptyMeetingTimeoutMs = parseInt(process.env.EMPTY_MEETING_TIMEOUT_SECONDS || '60', 10) * 1000
+    this.emptyMeetingTimeoutMs = envTimeoutMs('EMPTY_MEETING_TIMEOUT_SECONDS', 60)
     // Absolute watchdog: if nobody is ever seen after the bot joins, the
     // empty-meeting timer never arms — so leave anyway after this window.
-    this.joinTimeoutMs = parseInt(process.env.JOIN_TIMEOUT_SECONDS || '120', 10) * 1000
+    this.joinTimeoutMs = envTimeoutMs('JOIN_TIMEOUT_SECONDS', 120)
 
     this.trackParticipants = new Map() // trackIndex -> { id, name }
     this.participants = new Map() // participantId -> { id, name }
@@ -87,7 +96,12 @@ class Bot extends EventEmitter {
       return null
     }
     try {
-      return require(path.join(__dirname, 'manifests', `${botType}.json`))
+      // Deep-clone: require() caches by path, so every bot of a given type would
+      // otherwise SHARE one manifest object. A process runs many bots concurrently
+      // (BrowserPool, up to MAX_CONCURRENT_BOTS), and _onDiarizationDegraded mutates
+      // manifest.diarizationMode in place — without a per-bot copy that flip would
+      // leak to every other bot of the same type in the process.
+      return JSON.parse(JSON.stringify(require(path.join(__dirname, 'manifests', `${botType}.json`))))
     } catch (e) {
       logger.error(`Bot: failed to load manifest for ${botType}: ${e.message}`)
       return null

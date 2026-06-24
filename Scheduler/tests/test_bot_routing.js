@@ -770,16 +770,14 @@ describe('BrokerClient bot routing (BotService)', () => {
   });
 
   describe('#recordBotError() additional coverage', () => {
-    it('rejects botId=0 because the guard treats it as missing (current behavior)', async () => {
+    it('rejects botId=0 (invalid id) — nothing published', async () => {
       const { instance, mqttPublishes } = await loadBrokerClient();
       try {
         await instance.recordBotError(0, 'crash');
-        // NOTE (suspected bug): the guard is `botId === undefined || botId === null`,
-        // so 0 is NOT rejected by it — yet 0 is a falsy-but-valid id. Verify the
-        // actual behavior: 0 passes the guard and IS emitted.
+        // Bot ids are positive integers; the guard rejects 0 (and null/undefined/
+        // non-integers), so no error is published.
         const pub = mqttPublishes.find(p => p.topic === 'system/out/bots/error');
-        assert.ok(pub, 'botId=0 is NOT rejected (=== guard), so the error IS published');
-        assert.equal(pub.payload.botId, 0);
+        assert.equal(pub, undefined, 'botId=0 is guarded out, so the error is NOT published');
       } finally { uninstallMocks(); }
     });
 

@@ -211,7 +211,7 @@ class BrokerClient extends Component {
 
   // Publish a structured fatal bot error so the Scheduler can record/log it.
   _publishBotError (botId, reason) {
-    if (botId === undefined || botId === null) return
+    if (!Number.isInteger(botId) || botId <= 0) return // ignore missing/invalid bot ids (incl. 0)
     this.client.publish(`botservice/out/${botId}/bot-error`, { botId, reason }, 1, false, true)
   }
 
@@ -325,7 +325,7 @@ class BrokerClient extends Component {
   // On autonomous leave (empty meeting), ask the Scheduler to delete the Bot row
   // and mark the channel inactive — same path Session-API uses for DELETE /bots.
   _requestSchedulerCleanup (botId) {
-    if (botId === undefined || botId === null) return
+    if (!Number.isInteger(botId) || botId <= 0) return // ignore missing/invalid bot ids (incl. 0)
     this.client.publish('scheduler/in/schedule/stopbot', { botId }, 1, false, true)
   }
 

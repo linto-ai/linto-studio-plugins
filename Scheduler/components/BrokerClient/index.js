@@ -288,7 +288,7 @@ class BrokerClient extends Component {
   // load failure, browser disconnect). Record the reason on the Bot row when the
   // error_reason column exists; always re-emit on system/out for consumers.
   async recordBotError(botId, reason) {
-    if (botId === undefined || botId === null) return;
+    if (!Number.isInteger(botId) || botId <= 0) return; // ignore missing/invalid bot ids (incl. 0)
     reason = reason || 'unknown';
     logger.warn(`Bot ${botId} failed fatally on BotService: ${reason}`);
     // Only attempt a persisted write when the column actually exists, so we don't

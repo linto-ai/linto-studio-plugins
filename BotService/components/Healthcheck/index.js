@@ -20,19 +20,27 @@ class Healthcheck extends Component {
     // Snapshot of liveness, sourced from the real BrokerClient/BrowserPool/
     // LocalAudioServer state (no cached counters).
     getStatus() {
-        const bc = this.brokerClient
-        const browser = bc && bc.browserPool && bc.browserPool.browser
-        const browserConnected = !!(browser && browser.isConnected())
-        const audioServerListening = !!(bc && bc.audioServer && bc.audioServer.getPort() > 0)
-        // A replica with no live browser or a non-listening audio server cannot
-        // serve a bot — report 'degraded' (503 over HTTP) so the Docker HEALTHCHECK
-        // fails and a wedged replica is restarted.
-        const healthy = browserConnected && audioServerListening
-        return {
-            status: healthy ? 'ok' : 'degraded',
-            activeBots: bc ? bc.bots.size : 0,
-            browserConnected,
-            audioServerListening
+        // Never let a probe-time error escape into the HTTP handler — report
+        // 'degraded' instead so the Docker HEALTHCHECK fails cleanly (503) rather
+        // than crashing the request.
+        try {
+            const bc = this.brokerClient
+            const browser = bc && bc.browserPool && bc.browserPool.browser
+            const browserConnected = !!(browser && browser.isConnected())
+            const audioServerListening = !!(bc && bc.audioServer && bc.audioServer.getPort() > 0)
+            // A replica with no live browser or a non-listening audio server cannot
+            // serve a bot — report 'degraded' (503 over HTTP) so the Docker HEALTHCHECK
+            // fails and a wedged replica is restarted.
+            const healthy = browserConnected && audioServerListening
+            return {
+                status: healthy ? 'ok' : 'degraded',
+                activeBots: bc ? bc.bots.size : 0,
+                browserConnected,
+                audioServerListening
+            }
+        } catch (err) {
+            logger.error(`BotService HealthCheck status check failed: ${err.message}`)
+            return { status: 'degraded', activeBots: 0, browserConnected: false, audioServerListening: false }
         }
     }
 
@@ -49,9 +57,16 @@ class Healthcheck extends Component {
             logger.error(`BotService HealthCheck server error: ${error.message}`)
         })
 
-        const port = parseInt(process.env.BOTSERVICE_HEALTHCHECK_HTTP, 10)
+        // Default when unset; reject a malformed value with a clear error rather
+        // than letting server.listen(NaN) throw an opaque ERR_SOCKET_BAD_PORT.
+        const raw = process.env.BOTSERVICE_HEALTHCHECK_HTTP || '8080'
+        const port = parseInt(raw, 10)
+        if (!Number.isInteger(port) || port < 0 || port > 65535) {
+            throw new Error(`BOTSERVICE_HEALTHCHECK_HTTP must be a port in 0-65535, got '${raw}'`)
+        }
         this.healthCheckServer.listen(port, () => {
-            logger.info(`BotService HealthCheck server listening on port ${port}`)
+            // Log the RESOLVED port (port 0 binds an ephemeral one).
+            logger.info(`BotService HealthCheck server listening on port ${this.healthCheckServer.address().port}`)
         })
     }
 }

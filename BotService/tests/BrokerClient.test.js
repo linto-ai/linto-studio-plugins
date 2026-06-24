@@ -631,7 +631,7 @@ describe('BotService BrokerClient — _openSocket / _scheduleReconnect / stopBot
     assert.equal(stopped, true, 'stopBot called on meeting-empty')
   })
 
-  it('treats botId=0 as valid and publishes a bot-error (not a falsy skip)', () => {
+  it('rejects botId=0 — no bot-error published (ids are positive integers)', () => {
     const bot = fakeBot()
     const record = makeRecord(bot, 0)
     ctx.instance.bots.set('s_c', record)
@@ -639,8 +639,7 @@ describe('BotService BrokerClient — _openSocket / _scheduleReconnect / stopBot
     ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
     bot.emit('error', new Error('boom'))
     const err = ctx.publishes.find(p => p.topic === 'botservice/out/0/bot-error')
-    assert.ok(err, 'botId=0 still publishes a bot-error')
-    assert.equal(err.payload.botId, 0)
+    assert.equal(err, undefined, 'botId=0 is an invalid id → guarded out, nothing published')
   })
 })
 

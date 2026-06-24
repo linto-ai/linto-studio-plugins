@@ -23,8 +23,13 @@
   "leaveRules": [
     {
       "action": "click",
-      "selector": "#hangup-button",
-      "timeout": 3000,
+      "selector": "#hangup-button, [data-tid='hangup-main-btn']",
+      "timeout": 5000,
+      "optional": true
+    },
+    {
+      "action": "waitForTimeout",
+      "timeout": 2500,
       "optional": true
     }
   ]

@@ -42,8 +42,17 @@ function getInterceptScript (localWsUrl, platformConfig) {
   // receives no remote tracks). Return synthetic SILENT audio + a blank video
   // track so the join completes; the bot only subscribes to others' tracks, it
   // never needs to publish real media.
+  //
+  // EXCEPT Teams: its MediaAgent/DeviceManager validates that the published track's
+  // deviceId resolves to an enumerated capture device. A track minted from a
+  // MediaStreamDestination has an EMPTY deviceId, so Teams logs "Active device not
+  // found" and the lobby→meeting transition never completes (the bot is admitted by
+  // the host but stays stuck on "Admission…" until the join watchdog gives up). For
+  // Teams we therefore leave getUserMedia/enumerateDevices ALONE and rely on
+  // Chromium's native fake capture device (--use-fake-device-for-media-capture in
+  // BrowserPool), whose track carries a valid deviceId the DeviceManager accepts.
   try {
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    if (PLATFORM_TYPE !== 'teams' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       const _gumAC = new (window.AudioContext || window.webkitAudioContext)();
       navigator.mediaDevices.getUserMedia = function (constraints) {
         try {

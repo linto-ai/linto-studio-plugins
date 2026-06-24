@@ -205,13 +205,10 @@ class Bot extends EventEmitter {
   }
 
   handleAudioData (trackIndex, pcmBuffer) {
-    // E8: note every PCM frame for the silence watchdog, and log the very first.
+    // E8: note every PCM frame for the silence watchdog.
     this.lastAudioAt = Date.now()
-    if (!this.hasSeenAudio) {
-      this.hasSeenAudio = true
-      logger.info(`Bot[${this.contextId}]: first audio frame received`)
-    }
     if (this.isSfu && this.audioMixer) {
+      this._noteFirstAudio()
       const mapping = this.trackParticipants.get(trackIndex)
       if (mapping) {
         this.audioMixer.addAudio(mapping.id, pcmBuffer, Date.now(), mapping.name)
@@ -219,9 +216,25 @@ class Bot extends EventEmitter {
         this._bufferEarlyAudio(trackIndex, pcmBuffer)
       }
     } else {
-      // MCU/Teams: a single server-mixed track, forward as-is.
+      // MCU/Teams: a single server-mixed track. While the bot is still in the LOBBY
+      // (admitted == false) the page carries no meeting audio; starting the stream
+      // there would push lobby silence/hold to the ASR and fill the pre-ack buffer
+      // (and emit a misleading "first audio frame"). Only forward once ADMITTED —
+      // i.e. once a participant has been detected, which means the bot is really in
+      // the meeting, not the waiting room.
+      if (!this.hasSeenParticipant) return
+      this._noteFirstAudio()
       this.emit('audio', pcmBuffer)
     }
+  }
+
+  // Latch + log the first PCM frame we actually forward (used as the audio-clock
+  // start and a lifecycle milestone). Gated by the callers so it never fires for
+  // lobby audio on MCU bots.
+  _noteFirstAudio () {
+    if (this.hasSeenAudio) return
+    this.hasSeenAudio = true
+    logger.info(`Bot[${this.contextId}]: first audio frame received`)
   }
 
   _bufferEarlyAudio (trackIndex, pcmBuffer) {
@@ -532,7 +545,12 @@ class Bot extends EventEmitter {
     // removeAllListeners below — that would leak the context/mixer/ws. Guard it.
     if (this.manifest && this.manifest.leaveRules && this.page) {
       try {
+        // Click the platform "leave" control and WAIT (a waitForTimeout rule) so the
+        // graceful-leave handshake reaches the server before we tear the context
+        // down — otherwise the page vanishes mid-leave and the meeting UI shows a
+        // lingering "leaving…" ghost for the bot.
         await this.execRules(this.manifest.leaveRules, true)
+        logger.info(`Bot[${this.contextId}]: graceful leave executed`)
       } catch (e) {
         logger.debug(`Bot[${this.contextId}]: leave rules failed during dispose: ${e.message}`)
       }

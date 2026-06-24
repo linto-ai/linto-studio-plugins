@@ -17,8 +17,13 @@
   "leaveRules": [
     {
       "action": "click",
-      "selector": "button[aria-label='Quitter']",
-      "timeout": 3000,
+      "selector": "[data-attr='controls-leave']",
+      "timeout": 5000,
+      "optional": true
+    },
+    {
+      "action": "waitForTimeout",
+      "timeout": 2000,
       "optional": true
     }
   ]

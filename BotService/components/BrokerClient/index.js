@@ -95,7 +95,12 @@ class BrokerClient extends Component {
         await this.browserPool.init()
         await this.audioServer.start()
       } catch (err) {
-        logger.error(`BotService: failed to start infrastructure: ${err.message}`)
+        // E5: without browser+audio infra this replica can never serve a bot, and
+        // it would sit as a zombie (no retry, no status, failing nothing). Exit so
+        // the orchestrator restarts us with a clean slate. Healthcheck (E6) also
+        // reports degraded, so a HEALTHCHECK probe would catch a wedged replica.
+        logger.error(`BotService: failed to start infrastructure: ${err.message} — exiting for orchestrator restart`)
+        process.exit(1)
         return
       }
       this._publishStatus(true)
@@ -106,7 +111,7 @@ class BrokerClient extends Component {
     this.client.on('message', (topic, message) => {
       const action = topic.split('/')[3] // botservice/in/<uniqueId>/<action>
       let data
-      try { data = JSON.parse(message.toString()) } catch (e) { logger.error(`BotService: bad message on ${topic}`); return }
+      try { data = JSON.parse(message.toString()) } catch (e) { logger.error(`BotService: malformed MQTT message on ${topic}: ${e.message}`); return }
       if (action === 'startbot') {
         this.startBot(data).catch(err => logger.error(`BotService startBot error: ${err.message}`))
       } else if (action === 'stopbot') {
@@ -230,22 +235,58 @@ class BrokerClient extends Component {
     // double-count churn / double-fire stops. The socket wiring below is redone
     // on every (re)connect.
     bot.on('error', (error) => {
-      logger.error(`BotService: bot ${key} error: ${error.message}`)
+      logger.error(`BotService: bot ${key} (botId ${botId}) error: ${error.message}`)
       // T10: a runtime fatal error (page crash, browser disconnect, manifest
       // load failure) is published structurally for the Scheduler.
       this._publishBotError(botId, error.message || 'bot-error')
-      this.stopBot(bot.session.id, bot.channel.id).catch(() => {})
+      // E3: surface a teardown failure instead of swallowing it (a silent failure
+      // leaks the browser context / mixer / ws).
+      this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
     // T9: count participant churn (joins + leaves) reported by the bot.
     bot.on('participant-joined', () => { this.metrics.participantChurn++ })
     bot.on('participant-left', () => { this.metrics.participantChurn++ })
     bot.on('meeting-empty', () => {
-      logger.info(`BotService: bot ${key} meeting empty, leaving`)
+      logger.info(`BotService: bot ${key} (botId ${botId}) meeting empty, leaving`)
       this._requestSchedulerCleanup(botId)
-      this.stopBot(bot.session.id, bot.channel.id).catch(() => {})
+      this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
+    })
+    // Section 3: a join-watchdog leave (never admitted: wrong link / not admitted /
+    // empty room) is a FAILURE, not a clean empty-meeting leave. Record it as a
+    // distinct bot-error so the Scheduler does not count it as a success.
+    bot.on('join-timeout', () => {
+      logger.warn(`BotService: bot ${key} (botId ${botId}) never admitted (join timeout), leaving`)
+      this._publishBotError(botId, 'join-timeout')
+      this._requestSchedulerCleanup(botId)
+      this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
+    })
+    // E1: the Teams native→ASR diarization fallback (T14) is a no-op unless the
+    // Transcriber actually switches modes. The Transcriber decides its diarization
+    // mode from the `init` frame's diarizationMode and has no mid-stream control to
+    // change it, so the cleanest fix is to reconnect: bot._onDiarizationDegraded
+    // already flipped manifest.diarizationMode to 'asr', so re-opening the socket
+    // re-runs the handshake advertising 'asr' and the Transcriber drops native
+    // diarization (no SpeakerTracker → ASR-attributed captions). Idempotent: the
+    // bot emits this once (latched), so we reconnect once.
+    bot.on('diarization-degraded', ({ reason } = {}) => {
+      logger.warn(`BotService: bot ${key} (botId ${botId}) diarization degraded (${reason}), reconnecting transcriber in ASR diarization mode`)
+      const current = this.bots.get(key)
+      if (!current || current !== record || record.stopping) return
+      // Re-open the socket; the existing one is replaced (its close handler is a
+      // no-op for a stale socket). The fresh init advertises diarizationMode 'asr'.
+      if (record.ws) { try { record.ws.close() } catch (e) { /* already closing */ } }
+      this._openSocket(key, record, record.websocketUrl)
+    })
+    // E2: the TranscriberStream's init-ack watchdog (T17a) emits 'transcriber-error'
+    // on the bot. Wire a listener so it is at least observable (the socket it owns
+    // is already closed by the watchdog, which drives the T8 reconnect-or-stop via
+    // the close handler — so we only need to log here, not act).
+    bot.on('transcriber-error', (error) => {
+      logger.warn(`BotService: bot ${key} (botId ${botId}) transcriber error: ${error && error.message ? error.message : error}`)
     })
 
     this._openSocket(key, record, websocketUrl)
+    logger.info(`BotService: bot ${key} (botId ${botId}) streaming to transcriber ${websocketUrl}`)
   }
 
   // T8: open (or re-open) the Transcriber WS for a record and wire its data plane.
@@ -280,8 +321,13 @@ class BrokerClient extends Component {
   // are exhausted we give up and stopBot — a sustained Transcriber outage is fatal.
   _scheduleReconnect (key, record) {
     if (record.reconnectAttempts >= RECONNECT_MAX_RETRIES) {
-      logger.warn(`BotService: transcriber WS for ${key} gave up after ${record.reconnectAttempts} reconnect attempts, stopping bot`)
-      this.stopBot(record.bot.session.id, record.bot.channel.id).catch(() => {})
+      // Section 3: exhausting the reconnect retries is a FATAL outcome (the bot is
+      // about to be torn down), so log at ERROR — and publish a structured
+      // bot-error so the Scheduler records WHY the bot vanished (previously it did
+      // not, leaving the disappearance unexplained).
+      logger.error(`BotService: transcriber WS for ${key} (botId ${record.botId}) gave up after ${record.reconnectAttempts} reconnect attempts, stopping bot`)
+      this._publishBotError(record.botId, 'transcriber-unreachable')
+      this.stopBot(record.bot.session.id, record.bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${record.botId}): ${err.message}`))
       return
     }
     record.reconnectAttempts++

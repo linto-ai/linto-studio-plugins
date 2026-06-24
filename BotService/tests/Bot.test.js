@@ -187,10 +187,13 @@ describe('Bot', () => {
     })
   })
 
-  it('auto-leaves via the join watchdog when no participant is ever seen', (done) => {
+  it('auto-leaves via the join watchdog (join-timeout) when no participant is ever seen', (done) => {
+    // Section 3: a never-admitted leave is a FAILURE, emitted as a distinct
+    // 'join-timeout' event (not the clean 'meeting-empty') so it is not counted
+    // as success.
     const bot = makeBot('visio')
     bot.joinTimeoutMs = 10
-    bot.on('meeting-empty', () => done())
+    bot.on('join-timeout', () => done())
     bot._armJoinWatchdog()
   })
 
@@ -215,5 +218,47 @@ describe('Bot', () => {
     bot.botName = 'Acme Bot'
     assert.equal(bot._template('{{botName}}'), 'Acme Bot')
     assert.equal(bot._template('static'), 'static')
+  })
+
+  // E8: audio-silence watchdog — once admitted the bot expects a steady PCM flow;
+  // a prolonged gap means the capture pipe died, so emit a fatal 'error'.
+  describe('audio-silence watchdog (E8)', () => {
+    it('emits error when no audio arrives within the silence timeout after admission', () => {
+      const bot = makeBot('visio')
+      let err = null
+      bot.on('error', (e) => { err = e })
+      // Force a tiny timeout and arm the watchdog as admission would.
+      const realNow = Date.now()
+      bot.lastAudioAt = realNow - 60000 // long ago
+      bot._checkAudioSilence(realNow) // direct check (deterministic, no timers)
+      // The watchdog only fires when AUDIO_SILENCE_TIMEOUT_MS > 0 (default 30s).
+      assert.ok(err instanceof Error, 'a fatal error is emitted on prolonged silence')
+      assert.equal(err.message, 'audio-capture-dead')
+    })
+
+    it('does NOT emit error while audio is flowing', () => {
+      const bot = makeBot('visio')
+      let err = null
+      bot.on('error', (e) => { err = e })
+      bot.handleAudioData(0, Buffer.alloc(640)) // updates lastAudioAt to now
+      bot._checkAudioSilence(Date.now())
+      assert.equal(err, null, 'no error while audio is recent')
+    })
+
+    it('logs the first audio frame once (latched) and updates lastAudioAt', () => {
+      const bot = makeBot('visio')
+      assert.equal(bot.hasSeenAudio, false)
+      bot.handleAudioData(0, Buffer.alloc(640))
+      assert.equal(bot.hasSeenAudio, true)
+      assert.ok(bot.lastAudioAt > 0)
+    })
+
+    it('cancels the silence watchdog on dispose', async () => {
+      const bot = makeBot('visio')
+      bot._armAudioSilenceWatchdog()
+      // The watchdog only arms when the timeout is enabled (default on).
+      await bot.dispose()
+      assert.equal(bot.audioSilenceWatchdog, null)
+    })
   })
 })

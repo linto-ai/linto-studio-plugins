@@ -79,6 +79,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const intervals = [];
 
   function log() { if (DEBUG) console.log.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); }
+  // 1b/E8: critical in-page faults must reach the Node logs regardless of DEBUG.
+  // console.warn is bridged to logger.warn by the page-console handler in
+  // bot/index.js (it surfaces '[WebRTC-Intercept]' warnings at warn level), so an
+  // otherwise-invisible failure (capture pipe permanently dead, worklet fallback,
+  // Room never found) becomes greppable. Each call site latches to avoid flooding.
+  function warn() { try { console.warn.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); } catch (e) {} }
 
   // ── Sanitization (T15) ────────────────────────────────────────────────────
   // Participant id/name come from the meeting page and flow into control
@@ -137,7 +143,13 @@ function getInterceptScript (localWsUrl, platformConfig) {
         if (reconnectAttempts < MAX_RECONNECT_RETRIES) {
           reconnectAttempts++;
           reconnectTimer = setTimeout(connectWs, RECONNECT_DELAY_MS);
-        } else { log('ws max retries reached'); disposed = true; }
+        } else {
+          // 1b/E8: giving up here permanently kills audio capture (disposed=true
+          // stops every reconnect) — this was invisible at non-DEBUG. Warn so the
+          // Node side (E8 silence watchdog) and operators learn the pipe is dead.
+          warn('loopback ws gave up after ' + MAX_RECONNECT_RETRIES + ' retries — audio capture permanently stopped');
+          disposed = true;
+        }
       };
       ws.onerror = function () { log('ws error'); };
     } catch (e) { log('ws connect failed', e && e.message); }
@@ -230,7 +242,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
       node.port.onmessage = function (e) { sendBinary(tIdx, float32ToInt16(resample(e.data, sourceRate))); };
       log('AudioWorklet capture for track', tIdx);
     } catch (e) {
-      log('AudioWorklet unavailable, ScriptProcessor fallback');
+      // 1b: the ScriptProcessor path is deprecated and degraded — surface the
+      // fallback at warn (independent of DEBUG) so it is visible in the Node logs.
+      warn('AudioWorklet unavailable, falling back to ScriptProcessor (track ' + tIdx + '): ' + (e && e.message ? e.message : 'unknown'));
       const proc = ctx.createScriptProcessor(4096, 1, 1);
       source.connect(proc);
       proc.connect(ctx.destination);
@@ -300,6 +314,23 @@ function getInterceptScript (localWsUrl, platformConfig) {
 // Emitted only for platformType === 'sfu'. Relies on shared helpers
 // (tracks, hasUnmappedTrack, mapTrack, sendJson, intervals, log).
 const SFU_MAPPING_BLOCK = `
+  // 1b/E8: if neither the Jitsi conference nor the LiveKit Room internal is ever
+  // found, no track is ever subscribed/mapped and the bot captures nothing. That
+  // was silent at non-DEBUG; count consecutive polls with no Room/conference and
+  // warn once after the limit so the failure (page structure changed / never
+  // joined) is visible. ~N polls of the 1.5s LiveKit interval.
+  var sfuNotFoundPolls = 0, sfuNotFoundWarned = false;
+  var SFU_NOT_FOUND_LIMIT = 20;
+  function noteSfuInternal(found) {
+    if (found) { sfuNotFoundPolls = 0; return; }
+    if (sfuNotFoundWarned) return;
+    sfuNotFoundPolls++;
+    if (sfuNotFoundPolls >= SFU_NOT_FOUND_LIMIT) {
+      sfuNotFoundWarned = true;
+      warn('SFU Room/conference internal never found after ' + sfuNotFoundPolls + ' polls — no audio tracks will be captured');
+    }
+  }
+
   // Jitsi: tracks live on window.APP.conference._room participants.
   function pollJitsi() {
     if (tracks.size === 0 || !hasUnmappedTrack()) return;
@@ -353,8 +384,9 @@ const SFU_MAPPING_BLOCK = `
     // Runs unconditionally (NOT gated on tracks) so it can find the Room and
     // FORCE subscription: a headless bot has no UI, so adaptive-stream never
     // subscribes on its own and no inbound tracks would ever arrive.
-    if (window.APP && window.APP.conference) return; // Jitsi handles its own mapping
-    if (!livekitRoom) { livekitRoom = findLivekitRoom(); if (!livekitRoom) return; log('LiveKit Room found'); }
+    if (window.APP && window.APP.conference) { noteSfuInternal(true); return; } // Jitsi handles its own mapping
+    if (!livekitRoom) { livekitRoom = findLivekitRoom(); if (!livekitRoom) { noteSfuInternal(false); return; } log('LiveKit Room found'); }
+    noteSfuInternal(true);
     if (livekitRoom.state && livekitRoom.state !== 'connected') { livekitRoom = null; return; }
     try {
       const remotes = livekitRoom.remoteParticipants || livekitRoom.participants;

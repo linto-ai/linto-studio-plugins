@@ -42,6 +42,7 @@ class TranscriberStream {
     this.ackTimeoutMs = opts.ackTimeoutMs || ACK_TIMEOUT_MS
     this.ready = false
     this._ackTimer = null
+    this._ackedOnce = false // 1a: latch the "first ack" info log
     this._disposed = false
     // T8: ACK-gated frames + dropped-frames counter live in a shared state object
     // so they outlive this stream across a reconnect. Default to a private one.
@@ -63,7 +64,18 @@ class TranscriberStream {
     // in flight, so a Transcriber that never acks must not hang us forever.
     this.ws.on('open', () => { this._sendInit(); this._armAckWatchdog() })
     this.ws.on('message', (message) => {
-      try { if (JSON.parse(message.toString()).type === 'ack') { this._cancelAckWatchdog(); this.ready = true; this._flush() } } catch (e) { /* non-JSON */ }
+      try {
+        if (JSON.parse(message.toString()).type === 'ack') {
+          this._cancelAckWatchdog()
+          // 1a: log the first ack only (a reconnect re-acks; do not re-announce).
+          if (!this._ackedOnce) {
+            this._ackedOnce = true
+            logger.info(`TranscriberStream: transcriber ack received, ${this.state.buffered.length} buffered frames flushed`)
+          }
+          this.ready = true
+          this._flush()
+        }
+      } catch (e) { /* non-JSON */ }
     })
     // T8: on socket close, drop back to ack-gated buffering so audio produced
     // during the reconnect gap is retained in the shared buffer (instead of being

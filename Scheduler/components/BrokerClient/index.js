@@ -224,9 +224,14 @@ class BrokerClient extends Component {
       // after a Scheduler restart, when the in-memory map is gone.
       await Model.Bot.update({ botservice: botservice.uniqueId }, { where: { id: botId } });
       this.client.publish(`botservice/in/${botservice.uniqueId}/startbot`, botData, 2, false, true);
-      logger.debug(`Bot ${botId} scheduled on BotService ${botservice.uniqueId} (${botData.botType}) for session ${botData.session.id}, channel ${botData.channel.id}`);
+      // 1a: routing a bot is a lifecycle milestone — promote to info so the whole
+      // create→schedule→stream path is greppable at info level.
+      logger.info(`Bot ${botId} scheduled on BotService ${botservice.uniqueId} (${botData.botType}) for session ${botData.session.id}, channel ${botData.channel.id}`);
     } catch (error) {
-      logger.error('Failed to start bot:', error);
+      // 1b: format with the botId and error message (a positional Error object
+      // logs opaquely); include the stack when present.
+      logger.error(`Failed to start bot ${botId}: ${error.message}`);
+      if (error.stack) logger.debug(error.stack);
     }
   }
 
@@ -284,7 +289,10 @@ class BrokerClient extends Component {
         logger.warn(`No BotService owner tracked for ${key}; stop not routed (bot may have already left)`);
       }
     } catch (error) {
-      logger.error('Failed to stop bot:', error);
+      // 1b: format with the botId and error message (a positional Error object
+      // logs opaquely); include the stack when present.
+      logger.error(`Failed to stop bot ${botId}: ${error.message}`);
+      if (error.stack) logger.debug(error.stack);
     }
   }
 

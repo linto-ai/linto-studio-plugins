@@ -19,6 +19,19 @@ const MAX_EARLY_FRAMES = 150
 const EARLY_AUDIO_MAX_AGE_MS = parseInt(process.env.EARLY_AUDIO_MAX_AGE_SECONDS || '30', 10) * 1000
 const EARLY_AUDIO_REAP_INTERVAL_MS = EARLY_AUDIO_MAX_AGE_MS
 
+// E8/E9: audio-silence watchdog. Once the bot has been admitted (a participant
+// was mapped) it should be receiving PCM. If the in-page capture pipe dies
+// silently (loopback ws gave up after MAX_RECONNECT_RETRIES, AudioWorklet wedged,
+// LocalAudioServer connection closed) the bot looks alive but no audio flows and
+// no other watchdog fires. Detect a prolonged audio gap and tear the bot down
+// instead of hanging silently. 0 (or unparseable) disables it.
+const AUDIO_SILENCE_TIMEOUT_MS = (() => {
+  const v = parseInt(process.env.AUDIO_SILENCE_TIMEOUT_SECONDS || '30', 10)
+  return Number.isFinite(v) && v > 0 ? v * 1000 : 0
+})()
+// How often the silence watchdog re-checks the last-audio timestamp.
+const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
+
 // Page-console noise from meeting SPAs we never want in our logs.
 const IGNORED_CONSOLE = [
   'Content Security Policy', 'ERR_UNKNOWN_URL_SCHEME', 'net::ERR_', 'Failed to load resource',
@@ -64,6 +77,9 @@ class Bot extends EventEmitter {
     this.earlyAudioFirstSeen = new Map() // T17b: trackIndex -> ts of first buffered frame (reaper)
     this.earlyAudioReaper = null // T17b: interval dropping stale unmapped early-audio
     this.hasSeenParticipant = false
+    this.hasSeenAudio = false // E8: one-shot latch for the "first audio frame" log
+    this.lastAudioAt = 0 // E8: ts of the most recent PCM frame (silence watchdog)
+    this.audioSilenceWatchdog = null // E8: interval that tears down a silent bot
     this.diarizationDegraded = false // T14: native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
     this.joinWatchdog = null
@@ -111,7 +127,8 @@ class Bot extends EventEmitter {
       this.audioServer.registerBot(this.wsPath, {
         onBinary: (trackIndex, pcm) => this.handleAudioData(trackIndex, pcm),
         onJson: (json) => this.handleJsonMessage(json),
-        onClose: () => {}
+        // E9: learn when the loopback audio pipe drops (was a no-op before).
+        onClose: () => this.notifyAudioPipeClosed()
       })
 
       const localWsUrl = `ws://127.0.0.1:${this.audioServer.getPort()}${this.wsPath}`
@@ -121,7 +138,15 @@ class Bot extends EventEmitter {
         // Allow the meeting host and its subdomains only; match on the parsed
         // request hostname (not a raw URL substring, which "evil.com?x=allowed"
         // would slip through and "allowed.evil.com" would wrongly pass).
-        const allowed = new URL(this.address).hostname
+        let allowed
+        try {
+          allowed = new URL(this.address).hostname
+        } catch (e) {
+          // E7: a malformed address makes the allowlist meaningless — surface the
+          // specific cause rather than letting the bare URL ctor throw opaquely.
+          logger.error(`Bot[${this.contextId}]: invalid address for domain allowlist: ${this.address}`)
+          throw e
+        }
         await this.page.route('**/*', (route) => {
           let host = ''
           try { host = new URL(route.request().url()).hostname } catch (e) { host = '' }
@@ -133,6 +158,7 @@ class Bot extends EventEmitter {
       logger.info(`Bot[${this.contextId}]: joining ${this.address}`)
       await this.page.goto(this.address, { timeout: 50000 })
       await this.execRules(this.manifest.loginRules)
+      logger.info(`Bot[${this.contextId}]: login rules completed (${this.manifest.loginRules?.length || 0} rules)`)
       this._armJoinWatchdog()
 
       if (this.isSfu) {
@@ -161,7 +187,9 @@ class Bot extends EventEmitter {
         return
       }
       if (type !== 'error') return
-      if (!IGNORED_CONSOLE.some(p => text.includes(p))) logger.debug(`Bot[${this.contextId}] page: ${text}`)
+      // 1b: a non-ignored page error is worth a warn (page-level failures often
+      // explain a stuck join / dead capture); keep the IGNORED_CONSOLE filter.
+      if (!IGNORED_CONSOLE.some(p => text.includes(p))) logger.warn(`Bot[${this.contextId}] page error: ${text}`)
     })
     this.page.on('crash', () => {
       logger.error(`Bot[${this.contextId}]: page crashed`)
@@ -177,6 +205,12 @@ class Bot extends EventEmitter {
   }
 
   handleAudioData (trackIndex, pcmBuffer) {
+    // E8: note every PCM frame for the silence watchdog, and log the very first.
+    this.lastAudioAt = Date.now()
+    if (!this.hasSeenAudio) {
+      this.hasSeenAudio = true
+      logger.info(`Bot[${this.contextId}]: first audio frame received`)
+    }
     if (this.isSfu && this.audioMixer) {
       const mapping = this.trackParticipants.get(trackIndex)
       if (mapping) {
@@ -267,7 +301,9 @@ class Bot extends EventEmitter {
         this._onDiarizationDegraded(json)
         break
       default:
-        logger.debug(`Bot[${this.contextId}]: unknown control message ${json.type}`)
+        // 1b: an unrecognized control type is a contract violation (interceptor /
+        // Node out of sync) — warn rather than hide it at debug.
+        logger.warn(`Bot[${this.contextId}]: unknown control message ${json.type}`)
     }
   }
 
@@ -275,7 +311,13 @@ class Bot extends EventEmitter {
     this.trackParticipants.set(trackIndex, participant)
     if (!this.participants.has(participant.id)) {
       this.participants.set(participant.id, participant)
+      logger.info(`Bot[${this.contextId}]: participant joined: ${participant.name} (${this.participants.size} present)`)
       this.emit('participant-joined', { identity: participant.id, name: participant.name })
+    }
+    // 1a: latched "admitted" milestone — the bot is in the meeting (first mapping).
+    if (!this.hasSeenParticipant) {
+      logger.info(`Bot[${this.contextId}]: admitted to meeting, first participant mapped (${participant.name})`)
+      this._armAudioSilenceWatchdog() // E8: from now on we expect a steady PCM flow
     }
     this.hasSeenParticipant = true
     this._cancelJoinWatchdog()
@@ -319,6 +361,7 @@ class Bot extends EventEmitter {
   _removeParticipant (id, name) {
     if (!this.participants.has(id)) return
     this.participants.delete(id)
+    logger.info(`Bot[${this.contextId}]: participant left: ${name} (${this.participants.size} remaining)`)
     if (this.audioMixer) this.audioMixer.removeParticipant(id)
     this.emit('participant-left', { identity: id, name })
     this._checkEmptyMeeting()
@@ -345,8 +388,12 @@ class Bot extends EventEmitter {
     this.joinWatchdog = setTimeout(() => {
       this.joinWatchdog = null
       if (!this.hasSeenParticipant) {
-        logger.warn(`Bot[${this.contextId}]: no participant seen within ${this.joinTimeoutMs / 1000}s, leaving`)
-        this.emit('meeting-empty')
+        // 1b: enrich — a join-watchdog leave means we were never admitted.
+        logger.warn(`Bot[${this.contextId}]: join watchdog fired — no participant within ${this.joinTimeoutMs / 1000}s (wrong link / not admitted / empty room), leaving`)
+        // Section 3: a never-admitted leave is a FAILURE, not a clean empty-meeting
+        // leave — emit a distinct event so it is recorded as a join timeout and not
+        // silently counted as success.
+        this.emit('join-timeout')
       }
     }, this.joinTimeoutMs)
   }
@@ -355,6 +402,47 @@ class Bot extends EventEmitter {
     if (!this.joinWatchdog) return
     clearTimeout(this.joinWatchdog)
     this.joinWatchdog = null
+  }
+
+  // E8: once the bot has been admitted it must keep receiving PCM. The in-page
+  // capture pipe can die silently (loopback ws gave up, AudioWorklet wedged, the
+  // LocalAudioServer connection closed) leaving the bot apparently alive with no
+  // audio and no other watchdog firing. Arm a periodic check that tears the bot
+  // down after a prolonged audio gap. Disabled when AUDIO_SILENCE_TIMEOUT_MS is 0.
+  _armAudioSilenceWatchdog () {
+    if (this.audioSilenceWatchdog || this.disposed || !AUDIO_SILENCE_TIMEOUT_MS) return
+    // Treat "admitted" as the start of the audio clock so a slow first frame does
+    // not trip the watchdog immediately.
+    this.lastAudioAt = Date.now()
+    this.audioSilenceWatchdog = setInterval(() => this._checkAudioSilence(), AUDIO_SILENCE_CHECK_INTERVAL_MS)
+    if (typeof this.audioSilenceWatchdog.unref === 'function') this.audioSilenceWatchdog.unref()
+  }
+
+  _checkAudioSilence (now = Date.now()) {
+    if (this.disposed || !AUDIO_SILENCE_TIMEOUT_MS) return
+    if (now - this.lastAudioAt < AUDIO_SILENCE_TIMEOUT_MS) return
+    logger.warn(`Bot[${this.contextId}]: no audio for ${AUDIO_SILENCE_TIMEOUT_MS / 1000}s after admission — capture pipe appears dead, tearing down`)
+    this._cancelAudioSilenceWatchdog()
+    // The capture pipe is dead with no way to recover in-page; surface a fatal
+    // error so the BrokerClient stops the bot (and publishes the reason) instead
+    // of letting it hang silently.
+    this.emit('error', new Error('audio-capture-dead'))
+  }
+
+  _cancelAudioSilenceWatchdog () {
+    if (!this.audioSilenceWatchdog) return
+    clearInterval(this.audioSilenceWatchdog)
+    this.audioSilenceWatchdog = null
+  }
+
+  // E9: the LocalAudioServer reports the in-page loopback socket closed. If the
+  // page is still trying it will reconnect (the interceptor retries), so this is
+  // not fatal on its own — but it is a strong signal the capture pipe is in
+  // trouble. Log it; the audio-silence watchdog (E8) declares the pipe dead if no
+  // audio resumes. Kept as a Bot method (not a no-op) so the signal is observable.
+  notifyAudioPipeClosed () {
+    if (this.disposed) return
+    logger.debug(`Bot[${this.contextId}]: loopback audio connection closed (in-page interceptor will attempt to reconnect)`)
   }
 
   getParticipantsList () {
@@ -367,7 +455,13 @@ class Bot extends EventEmitter {
         await this.execRule(rule)
       } catch (e) {
         if (rule.optional || suppressErrors) {
-          logger.debug(`Bot[${this.contextId}]: rule skipped (${rule.action} ${rule.selector || ''}): ${e.message}`)
+          // 1b: a failed optional rule on a join-critical action (click /
+          // waitForSelector — the buttons/gates that actually let the bot in) is
+          // worth a warn; the rest (cosmetic settings, leave-rule teardown) stay
+          // at debug so they do not flood the logs.
+          const joinCritical = !suppressErrors && (rule.action === 'click' || rule.action === 'waitForSelector')
+          const level = joinCritical ? 'warn' : 'debug'
+          logger[level](`Bot[${this.contextId}]: optional join rule failed (${rule.action} ${rule.selector || ''}): ${e.message}`)
         } else {
           throw e
         }
@@ -412,7 +506,9 @@ class Bot extends EventEmitter {
         await this.page.locator(rule.selector).clear({ timeout })
         break
       default:
-        logger.debug(`Bot[${this.contextId}]: unknown rule action ${rule.action}`)
+        // 1b: an unknown action means the manifest references a verb this engine
+        // does not implement — a contract violation, so warn.
+        logger.warn(`Bot[${this.contextId}]: unknown rule action '${rule.action}' (manifest bug?)`)
     }
   }
 
@@ -425,14 +521,21 @@ class Bot extends EventEmitter {
     this.disposed = true
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
+    this._cancelAudioSilenceWatchdog() // E8: no timer outlives the bot
     this._cancelEarlyAudioReaper() // T17b: no timer outlives the bot
     this.earlyAudio.clear()
     this.earlyAudioFirstSeen.clear()
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
     // Best-effort graceful leave before tearing the context down (skip if the page
     // is already gone, e.g. an init failure or a browser crash).
+    // E4: a throwing leave-rule must NOT skip unregisterBot/destroyContext/
+    // removeAllListeners below — that would leak the context/mixer/ws. Guard it.
     if (this.manifest && this.manifest.leaveRules && this.page) {
-      await this.execRules(this.manifest.leaveRules, true)
+      try {
+        await this.execRules(this.manifest.leaveRules, true)
+      } catch (e) {
+        logger.debug(`Bot[${this.contextId}]: leave rules failed during dispose: ${e.message}`)
+      }
     }
     this.page = null
     this.audioServer.unregisterBot(this.wsPath)

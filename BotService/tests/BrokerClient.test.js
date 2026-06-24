@@ -285,4 +285,76 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience (T8)',
     assert.equal(created.length, 1, 'no reconnect socket opened after intentional stop')
     assert.equal(record.reconnectTimer, null)
   })
+
+  // E1: a diarization-degraded event reconnects the transcriber so a fresh init
+  // advertises the (now ASR) diarization mode.
+  it('E1: reconnects the transcriber when the bot reports diarization degraded', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+    ctx.instance.stopBot = async () => {}
+
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    const ws1 = created[0]
+    ws1.emit('open')
+    // The bot flips its own manifest mode (as _onDiarizationDegraded does) then
+    // emits the event the BrokerClient now listens for.
+    bot.manifest.diarizationMode = 'asr'
+    bot.emit('diarization-degraded', { mode: 'asr', reason: 'callingDebug absent' })
+
+    assert.equal(ws1.closed, true, 'the native-mode socket is closed')
+    assert.equal(created.length, 2, 'a fresh socket is opened to re-run init in ASR mode')
+    const ws2 = created[1]
+    ws2.emit('open')
+    const init = ws2.sent.filter(x => typeof x === 'string').map(JSON.parse).find(f => f.type === 'init')
+    assert.ok(init, 'init re-sent on the new socket')
+    assert.equal(init.diarizationMode, 'asr', 'reconnected init advertises ASR diarization')
+  })
+
+  // E2: a transcriber-error from the stream watchdog is at least observable.
+  it('E2: listens for transcriber-error (does not throw on the unhandled error event)', () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    // An EventEmitter with no 'transcriber-error' listener would NOT throw (only
+    // 'error' is special), but the listener must exist for observability.
+    assert.doesNotThrow(() => bot.emit('transcriber-error', new Error('ack timeout')))
+    assert.ok(bot.listenerCount('transcriber-error') >= 1)
+  })
+
+  // Section 3: a join-timeout (never admitted) publishes a structured bot-error.
+  it('Section 3: a join-timeout publishes a join-timeout bot-error and stops the bot', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot, 42)
+    ctx.instance.bots.set('s_c', record)
+    let stopped = false
+    ctx.instance.stopBot = async () => { stopped = true }
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+
+    bot.emit('join-timeout')
+    await tick()
+    const err = ctx.publishes.find(p => p.topic === 'botservice/out/42/bot-error')
+    assert.ok(err, 'a bot-error was published for the join timeout')
+    assert.equal(err.payload.reason, 'join-timeout')
+    assert.equal(stopped, true, 'the bot is stopped after a join timeout')
+  })
+
+  // Section 3: exhausting reconnect retries publishes a transcriber-unreachable error.
+  it('Section 3: publishes transcriber-unreachable when reconnect retries are exhausted', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot, 7)
+    ctx.instance.bots.set('s_c', record)
+    ctx.instance.stopBot = async () => { ctx.instance.bots.delete('s_c') }
+
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    created[0].drop() // attempt 1
+    await new Promise((r) => realSetTimeout(r, 30))
+    created[1].drop() // attempt 2
+    await new Promise((r) => realSetTimeout(r, 50))
+    created[2].drop() // exhausted -> give up
+    const err = ctx.publishes.find(p => p.topic === 'botservice/out/7/bot-error')
+    assert.ok(err, 'a bot-error was published when retries were exhausted')
+    assert.equal(err.payload.reason, 'transcriber-unreachable')
+  })
 })

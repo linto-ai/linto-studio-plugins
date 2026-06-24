@@ -22,18 +22,27 @@ class Healthcheck extends Component {
     getStatus() {
         const bc = this.brokerClient
         const browser = bc && bc.browserPool && bc.browserPool.browser
+        const browserConnected = !!(browser && browser.isConnected())
+        const audioServerListening = !!(bc && bc.audioServer && bc.audioServer.getPort() > 0)
+        // E6: a replica with no live browser or a non-listening audio server cannot
+        // serve a bot — report 'degraded' (paired with a 503 over HTTP) so the
+        // Docker HEALTHCHECK fails and a wedged replica is restarted (pairs with E5).
+        const healthy = browserConnected && audioServerListening
         return {
-            status: 'ok',
+            status: healthy ? 'ok' : 'degraded',
             activeBots: bc ? bc.bots.size : 0,
-            browserConnected: !!(browser && browser.isConnected()),
-            audioServerListening: !!(bc && bc.audioServer && bc.audioServer.getPort() > 0)
+            browserConnected,
+            audioServerListening
         }
     }
 
     setupHealthCheckServer() {
         this.healthCheckServer = http.createServer((req, res) => {
-            const body = JSON.stringify(this.getStatus())
-            res.writeHead(200, { 'Content-Type': 'application/json' })
+            const status = this.getStatus()
+            const body = JSON.stringify(status)
+            // E6: 503 when degraded so the HEALTHCHECK probe treats it as unhealthy.
+            const code = status.status === 'ok' ? 200 : 503
+            res.writeHead(code, { 'Content-Type': 'application/json' })
             res.end(body)
         })
         this.healthCheckServer.on('error', (error) => {

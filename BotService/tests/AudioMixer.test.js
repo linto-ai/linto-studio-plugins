@@ -1,8 +1,16 @@
 const assert = require('assert')
 const { describe, it, beforeEach, afterEach } = require('mocha')
 const AudioMixer = require('../bot/AudioMixer')
+const { logger } = require('live-srt-lib')
 
 const frame = (value, n = 320) => Buffer.from(new Int16Array(n).fill(value).buffer)
+
+// Build a Buffer of n samples from an array of values (rest filled with 0).
+const samplesBuf = (values, n = values.length) => {
+  const arr = new Int16Array(n)
+  for (let i = 0; i < values.length && i < n; i++) arr[i] = values[i]
+  return Buffer.from(arr.buffer)
+}
 
 describe('AudioMixer', () => {
   let mixer
@@ -299,6 +307,385 @@ describe('AudioMixer', () => {
       mixer.addAudio('p1', frame(1000), 0)
       mixer.mixAndEmit()
       assert.equal(mixer.getPositionMs(), 20)
+    })
+
+    it('returns 0 before any mixAndEmit() call', () => {
+      const m = new AudioMixer()
+      m.addAudio('p1', frame(1000), 0) // adding audio alone must not advance the clock
+      assert.equal(m.getPositionMs(), 0)
+      m.stop()
+    })
+
+    it('advances correctly over 100+ ticks (not just one)', () => {
+      const m = new AudioMixer()
+      for (let i = 0; i < 137; i++) {
+        m.addAudio('p1', frame(1000), 0)
+        m.mixAndEmit()
+      }
+      assert.equal(m.getPositionMs(), 137 * 20)
+      m.stop()
+    })
+  })
+
+  describe('#constructor()', () => {
+    it('persists custom options on the instance', () => {
+      const m = new AudioMixer({ energyThreshold: 1234, silenceGraceMs: 5678, bufferFrames: 4 })
+      assert.equal(m.energyThreshold, 1234)
+      assert.equal(m.silenceGraceMs, 5678)
+      assert.equal(m.bufferSize, 320 * 4) // SAMPLES_PER_FRAME * bufferFrames
+      m.stop()
+    })
+
+    it('falls back to defaults when options are omitted', () => {
+      const m = new AudioMixer()
+      assert.equal(m.energyThreshold, 500)
+      assert.equal(m.silenceGraceMs, 2000)
+      assert.equal(m.bufferSize, 320 * 160)
+      m.stop()
+    })
+
+    it('keeps two instances fully independent (no shared state)', () => {
+      const a = new AudioMixer()
+      const b = new AudioMixer()
+      a.addAudio('only-in-a', frame(1000, 3), 0)
+      assert.equal(a.hasParticipant('only-in-a'), true)
+      assert.equal(b.hasParticipant('only-in-a'), false)
+      assert.notStrictEqual(a.participantBuffers, b.participantBuffers)
+      a.mixAndEmit()
+      assert.equal(a.getPositionMs(), 20)
+      assert.equal(b.getPositionMs(), 0) // b unaffected by a's tick
+      a.stop()
+      b.stop()
+    })
+  })
+
+  describe('#addAudio() participant updates', () => {
+    it('updates the participant name when a new name is supplied for an existing participant', () => {
+      mixer.addAudio('p1', frame(1000, 3), 0, 'Alice')
+      mixer.addAudio('p1', frame(1000, 3), 0, 'Bob')
+      assert.equal(mixer.participantBuffers.get('p1').name, 'Bob')
+    })
+
+    it('does not overwrite an existing name when called without a name', () => {
+      mixer.addAudio('p1', frame(1000, 3), 0, 'Alice')
+      mixer.addAudio('p1', frame(1000, 3), 0) // no name passed
+      assert.equal(mixer.participantBuffers.get('p1').name, 'Alice')
+    })
+
+    it('updates lastTimestamp after each addAudio() call', () => {
+      mixer.addAudio('p1', frame(1000, 3), 111)
+      assert.equal(mixer.participantBuffers.get('p1').lastTimestamp, 111)
+      mixer.addAudio('p1', frame(1000, 3), 222)
+      assert.equal(mixer.participantBuffers.get('p1').lastTimestamp, 222)
+    })
+  })
+
+  describe('#removeParticipant() idempotency', () => {
+    it('is a no-op (does not throw) for a non-existent participant', () => {
+      assert.doesNotThrow(() => mixer.removeParticipant('never-existed'))
+      assert.equal(mixer.hasParticipant('never-existed'), false)
+    })
+
+    it('does not clear the current speaker when removing a different participant', () => {
+      mixer.addAudio('loud', frame(5000), 0)
+      mixer.addAudio('other', frame(10, 3), 0)
+      mixer.mixAndEmit()
+      assert.equal(mixer.getCurrentSpeaker().id, 'loud')
+      mixer.removeParticipant('other') // not the current speaker
+      assert.equal(mixer.getCurrentSpeaker().id, 'loud')
+    })
+  })
+
+  describe('#stop() state reset', () => {
+    it('clears the participantBuffers Map completely', () => {
+      mixer.addAudio('p1', frame(1000, 3), 0)
+      mixer.addAudio('p2', frame(1000, 3), 0)
+      assert.equal(mixer.participantBuffers.size, 2)
+      mixer.stop()
+      assert.equal(mixer.participantBuffers.size, 0)
+    })
+
+    it('resets currentSpeaker, mixPosition and the silence accumulator', () => {
+      mixer.addAudio('p1', frame(5000), 0)
+      mixer.addAudio('p2', frame(10, 3), 0)
+      mixer.mixAndEmit()
+      assert.equal(mixer.getCurrentSpeaker().id, 'p1')
+      assert.equal(mixer.getPositionMs(), 20)
+      mixer.stop()
+      assert.equal(mixer.getCurrentSpeaker(), null)
+      assert.equal(mixer.getPositionMs(), 0)
+      assert.equal(mixer._silenceMs, 0)
+    })
+  })
+
+  describe('#start() after #stop()', () => {
+    it('reinitializes state and lets the mixer operate normally again', () => {
+      mixer.addAudio('p1', frame(5000), 0)
+      mixer.mixAndEmit()
+      assert.equal(mixer.getPositionMs(), 20)
+      mixer.stop()
+      assert.equal(mixer.getPositionMs(), 0)
+      assert.equal(mixer.mixInterval, null)
+
+      mixer.start()
+      assert.ok(mixer.mixInterval, 'a fresh interval is armed after restart')
+      assert.equal(mixer.getPositionMs(), 0)
+      assert.equal(mixer._silenceMs, 0)
+      mixer.stop() // clear the live timer
+
+      // After the restart cycle a manual tick still works normally.
+      mixer.addAudio('p1', frame(5000), 0)
+      let speaker = null
+      mixer.on('speakerChanged', (ev) => { speaker = ev.speaker })
+      mixer.mixAndEmit()
+      assert.ok(speaker && speaker.id === 'p1')
+      assert.equal(mixer.getPositionMs(), 20)
+    })
+  })
+
+  describe('#mixAndEmit() mixing edge-cases', () => {
+    it('clips the mix at -32768 (negative overflow)', (done) => {
+      mixer.addAudio('p1', frame(-30000), 0)
+      mixer.addAudio('p2', frame(-20000), 0)
+      mixer.on('audio', (buf) => {
+        const m = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
+        assert.equal(m[0], -32768)
+        done()
+      })
+      mixer.mixAndEmit()
+    })
+
+    it('skips participants with fewer than 320 buffered samples', (done) => {
+      mixer.addAudio('full', frame(1000, 320), 0) // exactly one frame
+      mixer.addAudio('short', frame(9000, 319), 0) // one sample short -> skipped
+      mixer.on('audio', (buf) => {
+        const m = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
+        // Only 'full' contributed; 'short' (would have been louder) was skipped.
+        assert.equal(m[0], 1000)
+        done()
+      })
+      mixer.mixAndEmit()
+      // 'short' is still pending, below the frame size, so it never became speaker.
+      assert.equal(mixer.getCurrentSpeaker().id, 'full')
+    })
+
+    it('emits a fresh Buffer on each tick (not reused across ticks)', () => {
+      mixer.addAudio('p1', frame(1000), 0)
+      mixer.addAudio('p1', frame(2000), 0)
+      const buffers = []
+      mixer.on('audio', (buf) => buffers.push(buf))
+      mixer.mixAndEmit()
+      mixer.mixAndEmit()
+      assert.equal(buffers.length, 2)
+      assert.notStrictEqual(buffers[0], buffers[1])
+      // The first buffer is not mutated by the second tick.
+      const m0 = new Int16Array(buffers[0].buffer, buffers[0].byteOffset, buffers[0].length / 2)
+      const m1 = new Int16Array(buffers[1].buffer, buffers[1].byteOffset, buffers[1].length / 2)
+      assert.equal(m0[0], 1000)
+      assert.equal(m1[0], 2000)
+    })
+
+    it('speakerChanged carries type and the position equal to the current mixPosition', () => {
+      mixer.addAudio('p1', frame(5000), 0)
+      mixer.addAudio('p2', frame(5000), 0) // second tick speaker change happens here
+      let ev = null
+      mixer.on('speakerChanged', (e) => { ev = e })
+      mixer.mixAndEmit()
+      assert.equal(ev.type, 'speakerChanged')
+      // The transition is emitted before mixPosition advances for this tick, so it
+      // equals the mixPosition value at emit time (0 on the first tick).
+      assert.equal(ev.position, 0)
+      assert.equal(mixer.getPositionMs(), 20)
+    })
+
+    it('produces no speakerChanged for a zero-amplitude (RMS 0) frame', () => {
+      const m = new AudioMixer()
+      m.addAudio('silent', frame(0), 0) // all samples 0 -> RMS 0
+      let changed = false
+      m.on('speakerChanged', () => { changed = true })
+      m.mixAndEmit()
+      assert.equal(changed, false)
+      assert.equal(m.getCurrentSpeaker(), null)
+      m.stop()
+    })
+
+    it('computes energy from squares so a loud all-negative frame still becomes speaker', () => {
+      // RMS of a constant -5000 frame == 5000 (sqrt of mean of squares), well above
+      // the threshold; negatives must not cancel out into a low/negative energy.
+      const m = new AudioMixer({ energyThreshold: 500 })
+      m.addAudio('neg', frame(-5000), 0)
+      let speaker = null
+      m.on('speakerChanged', (ev) => { speaker = ev.speaker })
+      m.mixAndEmit()
+      assert.ok(speaker && speaker.id === 'neg')
+      m.stop()
+    })
+  })
+
+  describe('multi-participant drop accounting', () => {
+    it('accumulates droppedSamples independently per participant', () => {
+      const m = new AudioMixer({ bufferFrames: 1 }) // 320-sample ring each
+      m.addAudio('a', samplesBuf([], 320 + 100), 0) // 100 dropped
+      m.addAudio('b', samplesBuf([], 320 + 640), 0) // 640 dropped
+      const stats = m.getDroppedStats()
+      const byId = Object.fromEntries(stats.map(s => [s.id, s.droppedSamples]))
+      assert.equal(byId.a, 100)
+      assert.equal(byId.b, 640)
+      m.stop()
+    })
+
+    it('keeps independent read/write pointers per participant on overflow', () => {
+      // Two participants, ring of 1 frame each. Overfill both with distinct values;
+      // each must independently keep only its own freshest frame.
+      const m = new AudioMixer({ bufferFrames: 1 })
+      m.addAudio('a', samplesBuf(new Array(320).fill(100), 320), 0) // dropped
+      m.addAudio('a', samplesBuf(new Array(320).fill(111), 320), 0) // kept
+      m.addAudio('b', samplesBuf(new Array(320).fill(200), 320), 0) // dropped
+      m.addAudio('b', samplesBuf(new Array(320).fill(222), 320), 0) // kept
+      m.on('audio', (buf) => {
+        const arr = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
+        assert.equal(arr[0], 111 + 222) // both freshest frames mixed
+      })
+      m.mixAndEmit()
+      const byId = Object.fromEntries(m.getDroppedStats().map(s => [s.id, s.droppedSamples]))
+      assert.equal(byId.a, 320)
+      assert.equal(byId.b, 320)
+      m.stop()
+    })
+  })
+
+  describe('#getParticipants()', () => {
+    it('returns a fresh array each call (mutations do not persist)', () => {
+      mixer.addAudio('p1', frame(1000, 3), 0)
+      const first = mixer.getParticipants()
+      first.push({ id: 'injected' })
+      const second = mixer.getParticipants()
+      assert.notStrictEqual(first, second)
+      assert.deepEqual(second.map(p => p.id), ['p1'])
+    })
+  })
+
+  describe('#getCurrentSpeaker()', () => {
+    it('returns null before the first speakerChanged event', () => {
+      const m = new AudioMixer()
+      assert.equal(m.getCurrentSpeaker(), null)
+      m.addAudio('p1', frame(100), 0) // below threshold -> no speaker
+      m.mixAndEmit()
+      assert.equal(m.getCurrentSpeaker(), null)
+      m.stop()
+    })
+  })
+
+  describe('#getDroppedStats() framing & names', () => {
+    it('computes droppedFrames as floor(droppedSamples/320)', () => {
+      const m = new AudioMixer({ bufferFrames: 1 }) // 320-sample ring
+      m.addAudio('zero', samplesBuf([], 320 + 100), 0) // 100 dropped -> 0 frames
+      m.addAudio('one', samplesBuf([], 320 + 320), 0) // 320 dropped -> 1 frame
+      m.addAudio('two', samplesBuf([], 320 + 640), 0) // 640 dropped -> 2 frames
+      const byId = Object.fromEntries(m.getDroppedStats().map(s => [s.id, s.droppedFrames]))
+      assert.equal(byId.zero, 0)
+      assert.equal(byId.one, 1)
+      assert.equal(byId.two, 2)
+      m.stop()
+    })
+
+    it('includes the participant name in each entry', () => {
+      mixer.addAudio('p1', frame(1000, 3), 0, 'Alice')
+      mixer.addAudio('p2', frame(1000, 3), 0) // no name -> defaults to id
+      const byId = Object.fromEntries(mixer.getDroppedStats().map(s => [s.id, s.name]))
+      assert.equal(byId.p1, 'Alice')
+      assert.equal(byId.p2, 'p2')
+    })
+  })
+
+  describe('overflow warning throttle', () => {
+    let originalWarn
+    let calls
+    beforeEach(() => {
+      calls = []
+      originalWarn = logger.warn
+      logger.warn = (...args) => calls.push(args.join(' '))
+    })
+    afterEach(() => { logger.warn = originalWarn })
+
+    it('does not warn just below the 500-sample threshold but warns at exactly 500', () => {
+      const below = new AudioMixer({ bufferFrames: 1 }) // 320-sample ring
+      below.addAudio('p1', samplesBuf([], 320 + 499), 0) // 499 dropped -> no warn
+      assert.equal(calls.length, 0)
+      assert.equal(below.getDroppedStats()[0].droppedSamples, 499)
+      below.stop()
+
+      const at = new AudioMixer({ bufferFrames: 1 })
+      at.addAudio('p1', samplesBuf([], 320 + 500), 0) // 500 dropped -> exactly one warn
+      assert.equal(calls.length, 1)
+      assert.ok(calls[0].includes('500 samples dropped'))
+      at.stop()
+    })
+  })
+
+  describe('#hasParticipant() return type', () => {
+    it('returns strict booleans, not truthy/falsy values', () => {
+      assert.strictEqual(mixer.hasParticipant('missing'), false)
+      mixer.addAudio('p1', frame(1000, 3), 0)
+      assert.strictEqual(mixer.hasParticipant('p1'), true)
+    })
+  })
+
+  describe('silence-grace boundaries', () => {
+    it('allows the null transition with exactly two participants (the >1 boundary)', () => {
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 }) // 1 tick grace
+      const events = []
+      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
+      m.addAudio('a', frame(5000), 0)
+      m.addAudio('b', frame(10, 3), 0)
+      m.mixAndEmit() // ['a']
+      m.addAudio('a', frame(10), 0)
+      m.addAudio('b', frame(10), 0)
+      m.mixAndEmit() // 20ms silence >= grace, size == 2 (> 1) -> null transition
+      assert.deepEqual(events, ['a', null])
+      m.stop()
+    })
+
+    it('lets a participant added during the silence countdown unlock the null transition', () => {
+      // Lone speaker: the >1 guard blocks the null transition no matter how long the
+      // silence runs. Adding a second participant mid-countdown makes size > 1 so the
+      // next silent tick past the grace finally emits null.
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 })
+      const events = []
+      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
+      m.addAudio('solo', frame(5000), 0)
+      m.mixAndEmit() // ['solo']
+      m.addAudio('solo', frame(10), 0)
+      m.mixAndEmit() // 20ms silence but size == 1 -> blocked, _silenceMs keeps growing
+      assert.deepEqual(events, ['solo'])
+      m.addAudio('late', frame(10, 3), 0) // size becomes 2
+      m.addAudio('solo', frame(10), 0)
+      m.mixAndEmit() // size > 1 and silence already past grace -> null
+      assert.deepEqual(events, ['solo', null])
+      assert.equal(m.getCurrentSpeaker(), null)
+      m.stop()
+    })
+
+    it('resets the silence accumulator only when the removed participant was the speaker', () => {
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 60 })
+      m.addAudio('spk', frame(5000), 0)
+      m.addAudio('other', frame(10, 3), 0)
+      m.mixAndEmit() // 'spk' is speaker, _silenceMs 0
+      m.addAudio('spk', frame(10), 0)
+      m.addAudio('other', frame(10), 0)
+      m.mixAndEmit() // silence accumulating: _silenceMs == 20
+      assert.equal(m._silenceMs, 20)
+
+      // Removing a non-speaker must NOT reset the silence accumulator.
+      m.removeParticipant('other')
+      assert.equal(m._silenceMs, 20)
+      assert.equal(m.getCurrentSpeaker().id, 'spk')
+
+      // Removing the current speaker resets it (and clears the speaker).
+      m.removeParticipant('spk')
+      assert.equal(m._silenceMs, 0)
+      assert.equal(m.getCurrentSpeaker(), null)
+      m.stop()
     })
   })
 })

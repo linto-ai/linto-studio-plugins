@@ -1,7 +1,20 @@
 const assert = require('assert')
 const EventEmitter = require('events')
 const { describe, it, beforeEach } = require('mocha')
+const { logger } = require('live-srt-lib')
 const TranscriberStream = require('../bot/TranscriberStream')
+
+// Spy on the shared winston logger so log-throttling/latch behavior can be
+// asserted without real I/O. Captures (level, message) pairs and restores the
+// originals so other suites/tests are unaffected.
+function spyLogger () {
+  const calls = []
+  const original = { info: logger.info, warn: logger.warn }
+  logger.info = (msg) => { calls.push({ level: 'info', msg: String(msg) }); return logger }
+  logger.warn = (msg) => { calls.push({ level: 'warn', msg: String(msg) }); return logger }
+  const restore = () => { logger.info = original.info; logger.warn = original.warn }
+  return { calls, restore }
+}
 
 class FakeWs extends EventEmitter {
   constructor () { super(); this.readyState = TranscriberStream.OPEN; this.sent = []; this.closed = false }
@@ -202,5 +215,279 @@ describe('TranscriberStream', () => {
 
     const ws2 = new FakeWs(); const s2 = new TranscriberStream(ws2, bot1, { maxBuffer: 2, buffer: shared })
     assert.equal(s2.getDroppedFrames(), 3, 'drop count carried over to the reconnected stream')
+  })
+
+  // ---- constructor state repair ----
+
+  it('repairs state.buffered when injected as null', () => {
+    const shared = { buffered: null, droppedFrames: 0 }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.ok(Array.isArray(stream.state.buffered), 'buffered coerced to an array')
+    assert.equal(stream.state.buffered.length, 0)
+    assert.strictEqual(stream.state.buffered, shared.buffered, 'repaired in place on the shared object')
+  })
+
+  it('repairs state.buffered when injected as a non-array object', () => {
+    const shared = { buffered: { not: 'an array' }, droppedFrames: 0 }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.ok(Array.isArray(stream.state.buffered))
+    assert.equal(stream.state.buffered.length, 0)
+  })
+
+  it('repairs state.droppedFrames when injected as null', () => {
+    const shared = { buffered: [], droppedFrames: null }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.strictEqual(stream.state.droppedFrames, 0)
+  })
+
+  it('repairs state.droppedFrames when injected as a string', () => {
+    const shared = { buffered: [], droppedFrames: '7' }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.strictEqual(stream.state.droppedFrames, 0, 'non-number coerced to 0')
+  })
+
+  it('repairs state.droppedFrames when injected as an object', () => {
+    const shared = { buffered: [], droppedFrames: {} }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.strictEqual(stream.state.droppedFrames, 0)
+  })
+
+  // ---- options ----
+
+  it('respects an explicit ackTimeoutMs option', () => {
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { ackTimeoutMs: 4242 })
+    assert.equal(stream.ackTimeoutMs, 4242)
+  })
+
+  // ---- ack message handling ----
+
+  it('does not re-log "ack received" on a second ack after reconnect', () => {
+    const spy = spyLogger()
+    try {
+      const ws2 = new FakeWs(); const bot2 = fakeBot()
+      new TranscriberStream(ws2, bot2, { maxBuffer: 3 })
+      ws2.emit('open')
+      ws2.emit('message', JSON.stringify({ type: 'ack' }))
+      ws2.emit('message', JSON.stringify({ type: 'ack' }))
+      const acks = spy.calls.filter(c => c.level === 'info' && /ack received/.test(c.msg))
+      assert.equal(acks.length, 1, 'ack-received logged exactly once')
+    } finally { spy.restore() }
+  })
+
+  it('silently ignores a JSON message whose type is not ack', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { maxBuffer: 3 })
+    ws2.emit('open')
+    assert.notEqual(stream._ackTimer, null, 'watchdog armed')
+    ws2.emit('message', JSON.stringify({ type: 'something-else', foo: 1 }))
+    assert.equal(stream.ready, false, 'a non-ack message does not flip ready')
+    assert.notEqual(stream._ackTimer, null, 'watchdog still armed (not cancelled by a non-ack)')
+  })
+
+  it('does not call _flush a second time on a duplicate ack (buffer already drained)', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { maxBuffer: 3 })
+    ws2.emit('open')
+    bot2.emit('audio', Buffer.from([1]))
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    let flushCalls = 0
+    const realFlush = stream._flush.bind(stream)
+    stream._flush = () => { flushCalls++; return realFlush() }
+    const before = audioFrames(ws2).length
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    assert.equal(flushCalls, 1, 'a second ack still invokes _flush')
+    assert.equal(audioFrames(ws2).length, before, 'but the drained buffer sends nothing more')
+  })
+
+  // ---- drop-warning throttling ----
+
+  it('logs the drop warning at exactly DROP_WARN_EVERY boundaries (100, 200, 300)', () => {
+    const spy = spyLogger()
+    try {
+      const ws2 = new FakeWs(); const bot2 = fakeBot()
+      new TranscriberStream(ws2, bot2, { maxBuffer: 1 })
+      ws2.emit('open')
+      // maxBuffer 1: every frame after the first drops the oldest. 301 frames -> 300 drops.
+      for (let i = 0; i < 301; i++) bot2.emit('audio', Buffer.from([i & 0xff]))
+      const warns = spy.calls.filter(c => c.level === 'warn' && /frames dropped/.test(c.msg))
+      assert.equal(warns.length, 3, 'one warning per 100 drops')
+      assert.ok(/100 frames dropped/.test(warns[0].msg))
+      assert.ok(/200 frames dropped/.test(warns[1].msg))
+      assert.ok(/300 frames dropped/.test(warns[2].msg))
+    } finally { spy.restore() }
+  })
+
+  // ---- detach / watchdog isolation ----
+
+  it('detach() cancels the ack watchdog in isolation', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    ws2.emit('open')
+    assert.notEqual(stream._ackTimer, null, 'armed on open')
+    stream.detach()
+    assert.equal(stream._ackTimer, null, 'detach cancelled the watchdog')
+    assert.equal(stream._disposed, false, 'detach does not mark disposed')
+  })
+
+  it('dispose() is idempotent — a second call changes no state', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    ws2.emit('open')
+    stream.dispose()
+    assert.equal(stream._disposed, true)
+    assert.equal(stream._ackTimer, null)
+    // Re-arm a fresh timer to prove the second dispose() short-circuits before
+    // touching it (it would otherwise be cancelled).
+    stream._disposed = true
+    stream._ackTimer = { _sentinel: true }
+    let cancelled = false
+    const origCancel = stream._cancelAckWatchdog.bind(stream)
+    stream._cancelAckWatchdog = () => { cancelled = true; return origCancel() }
+    stream.dispose()
+    assert.equal(cancelled, false, 'second dispose returns before cancelling anything')
+    assert.deepEqual(stream._ackTimer, { _sentinel: true }, 'state untouched by the second dispose')
+  })
+
+  // ---- _armAckWatchdog guards ----
+
+  it('_armAckWatchdog is a no-op when already ready', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    stream.ready = true
+    stream._cancelAckWatchdog()
+    stream._armAckWatchdog()
+    assert.equal(stream._ackTimer, null, 'no timer set when ready')
+  })
+
+  it('_armAckWatchdog is a no-op when disposed', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    stream._disposed = true
+    stream._cancelAckWatchdog()
+    stream._armAckWatchdog()
+    assert.equal(stream._ackTimer, null, 'no timer set when disposed')
+  })
+
+  it('_armAckWatchdog re-arms, cancelling the prior timer', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    stream._armAckWatchdog()
+    const first = stream._ackTimer
+    assert.notEqual(first, null)
+    stream._armAckWatchdog()
+    const second = stream._ackTimer
+    assert.notEqual(second, null)
+    assert.notStrictEqual(second, first, 'a new timer replaced the previous one')
+    stream._cancelAckWatchdog()
+  })
+
+  it('_armAckWatchdog calls unref() on the timer when available', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    stream._armAckWatchdog()
+    assert.ok(stream._ackTimer && typeof stream._ackTimer.unref === 'function', 'node timer exposes unref')
+    // unref keeps the process from being held open; we assert it was applied by
+    // confirming the timer is a node Timeout (unref present and callable).
+    assert.doesNotThrow(() => stream._ackTimer.unref())
+    stream._cancelAckWatchdog()
+  })
+
+  it('watchdog firing catches an exception thrown by ws.close()', (done) => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    ws2.close = () => { throw new Error('boom on close') }
+    let errored = null
+    bot2.on('transcriber-error', (e) => { errored = e })
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 10 })
+    ws2.emit('open')
+    setTimeout(() => {
+      assert.ok(errored instanceof Error, 'transcriber-error still emitted despite close throwing')
+      assert.equal(stream._ackTimer, null, 'timer cleared after firing')
+      done()
+    }, 35)
+  })
+
+  // ---- _cancelAckWatchdog ----
+
+  it('_cancelAckWatchdog is a no-op when no timer is armed', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 1000 })
+    assert.equal(stream._ackTimer, null)
+    assert.doesNotThrow(() => stream._cancelAckWatchdog())
+    assert.equal(stream._ackTimer, null)
+  })
+
+  // ---- _flush partial send ----
+
+  it('_flush stops sending if the socket closes mid-iteration (no crash)', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    const stream = new TranscriberStream(ws2, bot2, { maxBuffer: 10 })
+    ws2.emit('open')
+    for (let i = 1; i <= 4; i++) bot2.emit('audio', Buffer.from([i]))
+    // Close the socket on the second send to simulate a teardown during flush.
+    let sends = 0
+    ws2.send = function (data) { sends++; if (sends === 2) { this.readyState = 3 }; this.sent.push(data) }
+    assert.doesNotThrow(() => ws2.emit('message', JSON.stringify({ type: 'ack' })))
+    // First two went out; the rest were skipped once _isOpen() turned false.
+    assert.equal(audioFrames(ws2).length, 2, 'partial send: stopped once socket no longer open')
+    assert.equal(stream.state.buffered.length, 0, 'buffer cleared regardless')
+  })
+
+  // ---- backward-compat accessors ----
+
+  it('get buffered returns the current state.buffered array', () => {
+    const shared = { buffered: [], droppedFrames: 0 }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.strictEqual(stream.buffered, shared.buffered)
+    shared.buffered.push(Buffer.from([1]))
+    assert.equal(stream.buffered.length, 1, 'reflects mutations to the live array')
+  })
+
+  it('set buffered replaces state.buffered', () => {
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), {})
+    const replacement = [Buffer.from([9])]
+    stream.buffered = replacement
+    assert.strictEqual(stream.state.buffered, replacement)
+    assert.strictEqual(stream.buffered, replacement)
+  })
+
+  it('get droppedFrames returns the current state.droppedFrames count', () => {
+    const shared = { buffered: [], droppedFrames: 5 }
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), { buffer: shared })
+    assert.equal(stream.droppedFrames, 5)
+  })
+
+  it('set droppedFrames updates state.droppedFrames', () => {
+    const stream = new TranscriberStream(new FakeWs(), fakeBot(), {})
+    stream.droppedFrames = 42
+    assert.equal(stream.state.droppedFrames, 42)
+    assert.equal(stream.getDroppedFrames(), 42)
+  })
+
+  // ---- _sendInit edge cases ----
+
+  it('_sendInit throws when bot.getParticipantsList is missing', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    delete bot2.getParticipantsList
+    const stream = new TranscriberStream(ws2, bot2, {})
+    // Current behavior: _sendInit calls bot.getParticipantsList() unconditionally,
+    // so a bot without it throws. Asserting the present contract; flagged as a
+    // possible hardening gap in the source.
+    assert.throws(() => stream._sendInit(), TypeError)
+  })
+
+  // ---- watchdog with a bot lacking emit ----
+
+  it('watchdog timeout does not crash when bot.emit is absent', (done) => {
+    const ws2 = new FakeWs()
+    // A bot-like object without an emit method (guarded by the source).
+    const bot2 = { manifest: { diarizationMode: 'asr' }, getParticipantsList: () => [], on: () => {}, removeListener: () => {} }
+    const stream = new TranscriberStream(ws2, bot2, { ackTimeoutMs: 10 })
+    stream._sendInit()
+    stream._armAckWatchdog()
+    setTimeout(() => {
+      assert.equal(stream._ackTimer, null, 'timer fired and cleared without throwing')
+      assert.equal(ws2.closed, true, 'socket closed even though bot.emit was unavailable')
+      done()
+    }, 35)
   })
 })

@@ -152,4 +152,146 @@ describe('SpeakerTracker (native diarization)', () => {
     assert.equal(t.currentSpeaker, null);
     assert.equal(t.lastKnownSpeaker, null);
   });
+
+  it('corrects every segment still within its grace window on a speaker change', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1); // u1 @ t=1000
+    ref.now = 1050;
+    t.assignSpeakerToSegment(2); // u1 @ t=1050
+    ref.now = 1100;
+    t.assignSpeakerToSegment(3); // u1 @ t=1100
+    // All three were assigned within 200ms of now; a speaker change should fix them all.
+    ref.now = 1150;
+    t.addSpeakerChange({ position: 150, speaker: { id: 'u2', name: 'Bob' } });
+    assert.equal(t.getSpeakerForSegment(1).id, 'u2', 'segment 1 corrected');
+    assert.equal(t.getSpeakerForSegment(2).id, 'u2', 'segment 2 corrected');
+    assert.equal(t.getSpeakerForSegment(3).id, 'u2', 'segment 3 corrected');
+  });
+
+  it('corrects a null (silence) assignment to the new speaker within grace', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    // No speaker yet: assign during silence -> speaker null.
+    t.assignSpeakerToSegment(1);
+    assert.equal(t.getSpeakerForSegment(1), null, 'assigned during silence');
+    ref.now = 1100; // within grace
+    t.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+    assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'silence corrected to first speaker');
+    // The correction must be recorded (before was null, after non-null).
+    const events = t.getRecentEvents();
+    const correct = events.find(e => e.action === 'correct' && e.position === 1);
+    assert.ok(correct, 'null->non-null correction recorded');
+    assert.equal(correct.speaker.id, 'u1');
+  });
+
+  it('corrects the same segment more than once while it stays within grace', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1); // u1 @ t=1000
+    ref.now = 1050; // still within grace
+    t.addSpeakerChange({ position: 50, speaker: { id: 'u2', name: 'Bob' } });
+    assert.equal(t.getSpeakerForSegment(1).id, 'u2', 'first correction');
+    ref.now = 1150; // still within grace of the original assignedAt (1000)
+    t.addSpeakerChange({ position: 150, speaker: { id: 'u3', name: 'Carol' } });
+    assert.equal(t.getSpeakerForSegment(1).id, 'u3', 'second correction within grace');
+  });
+
+  it('_presentSpeaker returns a rejoined participant (in departed Set and participants Map)', () => {
+    const t = new SpeakerTracker();
+    t.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
+    t.updateParticipant({ action: 'leave', participant: { id: 'u1' } });
+    assert.ok(t.departed.has('u1'), 'recorded as departed');
+    // Simulate a reordered event where the id is still in departed but the
+    // participant is present again in the Map (rejoin).
+    t.participants.set('u1', { id: 'u1', name: 'Alice' });
+    const speaker = t._presentSpeaker({ id: 'u1', name: 'Alice' });
+    assert.ok(speaker, 'rejoined participant is surfaced');
+    assert.equal(speaker.id, 'u1');
+  });
+
+  it('does not record an event when a speaker change matches the current segment speaker', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1); // assign -> u1 (1 event)
+    ref.now = 1100; // within grace
+    // Same speaker arrives again: entry.speaker is reassigned but no correction event.
+    t.addSpeakerChange({ position: 100, speaker: { id: 'u1', name: 'Alice' } });
+    const events = t.getRecentEvents();
+    assert.equal(events.length, 1, 'no correction event for an identical speaker');
+    assert.equal(events[0].action, 'assign');
+    assert.equal(t.getSpeakerForSegment(1).id, 'u1');
+  });
+
+  it('getSpeakerForSegment returns null for an unknown segmentId', () => {
+    const t = new SpeakerTracker();
+    assert.equal(t.getSpeakerForSegment(424242), null);
+    assert.equal(t.getSpeakerForSegment('nope'), null);
+  });
+
+  it('clearSegment on an unknown segmentId is a safe idempotent no-op', () => {
+    const t = new SpeakerTracker();
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1);
+    assert.doesNotThrow(() => t.clearSegment(999));
+    assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'other segments untouched');
+    // Idempotent: clearing the same id twice is fine.
+    t.clearSegment(1);
+    assert.doesNotThrow(() => t.clearSegment(1));
+    assert.equal(t.getSpeakerForSegment(1), null);
+  });
+
+  it('constructor uses defaults when options is null/undefined or empty', () => {
+    const tNull = new SpeakerTracker(undefined);
+    assert.equal(tNull.gracePeriodMs, 200, 'default grace period');
+    assert.equal(tNull.eventRingSize, 50, 'default ring size');
+    assert.ok(tNull.participants instanceof Map);
+    assert.ok(tNull.departed instanceof Set);
+    assert.equal(tNull.currentSpeaker, null);
+    assert.equal(tNull.lastKnownSpeaker, null);
+    assert.deepEqual(tNull.getRecentEvents(), []);
+    // Empty options object behaves identically.
+    const tEmpty = new SpeakerTracker({});
+    assert.equal(tEmpty.gracePeriodMs, 200);
+    assert.equal(tEmpty.eventRingSize, 50);
+  });
+
+  it('honours explicit zero-valued options (eventRingSize: 0, gracePeriodMs: 0)', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { eventRingSize: 0, gracePeriodMs: 0 });
+    assert.equal(t.eventRingSize, 0, '0 is respected, not replaced by default');
+    assert.equal(t.gracePeriodMs, 0);
+    // With ring size 0 every push is immediately dropped -> ring stays empty.
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1);
+    assert.deepEqual(t.getRecentEvents(), [], 'eventRingSize 0 keeps no events');
+    // With grace 0, a later speaker change cannot correct (now - assignedAt = 0, not < 0).
+    t.addSpeakerChange({ position: 1, speaker: { id: 'u2', name: 'Bob' } });
+    assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'grace 0 -> no correction');
+  });
+
+  it('keeps only the most recent event with eventRingSize 1', () => {
+    const t = new SpeakerTracker({ eventRingSize: 1 });
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    t.assignSpeakerToSegment(1);
+    t.assignSpeakerToSegment(2);
+    const events = t.getRecentEvents();
+    assert.equal(events.length, 1, 'ring of size 1 holds a single event');
+    assert.equal(events[0].position, 2, 'keeps the most recent');
+  });
+
+  it('records events for string and object segmentIds in the position field', () => {
+    const t = new SpeakerTracker();
+    t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+    const objId = { ch: 'a', n: 7 };
+    t.assignSpeakerToSegment('seg-abc');
+    t.assignSpeakerToSegment(objId);
+    assert.equal(t.getSpeakerForSegment('seg-abc').id, 'u1', 'string id round-trips');
+    assert.equal(t.getSpeakerForSegment(objId).id, 'u1', 'object id round-trips by reference');
+    const events = t.getRecentEvents();
+    assert.deepEqual(events.map(e => e.position), ['seg-abc', objId], 'position preserves non-numeric ids');
+  });
 });

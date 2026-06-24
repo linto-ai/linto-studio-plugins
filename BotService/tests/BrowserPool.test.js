@@ -213,4 +213,172 @@ describe('BrowserPool', () => {
       await pool.destroy()
     })
   })
+
+  describe('guards and idempotency', () => {
+    const stub = require.cache[require.resolve('playwright')].exports.chromium
+    let realLaunch
+    beforeEach(() => { realLaunch = stub.launch })
+    afterEach(() => { stub.launch = realLaunch })
+
+    it('_ensureBrowser short-circuits when the browser is already connected', async () => {
+      await pool.init()
+      assert.equal(launchCount, 1)
+      const first = pool.browser
+      // A second _ensureBrowser() must return the SAME live browser without
+      // launching again and without going through the in-flight launch promise.
+      const again = await pool._ensureBrowser()
+      assert.strictEqual(again, first, 'returns the existing connected browser')
+      assert.equal(launchCount, 1, 'no extra launch when already connected')
+    })
+
+    it('replaces an existing context when createContext is called with a live id', async () => {
+      await pool.init()
+      const first = await pool.createContext('dup')
+      assert.ok(first && first.context)
+      const firstContext = first.context
+      let closed = false
+      // Observe that the OLD context is closed when the id is reused.
+      const realClose = firstContext.close
+      firstContext.close = async () => { closed = true; return realClose.call(firstContext) }
+
+      const second = await pool.createContext('dup')
+      assert.ok(second && second.context, 'a fresh context is created for the reused id')
+      assert.equal(closed, true, 'the previous context for the id was destroyed first')
+      assert.notStrictEqual(second.context, firstContext, 'the entry is a brand-new context')
+      assert.equal(pool.getActiveCount(), 1, 'the reused id still counts as a single context')
+      assert.strictEqual(pool.contexts.get('dup').context, second.context, 'the map points at the new context')
+    })
+
+    it("the 'disconnected' listener ignores a stale browser reference", async () => {
+      await pool.createContext('a')
+      const staleBrowser = currentBrowser // captured by the disconnect listener
+      assert.equal(pool.getActiveCount(), 1)
+
+      // Force a relaunch by simulating a crash, so a NEW browser becomes current.
+      staleBrowser._disconnect()
+      assert.equal(pool.browser, null)
+      const r = await pool.createContext('b')
+      assert.ok(r && r.page)
+      const liveBrowser = pool.browser
+      assert.notStrictEqual(liveBrowser, staleBrowser)
+      assert.equal(pool.getActiveCount(), 1)
+
+      // The STALE browser fires 'disconnected' again (e.g. delayed teardown). Its
+      // listener must see this.browser !== browser and do nothing: it must not
+      // null out the live browser nor clear the live contexts.
+      staleBrowser._disconnect()
+      assert.strictEqual(pool.browser, liveBrowser, 'live browser untouched by a stale disconnect')
+      assert.equal(pool.getActiveCount(), 1, 'live contexts untouched by a stale disconnect')
+    })
+
+    it('cleans up and releases the reservation when newPage() fails', async () => {
+      await pool.init()
+      let contextClosed = false
+      const goodNewContext = currentBrowser.newContext
+      currentBrowser.newContext = async () => ({
+        close: async () => { contextClosed = true },
+        // newPage rejects: createContext must close the just-created context and
+        // release the reserved slot, leaving no entry behind.
+        newPage: async () => { throw new Error('newPage boom') }
+      })
+
+      const failed = await pool.createContext('a')
+      assert.equal(failed, null)
+      assert.equal(contextClosed, true, 'the orphaned context was closed after newPage failed')
+      assert.equal(pool.contexts.has('a'), false, 'no stale entry after newPage failure')
+      assert.equal(pool.reserved, 0, 'reservation released after newPage failure')
+
+      // The slot is reusable.
+      currentBrowser.newContext = goodNewContext
+      const ok = await pool.createContext('a')
+      assert.ok(ok && ok.page)
+      assert.equal(pool.getActiveCount(), 1)
+    })
+
+    it('destroyContext swallows a page.close() exception and still drops the entry', async () => {
+      await pool.init()
+      const r = await pool.createContext('a')
+      r.page.close = async () => { throw new Error('page close boom') }
+      let contextClosed = false
+      const realCtxClose = r.context.close
+      r.context.close = async () => { contextClosed = true; return realCtxClose.call(r.context) }
+
+      // Must not re-throw even though page.close() rejects, and must still close
+      // the context and remove the entry.
+      await pool.destroyContext('a')
+      assert.equal(pool.contexts.has('a'), false, 'entry removed despite page.close failure')
+      assert.equal(contextClosed, true, 'context.close still attempted after page.close threw')
+      assert.equal(pool.getActiveCount(), 0)
+    })
+
+    it('destroyContext swallows a context.close() exception and still drops the entry', async () => {
+      await pool.init()
+      const r = await pool.createContext('a')
+      r.context.close = async () => { throw new Error('context close boom') }
+
+      await pool.destroyContext('a') // must not re-throw
+      assert.equal(pool.contexts.has('a'), false, 'entry removed despite context.close failure')
+      assert.equal(pool.getActiveCount(), 0)
+    })
+
+    it('destroy() swallows a browser.close() exception', async () => {
+      await pool.createContext('a')
+      pool.browser.close = async () => { throw new Error('browser close boom') }
+      await pool.destroy() // must not re-throw
+      assert.equal(pool.browser, null, 'browser reference cleared even though close threw')
+      assert.equal(pool.getActiveCount(), 0)
+    })
+
+    it('destroy() swallows an in-flight launch rejection', async () => {
+      // A launch is in flight and will reject AFTER destroy() starts awaiting it.
+      // destroy() awaits this.launching inside a try/catch and must not re-throw.
+      stub.launch = async () => { throw new Error('launch rejects late') }
+      const creating = pool.createContext('a') // kicks off the failing launch
+      await pool.destroy() // awaits this.launching, which rejects — must be swallowed
+      await creating.catch(() => {})
+      assert.equal(pool.browser, null)
+      assert.equal(pool.destroyed, false, 'destroyed flag cleared even on launch rejection')
+    })
+
+    it('is reusable after destroy(): a new cycle of contexts works', async () => {
+      await pool.createContext('a')
+      await pool.createContext('b')
+      assert.equal(pool.getActiveCount(), 2)
+      await pool.destroy()
+      assert.equal(pool.getActiveCount(), 0)
+      assert.equal(pool.destroyed, false, 'destroyed flag cleared for reuse')
+
+      // Second cycle: createContext must succeed (not be refused as destroyed) and
+      // relaunch a fresh browser since destroy() closed the previous one.
+      const r1 = await pool.createContext('c')
+      const r2 = await pool.createContext('d')
+      assert.ok(r1 && r1.page && r2 && r2.page)
+      assert.equal(pool.getActiveCount(), 2)
+      assert.equal(launchCount, 2, 'a fresh browser was launched for the new cycle')
+    })
+
+    it('handles concurrent destroyContext() calls on the same id without a race', async () => {
+      await pool.init()
+      await pool.createContext('a')
+      assert.equal(pool.getActiveCount(), 1)
+      // Two teardown calls race (e.g. an explicit destroy plus a crash handler).
+      // The entry is deleted synchronously before the first await, so only one
+      // call ever sees an entry; both resolve without throwing and the count is 0.
+      await Promise.all([pool.destroyContext('a'), pool.destroyContext('a')])
+      assert.equal(pool.getActiveCount(), 0)
+      assert.equal(pool.contexts.has('a'), false)
+    })
+
+    it('handles concurrent destroyContext() across ids during a browser crash', async () => {
+      await pool.createContext('a')
+      await pool.createContext('b')
+      await pool.createContext('c')
+      assert.equal(pool.getActiveCount(), 3)
+      // Tear all contexts down concurrently (as a crash cleanup would) — every
+      // call must complete without a race corrupting the map.
+      await Promise.all(['a', 'b', 'c'].map(id => pool.destroyContext(id)))
+      assert.equal(pool.getActiveCount(), 0)
+      assert.equal(pool.contexts.size, 0)
+    })
+  })
 })

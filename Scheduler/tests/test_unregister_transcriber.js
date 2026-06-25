@@ -23,6 +23,8 @@ describe('BrokerClient.unregisterTranscriber()', () => {
         const model = buildModel({
             Session: {
                 findAll: async () => [pausedSession],
+                // The downgrade now happens on the row-locked instance.
+                findByPk: async () => pausedSession,
                 update: async () => [0, []],
             },
             Channel: {
@@ -77,6 +79,7 @@ describe('BrokerClient.unregisterTranscriber()', () => {
         const model = buildModel({
             Session: {
                 findAll: async () => [readySession],
+                findByPk: async () => readySession,
                 update: async () => [0, []],
             },
             Channel: {

@@ -45,7 +45,8 @@ class BrokerClient extends Component {
     setInterval(async () => {
       const autoStartUpdated = await this.autoStart();
       const autoEndUpdated = await this.autoEnd();
-      if (autoStartUpdated || autoEndUpdated) {
+      const reconciled = await this.reconcileStuckSessions();
+      if (autoStartUpdated || autoEndUpdated || reconciled) {
         await this.publishSessions();
       }
     }, 60 * 1000);
@@ -162,6 +163,67 @@ class BrokerClient extends Component {
     }
 
     return isUpdated;
+  }
+
+  // Safety net (defense-in-depth) for the cross-channel session-status race: if
+  // the inline updateSession lock ever fails to flip a session to 'ready' (a
+  // transaction error, or a future multi-replica Scheduler), this idempotent
+  // reconciler heals any session left 'active' with zero active channels. Runs on
+  // the 60s tick. Conservative on purpose: it only touches sessions quiet long
+  // enough that no activation can be in flight, and re-checks under a row lock
+  // before writing. 'ready' is non-terminal, so a later stream re-activates it.
+  async reconcileStuckSessions() {
+    const QUIET_MS = 45 * 1000;
+    let healed = false;
+    let candidates;
+    try {
+      candidates = await Model.Session.findAll({
+        where: { status: 'active' },
+        attributes: ['id'],
+      });
+    } catch (error) {
+      logger.error(`Reconciler failed to list active sessions: ${error?.message || error}`);
+      return false;
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const channels = await Model.Channel.findAll({
+          where: { sessionId: candidate.id },
+          attributes: ['streamStatus', 'transcriberId', 'updatedAt'],
+        });
+        const anyActive = channels.some(c => c.streamStatus === 'active');
+        const anyOwner = channels.some(c => c.transcriberId !== null && c.transcriberId !== undefined);
+        const lastTouch = channels.reduce(
+          (max, c) => Math.max(max, c.updatedAt ? new Date(c.updatedAt).getTime() : 0), 0);
+        // Heal only when provably idle: no active channel, no owning transcriber,
+        // and quiet for longer than any activation handshake. lastTouch===0 (no
+        // usable timestamp) means "don't know" -> skip, never heal blindly.
+        if (anyActive || anyOwner || lastTouch === 0 || (Date.now() - lastTouch) < QUIET_MS) continue;
+
+        await Model.sequelize.transaction(async (t) => {
+          const locked = await Model.Session.findByPk(candidate.id, {
+            lock: t.LOCK.UPDATE,
+            transaction: t,
+          });
+          if (!locked || locked.status !== 'active') return;
+          const activeCount = await Model.Channel.count({
+            where: { sessionId: candidate.id, streamStatus: 'active' },
+            transaction: t,
+          });
+          if (activeCount === 0) {
+            locked.status = 'ready';
+            await locked.save({ transaction: t });
+            healed = true;
+            const quietS = Math.round((Date.now() - lastTouch) / 1000);
+            logger.warn(`Reconciler healed stuck-active session ${candidate.id} -> ready (0 active channels, quiet ${quietS}s)`);
+          }
+        });
+      } catch (error) {
+        logger.error(`Reconciler failed for session ${candidate.id}: ${error?.message || error}`);
+      }
+    }
+    return healed;
   }
 
   // ###### BOT ROUTING (to the dedicated BotService) ######
@@ -442,26 +504,34 @@ class BrokerClient extends Component {
         }]
       });
 
-      // Check each session for active channels and update status if necessary
+      // Check each session for active channels and update status if necessary.
+      // Same cross-channel race as updateSession: a concurrent updateSession for
+      // a sibling channel could make a plain count-then-save miss the deactivation.
+      // Lock the session row, recount under the lock, then decide — so the count
+      // reflects committed sibling writes.
       for (const session of affectedSessions) {
-        const activeChannelsCount = await Model.Channel.count({
-          where: {
-            sessionId: session.id,
-            streamStatus: 'active'
+        await Model.sequelize.transaction(async (t) => {
+          const locked = await Model.Session.findByPk(session.id, {
+            lock: t.LOCK.UPDATE,
+            transaction: t,
+          });
+          if (!locked || locked.status === 'terminated') return; // 'terminated' is sticky
+          const activeChannelsCount = await Model.Channel.count({
+            where: { sessionId: locked.id, streamStatus: 'active' },
+            transaction: t,
+          });
+          if (activeChannelsCount === 0 && (locked.status === 'active' || locked.status === 'paused')) {
+            if (locked.status === 'paused') {
+              logger.warn(`Paused session ${locked.id} downgraded to 'ready': transcriber ${transcriber.uniqueId} disconnected`);
+              // pausedAt only has meaning while status='paused'; clear it on
+              // downgrade so REST consumers don't see the ambiguous combination
+              // (status='ready', pausedAt=<date>).
+              locked.pausedAt = null;
+            }
+            locked.status = 'ready';
+            await locked.save({ transaction: t });
           }
         });
-
-        if (activeChannelsCount === 0) {
-          if (session.status === 'paused') {
-            logger.warn(`Paused session ${session.id} downgraded to 'ready': transcriber ${transcriber.uniqueId} disconnected`);
-            // pausedAt only has meaning while status='paused'; clear it on
-            // downgrade so REST consumers don't see the ambiguous combination
-            // (status='ready', pausedAt=<date>).
-            session.pausedAt = null;
-          }
-          session.status = 'ready';
-          await session.save();
-        }
       }
 
       logger.debug(`Transcriber ${transcriber.uniqueId} DOWN`);
@@ -495,6 +565,24 @@ class BrokerClient extends Component {
     const transaction = await Model.sequelize.transaction();
 
     try {
+      // Pessimistic row lock on the session, taken BEFORE the channel write.
+      // Sibling-channel updateSession transactions of the SAME session serialize
+      // on this single row, so each one runs its active-channel COUNT(*) below
+      // only after the previous sibling has committed its 'inactive' write. Under
+      // READ COMMITTED (the model sets no isolationLevel) the COUNT then sees the
+      // committed sibling statuses, so the LAST deactivation observes count=0 and
+      // flips the session to 'ready'. Without it, all siblings' COUNT run on
+      // pre-commit snapshots, none sees 0, and the session stays 'active' forever.
+      const lockedSession = await Model.Session.findByPk(sessionId, {
+        lock: transaction.LOCK.UPDATE, // SELECT ... FOR UPDATE
+        transaction,
+      });
+      if (!lockedSession) {
+        // Session deleted in the meantime: nothing to recompute.
+        await transaction.commit();
+        return;
+      }
+
       let newTranscriberId = null;
       if (newStreamStatus === 'active') {
         newTranscriberId = transcriberId;

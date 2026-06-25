@@ -16,7 +16,13 @@ describe('BrokerClient.updateSession()', () => {
         const model = buildModel({
             Session: {
                 findAll: async () => [],
-                findByPk: async () => null,
+                // updateSession now takes a pessimistic row lock first; record the
+                // call so we can assert the lock + ordering, and return a session
+                // so the flow proceeds to the channel/session updates.
+                findByPk: async (id, options) => {
+                    updateCalls.push({ table: 'Session.findByPk', id, options });
+                    return { id, status: 'active' };
+                },
                 update: async (values, options) => {
                     updateCalls.push({ table: 'Session', values, options });
                     return [1, []];
@@ -44,6 +50,18 @@ describe('BrokerClient.updateSession()', () => {
     it('issues an UPDATE on the Session table', () => {
         const sessionUpdate = updateCalls.find(c => c.table === 'Session');
         assert.ok(sessionUpdate, 'expected Session.update to be called');
+    });
+
+    it('takes a FOR UPDATE row lock on the session before writing the channel', () => {
+        const lockIdx = updateCalls.findIndex(c => c.table === 'Session.findByPk');
+        const channelIdx = updateCalls.findIndex(c => c.table === 'Channel');
+        assert.ok(lockIdx !== -1, 'expected Session.findByPk to be called');
+        const lockCall = updateCalls[lockIdx];
+        assert.ok(lockCall.options && lockCall.options.lock,
+            'findByPk should be called with a lock option (SELECT ... FOR UPDATE)');
+        assert.strictEqual(lockCall.options.lock, 'UPDATE', 'lock should be LOCK.UPDATE');
+        assert.ok(lockCall.options.transaction, 'lock must run inside the transaction');
+        assert.ok(lockIdx < channelIdx, 'the lock must be acquired BEFORE the channel update');
     });
 
     it('uses a CASE expression that short-circuits when status = paused', () => {

@@ -75,15 +75,20 @@ function buildModel(overrides = {}) {
     // Default no-op stubs; tests override per-method to assert call args or
     // inject return values. Update returns Sequelize's [count, rows] shape.
     const noop = async () => [0, []];
+    // Mirror Sequelize's Transaction.LOCK enum so code that passes
+    // { lock: transaction.LOCK.UPDATE } to findByPk works under the mock.
+    const LOCK = { UPDATE: 'UPDATE', SHARE: 'SHARE', NO_KEY_UPDATE: 'NO KEY UPDATE', KEY_SHARE: 'KEY SHARE' };
+    const makeTx = () => ({ commit: async () => {}, rollback: async () => {}, LOCK });
     const sequelize = {
         // Pass-through transaction wrapper: BrokerClient calls
-        // Model.sequelize.transaction(async (t) => { ... }). Real impl returns
-        // a transaction object the callback receives. We just invoke the cb.
+        // Model.sequelize.transaction(async (t) => { ... }) (managed) or
+        // Model.sequelize.transaction() (unmanaged). Real impl returns a
+        // transaction object the callback receives / the caller awaits.
         transaction: async (cb) => {
             if (typeof cb === 'function') {
-                return cb({ commit: async () => {}, rollback: async () => {} });
+                return cb(makeTx());
             }
-            return { commit: async () => {}, rollback: async () => {} };
+            return makeTx();
         },
         literal: (sql) => ({ __literal: sql }),
         escape: (val) => `'${val}'`,

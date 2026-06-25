@@ -1,25 +1,70 @@
 # 1.5.0
 
-_2026_05_07_
+_2026_06_25_
 
-## Features
-
-- API: Add `PUT /v1/sessions/:id/pause` and `PUT /v1/sessions/:id/resume` endpoints to temporarily suspend ASR while keeping the audio stream alive
-- API: Add `pausedAt` field on Session resource
-- MQTT: Publish `system/out/sessions/paused` and `system/out/sessions/resumed` events on transitions
-- Database: Add `paused` value to session status enum + new `pausedAt` column
-
-## Bug fixes
-
-- Lib: Fix CircularBuffer wrap-around bug (subarray was receiving Uint8Array instead of integer indices)
-- Transcriber: Microsoft ASR clears `_startupTimeout` in `stop()` to prevent spurious STARTUP_TIMEOUT events 15s after pause
-- Transcriber: Microsoft ASR resets `recognizers` and `pushStreams` arrays before awaiting `stopRecognizer` to close the race window with concurrent `transcribe()` calls
-- Transcriber: Amazon ASR guards `reconnect()` against `_stopping` state
-
-## Security
-
-- Session-API: PATCH /sessions/:id now uses an attribute whitelist, preventing direct status manipulation through the generic update endpoint
-- Session-API: DELETE /sessions/:id refuses paused sessions without `force=true` (was only refusing active)
+- BotService (new dedicated meeting-bot microservice)
+  - The meeting bot, previously embedded in the Transcriber, now runs as its own horizontally-scalable service; bots arrive as a normal WS audio stream (the embedded puppeteer-stream bot and the bundled chromium download were removed from the Transcriber image)
+  - New `visio` (LinTO Meet / LiveKit SFU, joins as guest) and `teams` (Microsoft Teams web client) bot providers — `bots.provider` enum extended + migration; the stale `youtube` value was dropped
+  - One shared headless Chromium per replica, one isolated browser context per bot (`BrowserPool`: hard concurrency cap, lazy launch, crash auto-restart)
+  - Per-platform manifests validated against an allowlist; declarative Playwright login rules; `{{botName}}` templating; participant join/leave tracking with an empty-meeting auto-leave timer
+  - In-page WebRTC interception (RTCPeerConnection patch + AudioWorklet capture, resampled to 16 kHz): SFU per-participant tracks feed native diarization; Teams uses the single server-mixed track with page-polled speaker changes
+  - `AudioMixer`: per-participant S16LE 16 kHz mixing in 20 ms frames with energy-VAD dominant-speaker detection
+  - Broker contract: advertises capabilities + active-bot load to the Scheduler (`status` + 15 s heartbeat); handles targeted `startbot`/`stopbot`
+  - `TranscriberStream` bridge over the existing WS ingest protocol (init/ack handshake, ACK-gated buffering, speaker forwarding); survives a transient Transcriber reconnect (bounded backoff + ordered buffer replay) without losing audio
+  - Healthcheck component + Docker `HEALTHCHECK` reporting `{status, activeBots, browserConnected, audioServerListening}`
+  - Resilience: init-ack watchdog + early-audio reaper, `BrowserPool.destroy()` cancels in-flight launches, concurrency-safe context creation, loopback-WS resync replays the participant mapping after a Node audio-server restart (fixes silent first words)
+  - Capacity & observability: heartbeat carries process RSS/heapUsed + lifecycle metrics; a memory ceiling (`BOTSERVICE_MAX_RSS_MB`) sheds load under pressure; fatal bot failures publish `botservice/out/<id>/bot-error`
+  - Wired into the dev compose and the CI image build (+ staging deploy stage); 7 code-only tunables documented in `.envdefault(.docker)`
+- Native diarization (meeting-provided speakers)
+  - Transcriber WS ingest accepts native-diarization control messages (`speakerChanged`/`participant`) interleaved with PCM; a new `SpeakerTracker` stamps each ASR segment with the meeting-provided speaker, with a short grace window to absorb the ASR-partial-vs-bot-event race
+  - Robust inline-JSON-vs-audio splitting: a PCM frame that coincidentally looks like JSON falls through to audio, so no frame is dropped
+  - Teams diarization fallback: on repeated control-poll misses the bot emits `diarizationDegraded` and falls back to ASR diarization instead of silently producing no speaker
+- Session pause / resume
+  - Add `PUT /v1/sessions/:id/pause` and `PUT /v1/sessions/:id/resume` (atomic transitions) to suspend ASR while keeping the audio stream alive; new `pausedAt` field on the Session resource
+  - Publish `system/out/sessions/paused` and `system/out/sessions/resumed` MQTT events on transitions
+  - Add `paused` value to the session status enum + new `pausedAt` column (migration)
+  - Transcriber detects pause/resume from the retained status snapshot and drives ASR pause/resume with serialized transitions
+  - Scheduler preserves a user-initiated pause across channel-driven recomputes and disconnects, and clears `pausedAt` when a lost transcriber forces a paused session back to `ready`
+- Audio-only sessions (no transcriber profile)
+  - Sessions/channels can run without a transcriber profile to capture audio only (e.g. for a later offline-transcription pipeline); the `-1` sentinel was replaced by `null`
+  - Audio-only channels force uncompressed (WAV) audio at every creation site; re-assigning a real profile restores live transcription
+- New ASR provider: Google Cloud Speech-to-Text
+  - Streaming v1 provider (LINEAR16 16 kHz, service-account auth, multi-language, optional diarization, automatic stream restart around the 5-minute limit)
+  - Session-API: `google` profile validation branch + self-contained `hasDiarization` (carried in the profile, no deployment env var) + Swagger enum/fields
+- Transcriber reliability
+  - Voxtral: drop the mid-session `input_audio_buffer.commit` that could freeze a stream ~10s at a RoPE re-anchor
+  - Fix diarization + translation dual-recognizer mode producing an empty saved transcript — the primary is now a ConversationTranscriber that carries `speakerId`, and explicit primary/secondary origin-tagging replaces the fragile modulo-2 counter
+  - Flush in-flight ASR finals before the end-of-stream marker on stop (bounded by timeout), so a reader after stop is guaranteed to see every caption
+  - Epoch-isolate Amazon and Microsoft reconnects across `stop()`+`start()`; guard the Amazon reconnect against the stopping state
+  - Microsoft ASR: fix the `startupTimeout` leak/race, stop emitting `closed` from the constructor, drop dead `pushStream` properties, set `CLOSED` synchronously after `pause()`, enrich STARTUP_TIMEOUT diagnostics
+  - Never stamp a caption with a departed speaker; stop the `speakerTrackers` map from leaking; fix the startup race with an already-retained scheduler/status snapshot
+  - BrokerClient keeps paused sessions across a transient snapshot loss
+- Scheduler reliability
+  - Fix a cross-channel session-status race that left a session stuck `active` with all channels inactive (real prod incident): take a `SELECT … FOR UPDATE` lock on the session row to serialize sibling-channel deactivations (also applied to `unregisterTranscriber`)
+  - Serialize per-channel caption/translation/status persistence to match MQTT commit order, turning the end-of-stream marker and the `inactive` deactivate into true read barriers
+  - Durable bot ownership: persist the owning BotService replica on the Bot row (survives a Scheduler restart) + reap orphaned Bot rows when a replica goes offline; weight bot routing by reported memory, not just active-bot count
+- Session-API
+  - Add `PUT /sessions/:id/stop?waitFinal=true` drain barrier: waits (bounded by `SESSION_STOP_FLUSH_TIMEOUT_MS`) until every channel is deactivated by its transcriber before returning; the non-opt-in path keeps the legacy immediate behaviour
+  - Add `PUT /sessions/:id/clear` to wipe captions mid-session (small talk / equipment checks) without stopping; resets `lastSegmentId` and emits `system/out/sessions/cleared`
+  - Always return 4xx errors as JSON `{error}`; require `force` to stop a paused session; apply the PATCH attribute whitelist to `PUT /sessions/:id`
+  - Swagger: shared `ErrorResponse` schema, `operationId`s and accurate 4xx shapes
+  - Publish `organizationId` and `visibility` in session broker messages
+- Security
+  - Session-API: SSRF guard on the meeting-bot URL — reject non-http(s) schemes and reserved/private/loopback/link-local hosts (IPv4 + IPv6) before creating a bot
+  - Session-API: PATCH attribute whitelist (no direct status manipulation through the generic update endpoint); DELETE refuses paused sessions without `force=true` (previously only refused `active`)
+  - Lib: new `enc:v2` HMAC-authenticated encryption format with deterministic wrong-key/tamper detection (removes the ~1/256 silent-garbage path), keeping `enc:v1` and legacy blobs readable; explicit `SECURITY_CRYPT_KEY` mismatch error
+  - Harden inbound MQTT payload parsing in the Scheduler and Transcriber (skip empty/malformed messages instead of crashing the handler)
+  - Transcriber: redact decrypted ASR provider keys from error logs
+  - BotService: sanitize participant id/name in-page (defeats ANSI/newline log + caption-DB injection)
+- Observability
+  - Throttled, hot-loop-safe diagnostics on the previously-silent data paths: AudioMixer per-participant dropped-samples, TranscriberStream pre-ack dropped-frames, a bounded ring of recent SpeakerTracker assignment/grace events, and warnings on rejected MQTT control messages
+- Bug fixes
+  - Lib: fix CircularBuffer wrap-around corruption (`subarray` received a Uint8Array instead of integer indices); clamp oversize packets to the trailing N bytes instead of throwing `RangeError`
+- Tests, CI and docs
+  - New Mocha unit-test infrastructure across Transcriber, Session-API, Scheduler and BotService; `make test-all` / `test-unit*` targets; BotService unit tests run in CI
+  - Containerized integration harness (strict `-euo pipefail`, fast-vs-slow split, single unified suite) with new scenarios: pause/resume (RTMP, WS, Microsoft; TCP vs UDP), native-diarization bot ingest, the real bot capture path, bot distribution across BotService replicas, and transcriber failover (scenario 16 + `docker-compose.failover.yml`)
+  - CI: build the BotService image, add `staging/*` deploy stages, redeploy preprod on latest-unstable, move deploy SSH host/user to Jenkins credentials, skip the latest-unstable rebuild on CI/docs-only commits
+  - Docs: `doc/production-topology.md` (Transcriber LB topology + failover), `doc/streaming-protocols.md` (TCP vs UDP pause/resume semantics), `MIGRATION.md`, pause/resume in the README and developer docs, and the BotService tunables
 
 # 1.4.1
 

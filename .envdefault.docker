@@ -16,6 +16,13 @@ EMPTY_MEETING_TIMEOUT_SECONDS=60
 BOT_DISPLAY_NAME=LinTO Bot
 STREAMING_WS_BOT_HOST=transcriber
 BOTSERVICE_HEALTHCHECK_HTTP=8080
+# JOIN_TIMEOUT_SECONDS=120 # leave if no participant is seen this long after join
+# AUDIO_SILENCE_TIMEOUT_SECONDS=30 # tear down if no PCM for this long after admission (0 = disabled)
+# EARLY_AUDIO_MAX_AGE_SECONDS=30 # max age of buffered early (SFU) audio before the reaper drops it
+# TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init ack before failing the handshake
+# BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling: above it advertise capabilities=[] and refuse bots (0 = disabled)
+# BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up
+# BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

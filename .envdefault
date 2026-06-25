@@ -28,6 +28,13 @@ BOT_DISPLAY_NAME=LinTO Bot # name the bot shows when joining a meeting
 # Internal host a BotService bot uses to reach a Transcriber WS ingest (used by the
 # Scheduler to mint the websocketUrl). Defaults to the 'transcriber' compose service.
 STREAMING_WS_BOT_HOST=transcriber
+# JOIN_TIMEOUT_SECONDS=120 # leave if no participant is seen this long after join (absolute watchdog)
+# AUDIO_SILENCE_TIMEOUT_SECONDS=30 # tear down if no PCM arrives for this long after admission (0 = disabled)
+# EARLY_AUDIO_MAX_AGE_SECONDS=30 # max age of buffered early (SFU) audio before the reaper drops it
+# TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init {type:ack} before failing the handshake
+# BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling: above it the replica advertises capabilities=[] and refuses bots (0 = disabled)
+# BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up (fatal)
+# BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

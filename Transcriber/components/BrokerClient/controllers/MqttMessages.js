@@ -1,5 +1,20 @@
 const logger = require('../../../logger')
 
+// Defensive JSON parse for inbound MQTT payloads. A retained topic can be cleared
+// with an empty payload, and a misbehaving publisher can send malformed JSON;
+// either would otherwise throw out of this async message handler and crash the
+// Transcriber. Return null (and log) instead so the offending message is skipped.
+function parsePayload(message, label) {
+  const raw = message.toString().trim()
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch (err) {
+    logger.warn(`Ignoring malformed JSON on ${label}: ${err.message}`)
+    return null
+  }
+}
+
 // Handler for 'scheduler' messages
 function handleSchedulerMessage(scheduler) {
   // Always record the latest scheduler online state so maybeStartServers()
@@ -26,15 +41,13 @@ function handleSystemMessage(parts, message) {
   if (direction === 'out' && systemType === 'sessions') {
     const action = systemParts.join('/');
     if (action === 'statuses') {
-      const sessions = JSON.parse(message);
+      const sessions = parsePayload(message, 'system/out/sessions/statuses');
+      if (!sessions) return;
       this.handleSessions(sessions);
     } else if (action === 'cleared') {
-      try {
-        const payload = JSON.parse(message);
-        this.emit('session-cleared', payload);
-      } catch (err) {
-        logger.error(`Failed to parse sessions/cleared payload: ${err.message}`);
-      }
+      const payload = parsePayload(message, 'system/out/sessions/cleared');
+      if (!payload) return;
+      this.emit('session-cleared', payload);
     }
     // Other actions (paused, resumed) are derived from the statuses snapshot
     // diff in handleSessions(); the discrete topics are emitted for external
@@ -63,9 +76,12 @@ module.exports = function () {
   this.client.on("message", async (topic, message) => {
     const [type, ...parts] = topic.split('/');
     switch (type) {
-      case 'scheduler':
-        handleSchedulerMessage.call(this, JSON.parse(message.toString()));
+      case 'scheduler': {
+        const scheduler = parsePayload(message, topic);
+        if (!scheduler) break;
+        handleSchedulerMessage.call(this, scheduler);
         break;
+      }
       case 'system':
         handleSystemMessage.call(this, parts, message);
         break;

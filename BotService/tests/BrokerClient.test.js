@@ -627,8 +627,24 @@ describe('BotService BrokerClient — _openSocket / _scheduleReconnect / stopBot
     await tick()
     const cleanup = ctx.publishes.find(p => p.topic === 'scheduler/in/schedule/stopbot')
     assert.ok(cleanup, 'scheduler cleanup requested')
-    assert.deepEqual(cleanup.payload, { botId: 88 })
+    // endSession:true so the Scheduler finalizes the session like a manual stop.
+    assert.deepEqual(cleanup.payload, { botId: 88, endSession: true })
     assert.equal(stopped, true, 'stopBot called on meeting-empty')
+  })
+
+  it('join-timeout requests cleanup WITHOUT ending the session (failure, not a clean leave)', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot, 77)
+    ctx.instance.bots.set('s_c', record)
+    ctx.instance.stopBot = async () => {}
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+
+    bot.emit('join-timeout')
+    await tick()
+    const cleanup = ctx.publishes.find(p => p.topic === 'scheduler/in/schedule/stopbot')
+    assert.ok(cleanup, 'scheduler cleanup requested')
+    assert.deepEqual(cleanup.payload, { botId: 77, endSession: false },
+      'a never-admitted leave must not finalize the session into a conversation')
   })
 
   it('rejects botId=0 — no bot-error published (ids are positive integers)', () => {

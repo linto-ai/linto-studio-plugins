@@ -236,7 +236,11 @@ class BrokerClient extends Component {
     bot.on('participant-left', () => { this.metrics.participantChurn++ })
     bot.on('meeting-empty', () => {
       logger.info(`BotService: bot ${key} (botId ${botId}) meeting empty, leaving`)
-      this._requestSchedulerCleanup(botId)
+      // Everyone left a real meeting → END the session, exactly as a manual stop
+      // would: the Scheduler finalizes it (terminated + sessions/ended) so Studio
+      // stores the conversation. endSession distinguishes this from a plain bot
+      // removal (DELETE /bots) or a never-admitted leave.
+      this._requestSchedulerCleanup(botId, { endSession: true })
       this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
     // A join-watchdog leave (never admitted: wrong link / not admitted / empty
@@ -322,11 +326,13 @@ class BrokerClient extends Component {
     }, delay)
   }
 
-  // On autonomous leave (empty meeting), ask the Scheduler to delete the Bot row
-  // and mark the channel inactive — same path Session-API uses for DELETE /bots.
-  _requestSchedulerCleanup (botId) {
+  // On autonomous leave, ask the Scheduler to delete the Bot row and mark the
+  // channel inactive — same path Session-API uses for DELETE /bots. When
+  // endSession is set (empty meeting: everyone left a real meeting), also ask the
+  // Scheduler to END the session so Studio finalizes it like a manual stop.
+  _requestSchedulerCleanup (botId, { endSession = false } = {}) {
     if (!Number.isInteger(botId) || botId <= 0) return // ignore missing/invalid bot ids (incl. 0)
-    this.client.publish('scheduler/in/schedule/stopbot', { botId }, 1, false, true)
+    this.client.publish('scheduler/in/schedule/stopbot', { botId, endSession }, 1, false, true)
   }
 
   async stopBot (sessionId, channelId) {

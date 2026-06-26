@@ -83,7 +83,7 @@ module.exports = async function () {
             await this.startBot(botId);
           }
           if (action === 'stopbot') {
-            await this.stopBot(botId);
+            await this.stopBot(botId, { endSession: payload.endSession === true });
           }
         }
         break;

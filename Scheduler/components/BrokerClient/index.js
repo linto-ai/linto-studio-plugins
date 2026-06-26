@@ -315,7 +315,7 @@ class BrokerClient extends Component {
     };
   }
 
-  async stopBot(botId) {
+  async stopBot(botId, { endSession = false } = {}) {
     try {
       logger.debug(`Stopping bot ${botId}`);
       const bot = await Model.Bot.findByPk(botId, { include: Model.Channel });
@@ -338,9 +338,52 @@ class BrokerClient extends Component {
       } else {
         logger.warn(`No BotService owner tracked for ${key}; stop not routed (bot may have already left)`);
       }
+      // The bot left because the meeting emptied out: end the session so Studio
+      // finalizes it exactly as a manual "stop recording" would. A plain bot
+      // removal (DELETE /bots) or a never-admitted leave does NOT set this.
+      if (endSession) {
+        await this.endBotSession(channel.sessionId);
+      }
     } catch (error) {
       logger.error(`Failed to stop bot ${botId}: ${error.message}`);
       if (error.stack) logger.debug(error.stack);
+    }
+  }
+
+  // Terminate a bot-driven session the way autoEnd() terminates a scheduled one,
+  // and emit the same terminal notification so studio-api stores the conversation
+  // and deletes the session. This is the auto-leave counterpart of the manual
+  // "stop recording" (which Studio drives directly). Idempotent: a session that is
+  // already 'terminated' is left untouched (studio-api's sessions/ended handler is
+  // itself 404-safe, so a manual stop that raced ahead simply no-ops here).
+  async endBotSession(sessionId) {
+    if (!sessionId) return;
+    try {
+      const session = await Model.Session.findByPk(sessionId, {
+        attributes: ['id', 'status', 'organizationId']
+      });
+      if (!session) return;
+      if (session.status === 'terminated') return; // already finalized
+      await Model.sequelize.transaction(async (transaction) => {
+        await Model.Session.update(
+          { status: 'terminated', endTime: new Date() },
+          { where: { id: sessionId }, transaction }
+        );
+        await Model.Channel.update(
+          { streamStatus: 'inactive' },
+          { where: { sessionId }, transaction }
+        );
+      });
+      logger.info(`Bot session ${sessionId} ended (meeting empty); publishing sessions/ended`);
+      this.client.publish(
+        'system/out/sessions/ended',
+        { id: session.id, organizationId: session.organizationId },
+        1,
+        false,
+        true
+      );
+    } catch (err) {
+      logger.error(`Failed to end bot session ${sessionId}: ${err?.message || err}`);
     }
   }
 

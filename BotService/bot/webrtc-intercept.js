@@ -359,6 +359,15 @@ const SFU_MAPPING_BLOCK = `
   // element's fiber (memoizedProps + memoizedState) up the return chain — this is
   // robust across Meet's component structure.
   let livekitRoom = null;
+  // Roster of remote participants seen at the PREVIOUS poll (identity -> name).
+  // LiveKit/Visio gives us no leave signal we can rely on: when a remote leaves,
+  // its subscriber transceiver is reused and the MediaStreamTrack fires 'mute',
+  // not 'ended' — so 'trackRemoved' never comes and the participant would stay
+  // "present" forever, blocking the empty-meeting auto-leave. Mirror the Teams
+  // roster-diff: every poll, anyone in the previous roster but absent now has
+  // left, so emit 'participantLeft' for them (the Node side no-ops ids it never
+  // mapped, so this is safe even for participants who never published audio).
+  const livekitRoster = new Map();
   function findLivekitRoom() {
     try {
       const els = document.querySelectorAll('*');
@@ -397,7 +406,9 @@ const SFU_MAPPING_BLOCK = `
     if (livekitRoom.state && livekitRoom.state !== 'connected') { livekitRoom = null; return; }
     try {
       const remotes = livekitRoom.remoteParticipants || livekitRoom.participants;
+      const seen = new Set();
       remotes.forEach(function (p) {
+        seen.add(p.identity);
         p.trackPublications.forEach(function (pub) {
           if (pub.kind !== 'audio') return;
           // Force subscription to every remote audio track (adaptive-stream off).
@@ -409,6 +420,15 @@ const SFU_MAPPING_BLOCK = `
           }
         });
       });
+      // Roster diff: anyone present last poll but gone now has left the meeting.
+      livekitRoster.forEach(function (name, identity) {
+        if (!seen.has(identity)) {
+          log('LiveKit participant left:', name, '(' + identity + ')');
+          sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: identity, name: name }) });
+          livekitRoster.delete(identity);
+        }
+      });
+      remotes.forEach(function (p) { livekitRoster.set(p.identity, p.name || p.identity); });
     } catch (e) { /* ignore */ }
   }
   setTimeout(function () { intervals.push(setInterval(pollJitsi, 2000)); intervals.push(setInterval(pollLivekit, 1500)); }, 3000);

@@ -820,6 +820,51 @@ describe('webrtc-intercept getInterceptScript()', () => {
       // track still mapped from pub.track.mediaStreamTrack
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantMapping').length, 1)
     })
+
+    it('emits participantLeft when a remote disappears from the room roster', async () => {
+      // LiveKit gives no reliable leave signal (transceiver reuse fires 'mute',
+      // not 'ended'); the poller must diff the roster and announce the departure
+      // so the empty-meeting auto-leave can fire.
+      const pub = lkPub('lk-leave', true, true)
+      const roster = [lkPart('idAlice', 'Alice', [pub])]
+      const room = lkRoom(roster)
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { elements: [fiberChainEl(room, 2)] })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('lk-leave'))
+      await flush(); await flush()
+      ctx.clock.advance(3000)
+      ctx.clock.tickIntervals() // poll 1: Alice present -> mapped, recorded in roster
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantLeft').length, 0, 'no leave while present')
+      roster.length = 0 // Alice leaves the meeting
+      ctx.clock.tickIntervals() // poll 2: roster diff -> Alice is gone
+      const left = jsonFrames(ws).filter((f) => f.type === 'participantLeft')
+      assert.strictEqual(left.length, 1, 'exactly one participantLeft')
+      assert.strictEqual(left[0].participant.id, 'idAlice')
+      assert.strictEqual(left[0].participant.name, 'Alice')
+      ctx.clock.tickIntervals() // poll 3: already removed -> not re-emitted
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantLeft').length, 1, 'leave emitted once')
+    })
+
+    it('emits participantLeft only for the remote that left, not the one still present', async () => {
+      const pubA = lkPub('lk-A', true, true)
+      const pubB = lkPub('lk-B', true, true)
+      const roster = [lkPart('idA', 'Alice', [pubA]), lkPart('idB', 'Bob', [pubB])]
+      const room = lkRoom(roster)
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { elements: [fiberChainEl(room, 2)] })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('lk-A'))
+      emitTrack(ctx, makeTrack('lk-B'))
+      await flush(); await flush()
+      ctx.clock.advance(3000)
+      ctx.clock.tickIntervals() // both present
+      roster.splice(0, 1) // Alice leaves, Bob stays
+      ctx.clock.tickIntervals()
+      const left = jsonFrames(ws).filter((f) => f.type === 'participantLeft')
+      assert.strictEqual(left.length, 1)
+      assert.strictEqual(left[0].participant.id, 'idA')
+    })
   })
 
   describe('SFU polling lifecycle (behavioral)', () => {

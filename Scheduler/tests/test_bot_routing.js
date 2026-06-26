@@ -311,6 +311,83 @@ describe('BrokerClient bot routing (BotService)', () => {
         assert.equal(mqttPublishes.filter(p => p.topic.startsWith('botservice/in/')).length, 0);
       } finally { uninstallMocks(); }
     });
+
+    it('endSession terminates the session and publishes sessions/ended (auto-leave = manual stop)', async () => {
+      const sessionUpdates = [];
+      const channelUpdates = [];
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, channel: { id: 10, sessionId: 'sess-1' } }),
+          destroy: async () => [1, []]
+        },
+        Session: {
+          findByPk: async () => ({ id: 'sess-1', status: 'active', organizationId: 'org-9' }),
+          update: async (values, opts) => { sessionUpdates.push({ values, opts }); return [1, []]; }
+        },
+        Channel: {
+          update: async (values, opts) => { channelUpdates.push({ values, opts }); return [1, []]; }
+        }
+      });
+      const { instance, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        instance.botOwnership.set('sess-1_10', 'bs1');
+        await instance.stopBot(42, { endSession: true });
+        // Still routes the targeted stopbot to the owner.
+        assert.ok(mqttPublishes.find(p => p.topic === 'botservice/in/bs1/stopbot'));
+        // Session terminated + channels inactivated.
+        assert.equal(sessionUpdates.length, 1);
+        assert.equal(sessionUpdates[0].values.status, 'terminated');
+        assert.ok(sessionUpdates[0].values.endTime instanceof Date);
+        assert.equal(channelUpdates.length, 1);
+        assert.equal(channelUpdates[0].values.streamStatus, 'inactive');
+        // Terminal notification studio-api consumes to store the conversation.
+        const ended = mqttPublishes.find(p => p.topic === 'system/out/sessions/ended');
+        assert.ok(ended, 'sessions/ended published');
+        assert.deepEqual(ended.payload, { id: 'sess-1', organizationId: 'org-9' });
+      } finally { uninstallMocks(); }
+    });
+
+    it('does NOT end the session on a plain stop (DELETE /bots): no sessions/ended', async () => {
+      const sessionUpdates = [];
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, channel: { id: 10, sessionId: 'sess-1' } }),
+          destroy: async () => [1, []]
+        },
+        Session: {
+          findByPk: async () => { throw new Error('Session.findByPk should not be called without endSession'); },
+          update: async (values, opts) => { sessionUpdates.push({ values, opts }); return [1, []]; }
+        }
+      });
+      const { instance, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        instance.botOwnership.set('sess-1_10', 'bs1');
+        await instance.stopBot(42); // no endSession
+        assert.ok(mqttPublishes.find(p => p.topic === 'botservice/in/bs1/stopbot'));
+        assert.equal(sessionUpdates.length, 0);
+        assert.equal(mqttPublishes.filter(p => p.topic === 'system/out/sessions/ended').length, 0);
+      } finally { uninstallMocks(); }
+    });
+
+    it('endSession is idempotent: an already-terminated session is left untouched', async () => {
+      const sessionUpdates = [];
+      const model = buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, channel: { id: 10, sessionId: 'sess-1' } }),
+          destroy: async () => [1, []]
+        },
+        Session: {
+          findByPk: async () => ({ id: 'sess-1', status: 'terminated', organizationId: 'org-9' }),
+          update: async (values, opts) => { sessionUpdates.push({ values, opts }); return [1, []]; }
+        }
+      });
+      const { instance, mqttPublishes } = await loadBrokerClient({ model });
+      try {
+        await instance.stopBot(42, { endSession: true });
+        assert.equal(sessionUpdates.length, 0, 'no re-termination');
+        assert.equal(mqttPublishes.filter(p => p.topic === 'system/out/sessions/ended').length, 0);
+      } finally { uninstallMocks(); }
+    });
   });
 
   describe('#recordBotError()', () => {

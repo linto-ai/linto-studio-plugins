@@ -42,6 +42,10 @@ class VllmProtocol extends BaseProtocol {
             case 'transcription.delta':
                 return { type: 'partial', data: { text: msg.delta } };
 
+            case 'transcription.done':
+                // Final transcription for the segment: full text + usage stats.
+                return { type: 'final', data: { text: msg.text, usage: msg.usage || null } };
+
             case 'error':
                 return { type: 'error', data: { message: msg.error, code: msg.code || null } };
 

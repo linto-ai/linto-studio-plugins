@@ -210,10 +210,30 @@ describe('Protocol Adapters', function () {
                 assert.strictEqual(result, null);
             });
 
-            it('should NOT parse transcription.done (vLLM does not send it)', function () {
+            it('should parse transcription.done event as final (with usage)', function () {
                 const proto = new VllmProtocol({}, stubLogger);
-                const result = proto.parseServerEvent({ type: 'transcription.done' });
-                assert.strictEqual(result, null);
+                const usage = { prompt_tokens: 10, completion_tokens: 5 };
+                const result = proto.parseServerEvent({
+                    type: 'transcription.done',
+                    text: 'Hello world',
+                    usage
+                });
+                assert.deepStrictEqual(result, {
+                    type: 'final',
+                    data: { text: 'Hello world', usage }
+                });
+            });
+
+            it('should parse transcription.done without usage (usage null)', function () {
+                const proto = new VllmProtocol({}, stubLogger);
+                const result = proto.parseServerEvent({
+                    type: 'transcription.done',
+                    text: 'Hello world'
+                });
+                assert.deepStrictEqual(result, {
+                    type: 'final',
+                    data: { text: 'Hello world', usage: null }
+                });
             });
         });
     });

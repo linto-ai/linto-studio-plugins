@@ -47,6 +47,8 @@ def buildAllPlugins(version, commit_sha) {
     // BotService: build context is the repo root (default '.') so lib/ is available;
     // image is heavy (bakes Playwright Chromium on a node:22-bookworm base).
     buildDockerfile('BotService', 'studio-plugins-botservice', version, commit_sha)
+    // VisioBotService: native LiveKit agent (Python, no Chromium); repo-root context (default '.').
+    buildDockerfile('VisioBotService', 'studio-plugins-visio-botservice', version, commit_sha)
     buildDockerfile('TranslatorPython', 'studio-plugins-translator', version, commit_sha, 'TranslatorPython')
 }
 
@@ -156,6 +158,8 @@ pipeline {
                     buildStagingPlugin('migration', 'studio-plugins-migration', tag)
                     // BotService: heavy image (bakes Playwright Chromium); context is the repo root (default '.').
                     buildStagingPlugin('BotService', 'studio-plugins-botservice', tag)
+                    // VisioBotService: native LiveKit agent (Python, no Chromium); repo-root context (default '.').
+                    buildStagingPlugin('VisioBotService', 'studio-plugins-visio-botservice', tag)
                 }
             }
         }

@@ -1,0 +1,24 @@
+[project]
+name = "visio-botservice"
+version = "0.1.0"
+description = "LinTO native LiveKit transcription bot service (broker-only, MQTT-piloted, no Chromium)"
+requires-python = ">=3.12"
+# Exact pins across the board (no floating minors) so pyproject and uv.lock agree
+# and the build is deterministic; bump deliberately + re-lock with `uv lock`.
+dependencies = [
+    "livekit==1.1.12",
+    "livekit-api==1.1.1",
+    "websockets==13.1",
+    "paho-mqtt==2.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Flat layout: pin exactly what ships so setuptools auto-discovery does not choke
+# on the two top-level packages (bot, components) sitting next to the entrypoint
+# module.
+[tool.setuptools]
+py-modules = ["visio_bot_service"]
+packages = ["bot", "components"]

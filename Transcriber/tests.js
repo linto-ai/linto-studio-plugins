@@ -29,6 +29,8 @@ require('./tests/test_srt_payload_stall.js');
 require('./tests/test_lang_detect.js');
 require('./tests/test_server_session_end.js');
 require('./tests/test_vad_watchdog.js');
+require('./tests/test_perstream_golden.js');
+require('./tests/test_perstream_demux.js');
 
 
 describe('CircularBuffer', () => {

@@ -35,6 +35,11 @@ class MultiplexedWebsocketServer extends EventEmitter {
     // Native diarization: per-channel SpeakerTracker, created on `init` when a
     // bot announces diarizationMode='native'. Keyed by `${sessionId}_${channelId}`.
     this.speakerTrackers = new Map();
+    // Per-stream diarization (one ASR per participant): created on `init` when a
+    // bot announces perStream:true AND the env flag is on. Maps participantTag
+    // (u8) -> {id, name, tag}. Keyed by `${sessionId}_${channelId}`. Twin of
+    // speakerTrackers; null/absent when perStream is off (legacy bit-exact).
+    this.streamParticipants = new Map();
     // Periodic reaper: drops trackers whose channel is no longer running (orphans
     // that escaped cleanupWebsocket). Held so stop()/tests can clear it.
     this.reaperInterval = null;
@@ -52,6 +57,13 @@ class MultiplexedWebsocketServer extends EventEmitter {
       if (!this.runningChannels[channelId]) {
         logger.info(`Reaping orphan speaker tracker for channel ${channelId} (key ${key})`);
         this.speakerTrackers.delete(key);
+      }
+    }
+    for (const key of this.streamParticipants.keys()) {
+      const channelId = key.slice(key.lastIndexOf('_') + 1);
+      if (!this.runningChannels[channelId]) {
+        logger.info(`Reaping orphan per-stream participant map for channel ${channelId} (key ${key})`);
+        this.streamParticipants.delete(key);
       }
     }
   }
@@ -259,7 +271,22 @@ class MultiplexedWebsocketServer extends EventEmitter {
         // the ASR as it is created. Must run before the callback is built.
         fd.diarizationMode = initMessage.diarizationMode || 'asr';
         const trackerKey = `${fd.session.id}_${fd.channel.id}`;
-        if (fd.diarizationMode === 'native') {
+        // Per-stream diarization is negotiated: the bot REQUESTS it (init.perStream)
+        // and the Transcriber ACCEPTS only when its env flag is on. The bot honors
+        // the ACK, so off-by-either-side falls back to the legacy mixed path
+        // bit-exact. In perStream mode we do NOT build the legacy SpeakerTracker:
+        // the speaker IS the participant identity carried by the tagged frames.
+        const perStreamReq = initMessage.perStream === true;
+        const perStreamEnabled = process.env.TRANSCRIBER_PERSTREAM_DIARIZATION === 'true';
+        fd.perStream = perStreamReq && perStreamEnabled;
+        if (fd.perStream) {
+            const m = new Map();
+            for (const p of (initMessage.participants || [])) {
+                if (p.tag !== undefined) m.set(p.tag, p);
+            }
+            this.streamParticipants.set(trackerKey, m);
+            logger.info(`Per-stream diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${m.size} initial participants: ${[...m.values()].map(p => `${p.tag}=${p.name || p.id}`).join(', ')})`);
+        } else if (fd.diarizationMode === 'native') {
             const tracker = new SpeakerTracker();
             for (const participant of (initMessage.participants || [])) {
                 tracker.updateParticipant({ action: 'join', participant });
@@ -277,15 +304,21 @@ class MultiplexedWebsocketServer extends EventEmitter {
         } catch (error) {
             logger.error(`Init failed for session ${fd.session.id}, channel ${fd.channel.id}`, error);
             this.speakerTrackers.delete(trackerKey);
+            this.streamParticipants.delete(trackerKey);
             ws.send(JSON.stringify({ type: 'error', message: `Init failed: ${error}.` }));
             return null;
         }
         if (!callback) {
             this.speakerTrackers.delete(trackerKey);
+            this.streamParticipants.delete(trackerKey);
             return null;
         }
 
-        ws.send(JSON.stringify({ type: 'ack', message: 'Init done' }));
+        // Negotiated ACK: the bot reads `perStream` to decide whether to tag its
+        // frames. fd.perStream is false unless BOTH the bot requested it AND the
+        // env flag is on, so a default-off deployment ACKs perStream:false and the
+        // bot keeps mixing (legacy bit-exact).
+        ws.send(JSON.stringify({ type: 'ack', message: 'Init done', perStream: fd.perStream }));
 
         return callback;
     } else {
@@ -314,14 +347,36 @@ class MultiplexedWebsocketServer extends EventEmitter {
           // PCM (a PCM sample can coincidentally start with 0x7B 0x22, so a parse
           // failure must fall through to audio rather than drop the frame).
           if (this.handleControlMessage(fd, message)) return;
-          this.emit('data', message, fd.session.id, fd.channel.id);
+          if (fd.perStream) {
+              // Per-stream mode: audio arrives as tagged binary frames
+              // (0x01 | tag | reserved | meetingTimeMs | PCM). Demux to a
+              // 5-arg 'data' carrying the participant tag + bot clock.
+              const parsed = this._parseTaggedFrame(message);
+              if (!parsed) return; // short/invalid frame -> drop
+              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag, parsed.tMs);
+              return;
+          }
+          this.emit('data', message, fd.session.id, fd.channel.id); // legacy 3 args, unchanged
       };
+  }
+
+  // Parse a per-stream tagged audio frame. Layout (little-endian):
+  //   off0  u8  MAGIC = 0x01  (never 0x7B '{', so it cannot collide with a JSON
+  //                            control message)
+  //   off1  u8  participantTag 0..254 (255 = mixed/overflow fallback)
+  //   off2  u16 reserved = 0  (keeps the PCM 16-bit aligned)
+  //   off4  u32 meetingTimeMs (bot-relative clock)
+  //   off8  N   PCM s16le mono 16k
+  // Returns {tag, tMs, pcm} or null when the frame is not a valid tagged frame.
+  _parseTaggedFrame(buf) {
+      if (!Buffer.isBuffer(buf) || buf.length < 8 || buf[0] !== 0x01) return null;
+      return { tag: buf[1], tMs: buf.readUInt32LE(4), pcm: buf.subarray(8) };
   }
 
   // Returns true if the message was consumed as a native-diarization control
   // message, false if it should be treated as audio data.
   handleControlMessage(fd, message) {
-      if (fd.diarizationMode !== 'native') return false;
+      if (!fd.perStream && fd.diarizationMode !== 'native') return false;
       if (!Buffer.isBuffer(message) || message.length < 2) return false;
       if (message[0] !== 0x7B || message[1] !== 0x22) return false; // not '{"'
       let data;
@@ -334,6 +389,50 @@ class MultiplexedWebsocketServer extends EventEmitter {
           // control message went missing.
           logger.debug(`Native diarization: '{\"'-prefixed frame failed to parse as JSON, treating as PCM (session ${fd.session.id}, channel ${fd.channel.id})`);
           return false; // PCM that merely started with 0x7B22
+      }
+      // Per-stream (D3b late-joiner): route participant join/leave into the
+      // tag->participant map so a guest who arrives after `init` still gets a
+      // tag->{id,name} mapping; otherwise their lazily-created ASR would carry
+      // participantId=null -> locutor=null. Never fall back to the SpeakerTracker.
+      if (fd.perStream) {
+          const m = this.streamParticipants.get(`${fd.session.id}_${fd.channel.id}`);
+          if (!m) {
+              logger.warn(`Per-stream: dropping control message type '${data.type}' — no participant map for session ${fd.session.id}, channel ${fd.channel.id}`);
+              return false;
+          }
+          if (data.type === 'participant') {
+              // The bot nests the participant under `participant` for join/leave
+              // but the rename control carries id/name/tag at the top level; read
+              // both shapes so either form works.
+              const p = data.participant || {};
+              const tag = (p.tag !== undefined) ? p.tag : data.tag;
+              if (tag !== undefined) {
+                  if (data.action === 'leave') {
+                      const existing = m.get(tag);
+                      if (existing) existing.active = false; // mark inactive, keep mapping for trailing finals
+                      // Free the participant's ASR cap slot (#5): a dead sub-ASR
+                      // would otherwise keep counting and push present speakers
+                      // into overflow. StreamingServer tears it down.
+                      this.emit('participant-leave', fd.session.id, fd.channel.id, tag);
+                  } else if (data.action === 'rename') {
+                      // Mid-call rename (#7): update the stored name (used for any
+                      // not-yet-created ASR) and signal StreamingServer to update
+                      // the live sub-ASR's name so its next captions carry it.
+                      const name = (p.name !== undefined) ? p.name : data.name;
+                      const existing = m.get(tag);
+                      if (existing) existing.name = name;
+                      else m.set(tag, { ...p, tag, name });
+                      this.emit('participant-rename', fd.session.id, fd.channel.id, tag, name);
+                  } else {
+                      m.set(tag, (p.tag !== undefined) ? p : { ...data });
+                  }
+              }
+              return true;
+          }
+          // speakerChanged is meaningless per-stream (the identity IS the stream); consume it.
+          if (data.type === 'speakerChanged') return true;
+          logger.warn(`Per-stream: dropping control message with unknown type '${data.type}' (session ${fd.session.id}, channel ${fd.channel.id})`);
+          return false;
       }
       // Past this point the frame is a well-formed JSON control message; dropping
       // it silently would hide a real diarization problem, so warn.
@@ -356,6 +455,13 @@ class MultiplexedWebsocketServer extends EventEmitter {
 
   getSpeakerTracker(sessionId, channelId) {
       return this.speakerTrackers.get(`${sessionId}_${channelId}`) || null;
+  }
+
+  // Per-stream twin of getSpeakerTracker: the StreamingServer reads this on
+  // session-start to detect per-stream mode and to resolve a tag -> {id,name}
+  // when it lazily creates a sub-ASR. null/absent for legacy streams.
+  getStreamParticipants(sessionId, channelId) {
+      return this.streamParticipants.get(`${sessionId}_${channelId}`) || null;
   }
 
   initWorker(ws, fd) {
@@ -456,6 +562,8 @@ class MultiplexedWebsocketServer extends EventEmitter {
           // (flushFinals) whose trailing finals still read this tracker to stamp
           // their speaker. The ASR holds the reference; GC reclaims it after dispose.
           this.speakerTrackers.delete(`${fd.session.id}_${fd.channel.id}`);
+          // Symmetric cleanup of the per-stream participant map (twin of above).
+          this.streamParticipants.delete(`${fd.session.id}_${fd.channel.id}`);
       }
   }
 }

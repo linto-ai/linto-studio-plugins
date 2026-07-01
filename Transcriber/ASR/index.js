@@ -47,6 +47,28 @@ class ASR extends eventEmitter {
     // page state) instead of the ASR provider. null for ordinary streams.
     this.speakerTracker = options.speakerTracker || null;
     this.diarizationMode = options.diarizationMode || 'asr';
+    // Per-stream diarization: this ASR decodes a single participant's stream, so
+    // the speaker IS that participant — no SpeakerTracker guessing. When set,
+    // _applyNativeSpeaker short-circuits to participantName. null for legacy.
+    this.participantId = options.participantId || null;
+    this.participantName = options.participantName || null;
+    // Per-stream shared meeting-time origin: the channel's first bot clock value
+    // (tMs), captured once on the channel context and passed to every lazily-
+    // created sub-ASR so captions from participants whose ASR was created at
+    // different wall-clock moments share one time base (comparable, ordered).
+    // null for legacy (no bot clock) — unchanged.
+    this.timeOrigin = options.timeOrigin !== undefined ? options.timeOrigin : null;
+    // Shared per-channel segmentId allocator (perStream): all the sub-ASR of a
+    // channel draw monotonic, collision-free ids from {next}. When null (legacy),
+    // segmentId advances per-instance exactly as before (bit-exact).
+    this.segmentAllocator = options.segmentAllocator || null;
+    // Per-stream: seed this ASR's first segmentId from the shared allocator so
+    // two sibling ASR never start on the same id (which would collide on the
+    // first utterance). Subsequent advances also draw from it (_advanceSegmentId).
+    if (this.segmentAllocator) {
+      this.segmentId = this.segmentAllocator.next++;
+      this._lastPrimarySegmentId = this.segmentId;
+    }
     // Previous PRIMARY final's segment, cleared one final late so a lagging
     // dual-recognizer secondary (translation) can still read the segment's speaker.
     this._prevFinalSegmentId = null;
@@ -157,11 +179,37 @@ class ASR extends eventEmitter {
     return this.segmentId;
   }
 
+  // Advance to the next segmentId after a primary final/error. Per-stream draws
+  // the next id from the SHARED per-channel allocator so ids stay globally
+  // monotone and collision-free across the sibling ASR of the same channel
+  // (each ASR's first id is seeded from the same allocator in the constructor).
+  // _lastPrimarySegmentId stays PER INSTANCE (in _segmentIdFor) so a lagging
+  // secondary (translation) of THIS ASR still pins the id THIS ASR produced even
+  // if a sibling consumed the next id meanwhile. Drawing happens here (once per
+  // utterance), NOT in _segmentIdFor, so the many partials of an utterance keep
+  // the same id as its final. Legacy (allocator null) is the original `++`,
+  // byte-for-byte.
+  _advanceSegmentId() {
+    if (this.segmentAllocator) {
+      this.segmentId = this.segmentAllocator.next++;
+    } else {
+      this.segmentId++;
+    }
+  }
+
   // Native diarization: stamp the segment's speaker from the bot-fed
   // SpeakerTracker, overriding any provider-supplied locutor. The display name
   // is preferred (real meeting participant) and falls back to the id. No-op for
   // ordinary (non-bot) streams where speakerTracker is null.
   _applyNativeSpeaker(transcription) {
+    // Per-stream: this ASR decodes exactly one participant's stream, so the
+    // speaker IS that participant — assign the identity directly and skip the
+    // SpeakerTracker guessing path entirely. Prefer the display name, fall back
+    // to the id. This short-circuit runs before any tracker logic.
+    if (this.participantId) {
+      transcription.locutor = this.participantName || this.participantId;
+      return;
+    }
     if (this.diarizationMode !== 'native' || !this.speakerTracker) return;
     // Only the canonical PRIMARY result owns the assignment; a dual-recognizer
     // secondary (isPrimary===false) reads it read-only so it inherits the
@@ -239,7 +287,7 @@ class ASR extends eventEmitter {
         "locutor": process.env.TRANSCRIBER_BOT_NAME
       }
       this.emit('final', final)
-      this.segmentId++;
+      this._advanceSegmentId();
       this.logger.error(msg);
       this.state = ASR.states.ERROR
     })
@@ -284,7 +332,7 @@ class ASR extends eventEmitter {
             this.speakerTracker.clearSegment(this._prevFinalSegmentId);
           }
           this._prevFinalSegmentId = transcription.segmentId;
-          this.segmentId++;
+          this._advanceSegmentId();
         }
       }
     });
@@ -319,6 +367,14 @@ class ASR extends eventEmitter {
       await new Promise((resolve) => setTimeout(resolve, settleMs));
       this.state = ASR.states.CLOSED;
     });
+  }
+
+  // Per-stream mid-call rename: update this ASR's participant display name live.
+  // _applyNativeSpeaker reads participantName on every result, so subsequent
+  // captions immediately carry the new name with no reconnection. No-op for
+  // legacy (the WS handler only calls this for a live per-stream sub-ASR).
+  setParticipant(name) {
+    this.participantName = name;
   }
 
   streamStopped() {

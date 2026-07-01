@@ -697,6 +697,127 @@ describe('BrokerClient bot routing (BotService)', () => {
     });
   });
 
+  describe('#startBot() provider fallback (BOT_PROVIDER_FALLBACK_*)', () => {
+    function visioNativeBotModel() {
+      // Bot requests the primary capability "visio-native".
+      return buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, channelId: 10, url: 'https://meet.example/room', provider: 'visio-native', enableDisplaySub: false, subSource: null }),
+          update: async () => [1, []],
+          destroy: async () => [1, []]
+        },
+        Channel: { findByPk: async () => ({ id: 10, sessionId: 'sess-1' }) },
+        Session: { findByPk: async () => ({ id: 'sess-1', channels: [{ id: 10, transcriberProfile: null }] }) }
+      });
+    }
+
+    const FALLBACK_ENV = 'BOT_PROVIDER_FALLBACK_VISIO-NATIVE';
+    function withEnv(value, fn) {
+      const saved = process.env[FALLBACK_ENV];
+      if (value === undefined) delete process.env[FALLBACK_ENV]; else process.env[FALLBACK_ENV] = value;
+      return Promise.resolve()
+        .then(fn)
+        .finally(() => {
+          if (saved === undefined) delete process.env[FALLBACK_ENV]; else process.env[FALLBACK_ENV] = saved;
+        });
+    }
+
+    it('Bug #1: publishes the MATCHED fallback capability as botType, not the primary', async () => {
+      // The primary capability "visio-native" has no ready replica; only a
+      // "visio" replica is online. The fallback list visio-native,visio must
+      // select it AND publish botType="visio" (the capability it matched on),
+      // so the web BotService recognises the type and actually starts.
+      await withEnv('visio-native,visio', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioNativeBotModel() });
+        try {
+          instance.botservices = [{ uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/web/startbot');
+          assert.ok(pub, 'startbot routed to the fallback (visio) BotService');
+          assert.equal(pub.payload.botType, 'visio', 'botType is the matched fallback capability, not visio-native');
+          assert.equal(instance.botOwnership.get('sess-1_10'), 'web');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('keeps botType=primary when the primary capability is available (no fallback used)', async () => {
+      await withEnv('visio-native,visio', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioNativeBotModel() });
+        try {
+          // Both a native and a web replica are online: the native (primary) wins.
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/native/startbot');
+          assert.ok(pub, 'startbot routed to the primary (visio-native) BotService');
+          assert.equal(pub.payload.botType, 'visio-native', 'primary capability preserved');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it("Bug #3: an empty/whitespace env (',') resolves to [primary] and still dispatches", async () => {
+      await withEnv(',', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioNativeBotModel() });
+        try {
+          instance.botservices = [{ uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] }];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/native/startbot');
+          assert.ok(pub, 'bot still dispatched despite the empty fallback env');
+          assert.equal(pub.payload.botType, 'visio-native');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it("Bug #3: a whitespace-only env (' , ') also resolves to [primary]", async () => {
+      await withEnv(' , ', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioNativeBotModel() });
+        try {
+          instance.botservices = [{ uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] }];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/native/startbot');
+          assert.ok(pub, 'bot dispatched on the primary capability');
+          assert.equal(pub.payload.botType, 'visio-native');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('regression: with the env unset, the primary capability is used as before', async () => {
+      await withEnv(undefined, async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioNativeBotModel() });
+        try {
+          instance.botservices = [{ uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] }];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/native/startbot');
+          assert.ok(pub);
+          assert.equal(pub.payload.botType, 'visio-native');
+          // A lone web replica would NOT be selected without an explicit fallback.
+        } finally { uninstallMocks(); }
+      });
+    });
+  });
+
+  describe('#selectBotServiceMatch()', () => {
+    it('returns the matched capability alongside the chosen botservice', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        instance.botservices = [{ uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }];
+        const match = instance.selectBotServiceMatch(['visio-native', 'visio']);
+        assert.equal(match.botservice.uniqueId, 'web');
+        assert.equal(match.capability, 'visio');
+      } finally { uninstallMocks(); }
+    });
+
+    it('returns null when no provider in the list has a capable replica', async () => {
+      const { instance } = await loadBrokerClient();
+      try {
+        instance.botservices = [{ uniqueId: 'bs1', online: true, activeBots: 0, capabilities: ['jitsi'] }];
+        assert.equal(instance.selectBotServiceMatch(['visio-native', 'visio']), null);
+      } finally { uninstallMocks(); }
+    });
+  });
+
   describe('#getStartBotData()', () => {
     it('returns null when ownChannel.sessionId is falsy', async () => {
       const model = buildModel({

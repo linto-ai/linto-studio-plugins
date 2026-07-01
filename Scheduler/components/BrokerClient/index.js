@@ -232,14 +232,33 @@ class BrokerClient extends Component {
   // specialized replicas (fewest advertised capabilities), then the least
   // loaded. Load is primarily activeBots, with memory (rss) as a tiebreaker.
   // Replicas advertising no capabilities are excluded by the capability filter.
-  selectBotService(provider) {
-    const candidates = this.botservices.filter(bs =>
-      bs.online && Array.isArray(bs.capabilities) && bs.capabilities.includes(provider));
-    if (candidates.length === 0) return null;
-    const minCaps = Math.min(...candidates.map(bs => bs.capabilities.length));
-    const specialists = candidates.filter(bs => bs.capabilities.length === minCaps);
-    return specialists.reduce((best, bs) =>
-      (best === null || this._botLoadScore(bs) < this._botLoadScore(best)) ? bs : best, null);
+  // `providers` is a single provider (string) OR an ordered fallback list
+  // (e.g. ["visio-native","visio"]): the first provider with an online,
+  // capable replica wins, so a preferred provider falls back to the next.
+  selectBotService(providers) {
+    const match = this.selectBotServiceMatch(providers);
+    return match ? match.botservice : null;
+  }
+
+  // Like selectBotService, but also returns WHICH capability the replica was
+  // matched on. The fallback list may make us pick a replica advertising a
+  // DIFFERENT capability than the requested one (e.g. "visio-native" falls back
+  // to "visio"); startBot must then publish that MATCHED capability as botType,
+  // otherwise the web BotService rejects the unknown original type and never
+  // starts. Returns { botservice, capability } or null.
+  selectBotServiceMatch(providers) {
+    const list = Array.isArray(providers) ? providers : [providers];
+    for (const provider of list) {
+      const candidates = this.botservices.filter(bs =>
+        bs.online && Array.isArray(bs.capabilities) && bs.capabilities.includes(provider));
+      if (candidates.length === 0) continue;
+      const minCaps = Math.min(...candidates.map(bs => bs.capabilities.length));
+      const specialists = candidates.filter(bs => bs.capabilities.length === minCaps);
+      const best = specialists.reduce((best, bs) =>
+        (best === null || this._botLoadScore(bs) < this._botLoadScore(best)) ? bs : best, null);
+      if (best) return { botservice: best, capability: provider };
+    }
+    return null;
   }
 
   // Composite load score for routing: activeBots dominates, rss is a sub-unit
@@ -267,11 +286,29 @@ class BrokerClient extends Component {
     try {
       const botData = await this.getStartBotData(botId);
       if (!botData) return;
-      const botservice = this.selectBotService(botData.botType);
-      if (!botservice) {
-        logger.error(`No BotService available with capability '${botData.botType}' to start bot ${botId}.`);
+      // Optional ordered fallback per provider, e.g.
+      // BOT_PROVIDER_FALLBACK_VISIO="visio-native,visio" → prefer the native agent,
+      // fall back to the web bot. Defaults to the requested provider alone.
+      const fallbacks = (process.env[`BOT_PROVIDER_FALLBACK_${botData.botType.toUpperCase()}`] || botData.botType)
+        .split(',').map(s => s.trim()).filter(Boolean);
+      // A truthy-but-empty env (e.g. "," or " , ") parses to [] here; the
+      // `|| botData.botType` default above does NOT apply (the string was
+      // truthy). Treat an empty-after-parse list the same as unset so a
+      // misconfigured env never strips the primary provider and silently leaves
+      // the bot undispatched.
+      if (fallbacks.length === 0) fallbacks.push(botData.botType);
+      const match = this.selectBotServiceMatch(fallbacks);
+      if (!match) {
+        logger.error(`No BotService available with capability '${fallbacks.join(',')}' to start bot ${botId}.`);
         return;
       }
+      const botservice = match.botservice;
+      // Publish the capability we actually matched on, not the originally
+      // requested provider: when a fallback picks a replica advertising a
+      // different capability (e.g. "visio-native" -> "visio"), the BotService
+      // only recognises the matched type. For the primary path this is a no-op
+      // (match.capability === botData.botType).
+      botData.botType = match.capability;
       this.botOwnership.set(`${botData.session.id}_${botData.channel.id}`, botservice.uniqueId);
       // Persist ownership so a stopbot can still be routed (and orphans reaped)
       // after a Scheduler restart, when the in-memory map is gone.

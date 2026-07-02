@@ -23,6 +23,7 @@ require('./tests/test_speaker_tracker.js');
 require('./tests/test_ws_native_diar.js');
 require('./tests/test_asr_native_speaker.js');
 require('./tests/test_mqtt_payload_hardening.js');
+require('./tests/test_handshake.js');
 
 
 describe('CircularBuffer', () => {

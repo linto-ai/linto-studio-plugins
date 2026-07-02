@@ -30,6 +30,25 @@ const DRAIN_GRACE_MS = 750;
 // Reconnection delay after WebSocket error (ms)
 const RECONNECT_DELAY_MS = 2000;
 
+// --- Startup handshake hardening ---
+// Audio received before the session is armed is retained in a bounded FIFO
+// (oldest chunks dropped) instead of being discarded, then flushed on arming.
+// Sized in ms of PCM 16 kHz mono 16-bit (32 bytes/ms).
+const PRE_ARM_BUFFER_MAX_MS = parseInt(process.env.ASR_PRE_ARM_BUFFER_MAX_MS || '10000', 10);
+const PCM_BYTES_PER_MS = 32;
+const PRE_ARM_BUFFER_MAX_BYTES = PRE_ARM_BUFFER_MAX_MS * PCM_BYTES_PER_MS;
+
+// Watchdog (vLLM protocol): the session is armed and audio is flowing, but
+// the server never produced a transcription event. The server-side session is
+// silently broken; reconnect instead of staying mute forever. After
+// WATCHDOG_MAX_RETRIES consecutive failures the error is surfaced to the
+// session (SERVICE_TIMEOUT) and retries continue at a slower cadence — a
+// stream that legitimately starts with a long silence keeps its session alive
+// through these reconnects (the pre-arm buffer carries the audio across).
+const WATCHDOG_NO_RESULT_MS = parseInt(process.env.ASR_WATCHDOG_NO_RESULT_MS || '10000', 10);
+const WATCHDOG_MAX_RETRIES = parseInt(process.env.ASR_WATCHDOG_MAX_RETRIES || '3', 10);
+const WATCHDOG_SLOW_RETRY_MS = parseInt(process.env.ASR_WATCHDOG_SLOW_RETRY_MS || '30000', 10);
+
 class OpenAIStreamingTranscriber extends EventEmitter {
     static ERROR_MAP = {
         0: 'NO_ERROR',
@@ -63,6 +82,16 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._drainStartTime = 0;
         this._setupTimers = [];
         this._connGeneration = 0;
+
+        // Startup handshake state.
+        // The pre-arm buffer deliberately survives reconnects: it carries the
+        // last seconds of audio across a watchdog-triggered restart.
+        this._preArmBuffer = [];
+        this._preArmBufferBytes = 0;
+        this._armed = false;
+        this._updateSent = false;
+        this._watchdogTimer = null;
+        this._watchdogRetries = 0;
 
         const config = channel.transcriberProfile.config;
 
@@ -99,37 +128,101 @@ class OpenAIStreamingTranscriber extends EventEmitter {
      * Called when the server sends session.created. Now safe to configure the session.
      */
     _onSessionCreated(config) {
-        const gen = this._connGeneration;
-
         // Send session configuration
         const sessionUpdate = this.protocol.buildSessionUpdate(config.model);
         this.ws.send(JSON.stringify(sessionUpdate));
+        this._updateSent = true;
         this.logger.debug(`Sent session update: ${JSON.stringify(sessionUpdate)}`);
 
         if (this.protocolName === 'vllm') {
-            // vLLM requires commit(false) on an empty buffer to arm the pipeline,
-            // BEFORE any audio is sent. Delay to let the server process session.update,
-            // then send commit, then emit ready so audio starts flowing.
-            const t1 = setTimeout(() => {
-                if (gen !== this._connGeneration) return;
-                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-                const commit = this.protocol.buildCommit(false);
-                this.ws.send(JSON.stringify(commit));
-                this.logger.debug('Sent initial commit (vLLM) to arm pipeline');
-
-                const t2 = setTimeout(() => {
-                    if (gen !== this._connGeneration) return;
-                    this._sessionReady = true;
-                    this.emit('ready');
-                    this.startSegmentationTimer();
-                }, 200);
-                this._setupTimers.push(t2);
-            }, 500);
-            this._setupTimers.push(t1);
+            // The server processes WebSocket events sequentially, so the
+            // session.update -> commit -> append ordering is guaranteed by the
+            // connection itself: no fixed delays are needed. Arming (the
+            // initial commit that starts the server-side generation) is
+            // deferred until the first real audio chunk is available, so the
+            // server never starts a generation over an empty audio queue. A
+            // connection cut before any audio therefore leaves nothing
+            // running server-side.
+            this._tryArm();
         } else {
             this._sessionReady = true;
+            this._flushPreArmBuffer();
             this.emit('ready');
         }
+    }
+
+    /**
+     * vLLM arming: send the initial commit once the session is configured AND
+     * the first real audio is available, then flush the retained audio.
+     * Called from _onSessionCreated (audio arrived first) and transcribe()
+     * (session was configured first).
+     */
+    _tryArm() {
+        if (this._armed || !this._updateSent) return;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (this._preArmBufferBytes === 0) return; // no audio yet
+        const commit = this.protocol.buildCommit(false);
+        this.ws.send(JSON.stringify(commit));
+        this.logger.debug('Sent initial commit (vLLM), armed on first audio');
+        this._armed = true;
+        this._sessionReady = true;
+        this._flushPreArmBuffer();
+        this.emit('ready');
+        this.startSegmentationTimer();
+        this._startWatchdog();
+    }
+
+    _flushPreArmBuffer() {
+        if (this._preArmBuffer.length === 0) return;
+        const buffered = this._preArmBuffer;
+        this._preArmBuffer = [];
+        this._preArmBufferBytes = 0;
+        for (const buf of buffered) this._sendAudio(buf);
+    }
+
+    _startWatchdog() {
+        this._clearWatchdog();
+        const gen = this._connGeneration;
+        const delay = this._watchdogRetries >= WATCHDOG_MAX_RETRIES
+            ? WATCHDOG_SLOW_RETRY_MS : WATCHDOG_NO_RESULT_MS;
+        this._watchdogTimer = setTimeout(() => {
+            if (gen !== this._connGeneration) return;
+            this._onWatchdogTimeout(delay);
+        }, delay);
+    }
+
+    _clearWatchdog() {
+        if (this._watchdogTimer) {
+            clearTimeout(this._watchdogTimer);
+            this._watchdogTimer = null;
+        }
+    }
+
+    /**
+     * Armed session with audio flowing produced no transcription event within
+     * the window: the server-side session is silently broken. Reconnect; the
+     * pre-arm buffer carries the last seconds of audio so the restart has no
+     * gap.
+     */
+    _onWatchdogTimeout(waitedMs) {
+        this._watchdogRetries++;
+        this.logger.warn(`No transcription ${waitedMs}ms after audio started, reconnecting (attempt ${this._watchdogRetries})`);
+        if (this._watchdogRetries === WATCHDOG_MAX_RETRIES) {
+            this.emit('error', OpenAIStreamingTranscriber.ERROR_MAP[5]);
+        }
+        this.stop();
+        this.logger.info(`Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
+        const t = setTimeout(() => this.start(), RECONNECT_DELAY_MS);
+        this._setupTimers.push(t);
+    }
+
+    /**
+     * First transcription event on this connection: the handshake worked.
+     * Disarm the watchdog and reset the retry counter.
+     */
+    _onTranscriptionEvidence() {
+        this._watchdogRetries = 0;
+        this._clearWatchdog();
     }
 
     formatResult(text, lang) {
@@ -193,6 +286,8 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.ws = new WebSocket(wsUrl, wsOptions);
 
         this._sessionReady = false;
+        this._armed = false;
+        this._updateSent = false;
         this._connGeneration++;
         const gen = this._connGeneration;
 
@@ -222,10 +317,12 @@ class OpenAIStreamingTranscriber extends EventEmitter {
                     break;
 
                 case 'partial':
+                    this._onTranscriptionEvidence();
                     this.handlePartial(event.data.text);
                     break;
 
                 case 'final':
+                    this._onTranscriptionEvidence();
                     this.handleFinal(event.data.text);
                     break;
 
@@ -527,22 +624,50 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     }
 
     transcribe(buffer) {
+        // Ensure we have a Node.js Buffer (CircularBuffer returns Uint8Array)
+        const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+
         if (this.ws && this.ws.readyState === WebSocket.OPEN && this._sessionReady) {
-            // Ensure we have a Node.js Buffer (CircularBuffer returns Uint8Array)
-            const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-            // Split large buffers into chunks of MAX_CHUNK_BYTES (200ms @ 16kHz mono 16-bit)
-            const MAX_CHUNK_BYTES = 6400;
-            let offset = 0;
-            while (offset < buf.length) {
-                const chunk = buf.slice(offset, offset + MAX_CHUNK_BYTES);
-                const base64Audio = chunk.toString('base64');
-                const msg = this.protocol.buildAudioAppend(base64Audio);
-                this.ws.send(JSON.stringify(msg));
-                offset += MAX_CHUNK_BYTES;
-            }
-        } else if (!this._transcribeWarnThrottled) {
+            this._sendAudio(buf);
+            return;
+        }
+
+        // Session not ready (handshake, arming, or reconnect in progress):
+        // retain the audio instead of dropping it. It is flushed on arming,
+        // so the first syllables survive the handshake and a watchdog
+        // reconnect resumes without a gap.
+        this._bufferPreArm(buf);
+        if (this.protocolName === 'vllm') {
+            this._tryArm();
+        }
+    }
+
+    _sendAudio(buf) {
+        // Split large buffers into chunks of MAX_CHUNK_BYTES (200ms @ 16kHz mono 16-bit)
+        const MAX_CHUNK_BYTES = 6400;
+        let offset = 0;
+        while (offset < buf.length) {
+            const chunk = buf.slice(offset, offset + MAX_CHUNK_BYTES);
+            const base64Audio = chunk.toString('base64');
+            const msg = this.protocol.buildAudioAppend(base64Audio);
+            this.ws.send(JSON.stringify(msg));
+            offset += MAX_CHUNK_BYTES;
+        }
+    }
+
+    _bufferPreArm(buf) {
+        this._preArmBuffer.push(buf);
+        this._preArmBufferBytes += buf.length;
+        let droppedBytes = 0;
+        // Keep at least the newest chunk, even if it alone exceeds the cap
+        while (this._preArmBufferBytes > PRE_ARM_BUFFER_MAX_BYTES && this._preArmBuffer.length > 1) {
+            const dropped = this._preArmBuffer.shift();
+            this._preArmBufferBytes -= dropped.length;
+            droppedBytes += dropped.length;
+        }
+        if (droppedBytes > 0 && !this._transcribeWarnThrottled) {
             this._transcribeWarnThrottled = true;
-            this.logger.warn("OpenAI Streaming ASR: WebSocket not ready, dropping audio");
+            this.logger.warn(`Session not ready after ${PRE_ARM_BUFFER_MAX_MS}ms of audio, dropping oldest buffered audio (${droppedBytes} bytes)`);
             setTimeout(() => { this._transcribeWarnThrottled = false; }, 5000);
         }
     }
@@ -550,6 +675,8 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     stop() {
         // Invalidate current connection generation so stale handlers are ignored
         this._connGeneration++;
+
+        this._clearWatchdog();
 
         // Clear all pending timers (setup delays, reconnection)
         for (const t of this._setupTimers) clearTimeout(t);
@@ -566,8 +693,11 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             this._emitSegment('stop');
         }
 
-        // Send commit to signal end of stream
-        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.protocol) {
+        // Send commit to signal end of stream. For vLLM this is only
+        // meaningful when the session was armed: an un-armed session has no
+        // server-side generation to end.
+        const skipFinalCommit = this.protocolName === 'vllm' && !this._armed;
+        if (!skipFinalCommit && this.ws && this.ws.readyState === WebSocket.OPEN && this.protocol) {
             try {
                 const commit = this.protocol.buildCommit(true);
                 this.ws.send(JSON.stringify(commit));

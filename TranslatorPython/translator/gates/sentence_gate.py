@@ -3,16 +3,18 @@
 import re
 
 import pysbd
+from pysbd.languages import LANGUAGE_CODES
 
 # Cache segmenters per language to avoid repeated instantiation
 _segmenters: dict[str, pysbd.Segmenter] = {}
 
-# Languages supported by pySBD (rule-based, no model needed)
-PYSBD_LANGUAGES: set[str] = {
-    "en", "fr", "de", "es", "it", "pt", "nl", "pl",
-    "ro", "cs", "da", "sv", "fi", "el", "hu", "bg",
-    "hr", "sk", "sl", "et", "lv", "lt",
-}
+# Languages actually supported by the installed pySBD, derived from pySBD
+# itself. A hardcoded list here used to include codes pySBD doesn't know
+# (pt, ro, cs, sv, fi, hu, hr, sl, et, lv, lt): Segmenter() then raised
+# ValueError and the whole message was dropped by the MQTT handler — the ASR
+# sometimes misdetects the language (e.g. pt-BR on French speech), so this
+# must fall back to the regex path, never raise.
+PYSBD_LANGUAGES: set[str] = set(LANGUAGE_CODES.keys())
 
 # Compiled fallback regex for unsupported languages
 _PUNCT_BOUNDARY_RE = re.compile(r"[.!?;]\s")

@@ -37,10 +37,13 @@ def main() -> None:
         publish_fn=None,  # Will be set after MqttHandler is created
         change_threshold=config.CHANGE_THRESHOLD,
         min_new_chars=config.MIN_NEW_CHARS,
-        debounce_ms=config.PARTIAL_DEBOUNCE_MS,
         stability_threshold=config.STABILITY_THRESHOLD,
-        max_hold_seconds=config.MAX_HOLD_SECONDS,
         max_consecutive_holds=config.MAX_CONSECUTIVE_HOLDS,
+        translate_partials=config.TRANSLATE_PARTIALS,
+        tail_live_ms=config.TAIL_LIVE_MS,
+        soft_chunk_chars=config.SOFT_CHUNK_CHARS,
+        max_concurrent=config.MAX_CONCURRENT_TRANSLATIONS,
+        state_ttl_s=config.STATE_TTL_SECONDS,
     )
 
     # Create MQTT handler

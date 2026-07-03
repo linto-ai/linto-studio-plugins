@@ -9,16 +9,27 @@ LOG_LEVEL=INFO
 ##### TranslateGemma provider #####
 TRANSLATEGEMMA_ENDPOINT= # vLLM endpoint (required for translategemma provider)
 TRANSLATEGEMMA_MODEL=Infomaniak-AI/vllm-translategemma-4b-it
-TRANSLATEGEMMA_MAX_TOKENS=500
+TRANSLATEGEMMA_MAX_TOKENS=160 # One sentence/chunk fits well within 160
+TRANSLATEGEMMA_TEMPERATURE=0.0 # Deterministic translations (no flicker)
 
 ##### MQTT Broker #####
 BROKER_HOST=localhost
 BROKER_PORT=1883
 
-##### Anti-flicker pipeline #####
-CHANGE_THRESHOLD=85 # RapidFuzz similarity (0-100). Above = skip translation
-MIN_NEW_CHARS=10 # Min chars added before considering translation
-PARTIAL_DEBOUNCE_MS=300 # Debounce for mid-sentence partials (ms)
+##### Prefix-freezing pipeline #####
+# The unit of translation is the sentence: text closed by punctuation is
+# translated once and frozen; nothing is re-translated until new punctuation
+# appears (finals excepted, they always win).
+TRANSLATE_PARTIALS=true # false = eco mode: only finals are translated
+SOFT_CHUNK_CHARS=220 # Freeze budget for unpunctuated continuous speech
+TAIL_LIVE_MS=0 # 0 = translate only at punctuation; >0 = live tail updates, min interval (ms)
+MAX_CONCURRENT_TRANSLATIONS=8 # Global cap on in-flight provider requests
+STATE_TTL_SECONDS=600 # Purge state of keys inactive longer than this
+
+##### Tail gates (only used when TAIL_LIVE_MS > 0) #####
+CHANGE_THRESHOLD=85 # RapidFuzz similarity (0-100). Above = skip tail update
+MIN_NEW_CHARS=10 # Min chars added before considering a tail update
 STABILITY_THRESHOLD=0.6 # Min prefix preservation ratio (0.0-1.0)
-MAX_HOLD_SECONDS=2.0 # Max time to hold a rejected translation (s)
 MAX_CONSECUTIVE_HOLDS=2 # Force-publish after N consecutive holds
+
+# Deprecated (ignored): PARTIAL_DEBOUNCE_MS, MAX_HOLD_SECONDS

@@ -29,15 +29,34 @@ TRANSLATEGEMMA_ENDPOINT: str = os.environ.get("TRANSLATEGEMMA_ENDPOINT", "")
 TRANSLATEGEMMA_MODEL: str = os.environ.get(
     "TRANSLATEGEMMA_MODEL", "Infomaniak-AI/vllm-translategemma-4b-it"
 )
-TRANSLATEGEMMA_MAX_TOKENS: int = int(os.environ.get("TRANSLATEGEMMA_MAX_TOKENS", "500"))
+# One sentence/chunk (<= SOFT_CHUNK_CHARS source chars) fits well within 160
+TRANSLATEGEMMA_MAX_TOKENS: int = int(os.environ.get("TRANSLATEGEMMA_MAX_TOKENS", "160"))
+TRANSLATEGEMMA_TEMPERATURE: float = float(os.environ.get("TRANSLATEGEMMA_TEMPERATURE", "0.0"))
 
-# Gate thresholds
+# Pipeline (prefix freezing)
+TRANSLATE_PARTIALS: bool = os.environ.get("TRANSLATE_PARTIALS", "true").lower() not in (
+    "false", "0", "no", "off",
+)
+SOFT_CHUNK_CHARS: int = int(os.environ.get("SOFT_CHUNK_CHARS", "220"))
+TAIL_LIVE_MS: int = int(os.environ.get("TAIL_LIVE_MS", "0"))
+MAX_CONCURRENT_TRANSLATIONS: int = int(os.environ.get("MAX_CONCURRENT_TRANSLATIONS", "8"))
+STATE_TTL_SECONDS: float = float(os.environ.get("STATE_TTL_SECONDS", "600"))
+
+# Gate thresholds (tail only)
 CHANGE_THRESHOLD: float = float(os.environ.get("CHANGE_THRESHOLD", "85"))
 MIN_NEW_CHARS: int = int(os.environ.get("MIN_NEW_CHARS", "10"))
-PARTIAL_DEBOUNCE_MS: int = int(os.environ.get("PARTIAL_DEBOUNCE_MS", "300"))
 STABILITY_THRESHOLD: float = float(os.environ.get("STABILITY_THRESHOLD", "0.6"))
-MAX_HOLD_SECONDS: float = float(os.environ.get("MAX_HOLD_SECONDS", "2.0"))
 MAX_CONSECUTIVE_HOLDS: int = int(os.environ.get("MAX_CONSECUTIVE_HOLDS", "2"))
+
+# Deprecated (ignored, kept so old deployments don't crash on startup)
+PARTIAL_DEBOUNCE_MS: int = int(os.environ.get("PARTIAL_DEBOUNCE_MS", "0"))
+MAX_HOLD_SECONDS: float = float(os.environ.get("MAX_HOLD_SECONDS", "0"))
+if os.environ.get("PARTIAL_DEBOUNCE_MS") or os.environ.get("MAX_HOLD_SECONDS"):
+    print(
+        "WARNING: PARTIAL_DEBOUNCE_MS / MAX_HOLD_SECONDS are deprecated and ignored "
+        "(prefix-freezing pipeline; see TAIL_LIVE_MS)",
+        file=sys.stderr,
+    )
 
 # Logging
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")

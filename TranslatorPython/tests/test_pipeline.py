@@ -1,356 +1,261 @@
-"""Tests for the anti-flicker pipeline orchestrator."""
+"""Tests for the prefix-freezing Pipeline."""
 
 import asyncio
 
 import pytest
 
 from translator.pipeline import Pipeline
-from translator.providers.echo import EchoProvider
+from translator.providers.base import TranslationProvider
 
 
-def _make_transcription(
-    seg_id: int = 1,
-    text: str = "Bonjour",
-    lang: str = "fr-FR",
-    translator: str = "test",
-    target_lang: str = "en",
-) -> dict:
-    """Create a transcription packet for testing."""
+class FakeProvider(TranslationProvider):
+    def __init__(self, latency: float = 0.0) -> None:
+        self.latency = latency
+        self.calls: list[str] = []
+
+    async def translate(self, text, source_lang, target_lang):
+        self.calls.append(text)
+        if self.latency:
+            await asyncio.sleep(self.latency)
+        return f"T({text})"
+
+
+class PublishLog:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    async def publish(self, session_id, channel_id, action, payload, key):
+        self.events.append((action, payload))
+
+
+def trans(text, seg=1, lang="fr-FR"):
     return {
-        "segmentId": seg_id,
+        "segmentId": seg,
         "astart": "2026-01-01T00:00:00Z",
         "text": text,
         "start": 0,
         "end": 1.0,
         "lang": lang,
         "locutor": None,
-        "translations": {},
-        "externalTranslations": [
-            {"targetLang": target_lang, "translator": translator}
-        ],
     }
 
 
-def _make_targets(translator: str = "test", target_lang: str = "en") -> list[dict]:
-    return [{"targetLang": target_lang, "translator": translator}]
+TARGETS = [{"targetLang": "en", "translator": "test"}]
 
 
-class TestPipelineFinal:
-    """Test that finals bypass all gates."""
+def make_pipeline(provider, publog, **kw):
+    return Pipeline(provider=provider, publish_fn=publog.publish, **kw)
 
-    @pytest.fixture
-    def published(self):
-        return []
 
-    @pytest.fixture
-    def pipeline(self, published):
-        async def publish_fn(session_id, channel_id, action, payload, key):
-            published.append(
-                {"session_id": session_id, "channel_id": channel_id,
-                 "action": action, "payload": payload, "key": key}
-            )
+async def drain(pipeline, delay=0.05):
+    await asyncio.sleep(delay)
 
-        return Pipeline(
-            provider=EchoProvider(),
-            publish_fn=publish_fn,
-            debounce_ms=100,
-        )
 
-    @pytest.mark.asyncio
-    async def test_final_publishes_immediately(self, pipeline, published):
-        """Final events should translate and publish immediately."""
-        transcription = _make_transcription(text="Bonjour le monde")
-        targets = _make_targets()
-        await pipeline.handle_final("sess1", "0", transcription, targets)
+class TestPunctuationDriven:
+    async def test_no_punctuation_no_translation(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Bonjour tout le"), TARGETS)
+        await p.handle_partial("s", "c", trans("Bonjour tout le monde sans ponctuation"), TARGETS)
+        await drain(p)
+        assert prov.calls == []
+        assert log.events == []
 
-        assert len(published) == 1
-        assert published[0]["action"] == "final"
-        assert published[0]["payload"]["text"] == "Bonjour le monde"  # echo
-        assert published[0]["payload"]["sourceLang"] == "fr-FR"
-        assert published[0]["payload"]["targetLang"] == "en"
+    async def test_sentence_close_translates_once(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Bonjour tout le monde."), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Bonjour tout le monde."]
+        assert log.events[-1][0] == "partial"
+        assert log.events[-1][1]["text"] == "T(Bonjour tout le monde.)"
 
-    @pytest.mark.asyncio
-    async def test_final_clears_state(self, pipeline, published):
-        """Final should clear segment state."""
-        key = "sess1/0/en"
-        transcription = _make_transcription(text="Bonjour")
-        targets = _make_targets()
+    async def test_frozen_sentence_never_retranslated(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Première phrase."), TARGETS)
+        await drain(p)
+        for growth in ["Première phrase. Suite", "Première phrase. Suite du texte",
+                       "Première phrase. Suite du texte sans fin"]:
+            await p.handle_partial("s", "c", trans(growth), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Première phrase."]  # ONE call total
 
-        # Create some state via a partial
-        await pipeline.handle_partial("sess1", "0", transcription, targets)
-        assert key in pipeline._states
+    async def test_second_sentence_appends(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Un."), TARGETS)
+        await drain(p)
+        await p.handle_partial("s", "c", trans("Un. Deux."), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Un.", "Deux."]
+        assert log.events[-1][1]["text"] == "T(Un.) T(Deux.)"
 
-        # Now send final
-        await pipeline.handle_final("sess1", "0", transcription, targets)
-        assert key not in pipeline._states
+    async def test_published_prefix_is_monotone(self):
+        prov, log = FakeProvider(latency=0.01), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Un. Deux. Trois."), TARGETS)
+        await drain(p, 0.2)
+        texts = [e[1]["text"] for e in log.events]
+        assert texts, "expected publications"
+        for prev, cur in zip(texts, texts[1:]):
+            assert cur.startswith(prev)
 
-    @pytest.mark.asyncio
-    async def test_final_cancels_pending_debounce(self, pipeline, published):
-        """Final should cancel any pending debounce timer."""
-        transcription = _make_transcription(text="Bonjour")
-        targets = _make_targets()
 
-        # Start a partial (sets debounce timer)
-        await pipeline.handle_partial("sess1", "0", transcription, targets)
+class TestEcoMode:
+    async def test_translate_partials_false_only_finals(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log, translate_partials=False)
+        await p.handle_partial("s", "c", trans("Une phrase complète."), TARGETS)
+        await drain(p)
+        assert prov.calls == []
+        await p.handle_final("s", "c", trans("Une phrase complète."), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Une phrase complète."]
+        assert log.events[-1][0] == "final"
 
-        # Immediately send final (should cancel debounce)
-        final_transcription = _make_transcription(text="Bonjour le monde.")
-        await pipeline.handle_final("sess1", "0", final_transcription, targets)
 
-        # Wait for any would-be debounce to fire
-        await asyncio.sleep(0.2)
+class TestTailLive:
+    async def test_tail_translated_in_live_mode(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log, tail_live_ms=1, min_new_chars=5)
+        await p.handle_partial("s", "c", trans("Bonjour tout le monde"), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Bonjour tout le monde"]
+        assert log.events[-1][1]["text"] == "T(Bonjour tout le monde)"
 
-        # Only the final's publish should be recorded
-        final_publishes = [p for p in published if p["action"] == "final"]
-        assert len(final_publishes) == 1
+    async def test_tail_change_gate_reference_at_submission(self):
+        # Reference must move at SUBMISSION (D3 fix): resubmitting a barely
+        # different text while a translation is in flight must be gated out.
+        prov, log = FakeProvider(latency=0.05), PublishLog()
+        p = make_pipeline(prov, log, tail_live_ms=1, min_new_chars=10)
+        await p.handle_partial("s", "c", trans("Bonjour tout le monde"), TARGETS)
+        await p.handle_partial("s", "c", trans("Bonjour tout le mondes"), TARGETS)
+        await drain(p, 0.2)
+        assert prov.calls == ["Bonjour tout le monde"]
 
-    @pytest.mark.asyncio
-    async def test_final_multiple_targets(self, pipeline, published):
-        """Final with multiple targets should publish for each."""
-        transcription = _make_transcription(text="Bonjour")
-        transcription["externalTranslations"] = [
-            {"targetLang": "en", "translator": "test"},
-            {"targetLang": "de", "translator": "test"},
-        ]
+
+class TestFinals:
+    async def test_final_reuses_frozen_and_tail(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log, tail_live_ms=1, min_new_chars=1)
+        await p.handle_partial("s", "c", trans("Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        calls_before = len(prov.calls)  # frozen "Une phrase." + tail "Et la suite"
+        await p.handle_final("s", "c", trans("Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        assert len(prov.calls) == calls_before  # P7: ZERO new request
+        assert log.events[-1][0] == "final"
+        assert log.events[-1][1]["text"] == "T(Une phrase.) T(Et la suite)"
+
+    async def test_final_translates_only_remainder(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)  # tail live OFF
+        await p.handle_partial("s", "c", trans("Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Une phrase."]
+        await p.handle_final("s", "c", trans("Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Une phrase.", "Et la suite"]
+        assert log.events[-1][1]["text"] == "T(Une phrase.) T(Et la suite)"
+
+    async def test_final_reuse_despite_leading_space(self):
+        # Real-world shape: Voxtral partials carry a leading space, finals don't.
+        # The frozen-prefix reuse must survive whitespace differences.
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans(" Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Une phrase."]
+        await p.handle_final("s", "c", trans("Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Une phrase.", "Et la suite"]  # remainder only
+        assert log.events[-1][1]["text"] == "T(Une phrase.) T(Et la suite)"
+
+    async def test_final_rewritten_full_retranslation(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Une phrase. Et la suite"), TARGETS)
+        await drain(p)
+        rewritten = "Une phrase, et la suite."  # final rewrote frozen text
+        await p.handle_final("s", "c", trans(rewritten), TARGETS)
+        await drain(p)
+        assert prov.calls[-1] == rewritten  # one full retranslation
+        assert log.events[-1][1]["text"] == f"T({rewritten})"
+
+    async def test_final_does_not_block_caller(self):
+        # D12 fix: handle_final must return immediately even with a slow provider
+        prov, log = FakeProvider(latency=0.5), PublishLog()
+        p = make_pipeline(prov, log)
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        await p.handle_final("s", "c", trans("Une phrase complète."), TARGETS)
+        assert loop.time() - t0 < 0.1
+        await drain(p, 0.7)
+        assert log.events[-1][0] == "final"
+
+    async def test_final_publishes_all_targets(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
         targets = [
-            {"targetLang": "en", "translator": "test"},
-            {"targetLang": "de", "translator": "test"},
+            {"targetLang": "en", "translator": "t"},
+            {"targetLang": "de", "translator": "t"},
         ]
-        await pipeline.handle_final("sess1", "0", transcription, targets)
-        assert len(published) == 2
+        await p.handle_final("s", "c", trans("Phrase."), targets)
+        await drain(p)
+        finals = [e for e in log.events if e[0] == "final"]
+        assert {e[1]["targetLang"] for e in finals} == {"en", "de"}
 
 
-class TestPipelinePartial:
-    """Test partial flow through the pipeline."""
+class TestSegmentLifecycle:
+    async def test_new_segment_resets_state(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Phrase un.", seg=1), TARGETS)
+        await drain(p)
+        await p.handle_partial("s", "c", trans("Phrase deux.", seg=2), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Phrase un.", "Phrase deux."]
+        # segment 2 publication must NOT contain segment 1 text
+        assert log.events[-1][1]["text"] == "T(Phrase deux.)"
+        assert log.events[-1][1]["segmentId"] == 2
 
-    @pytest.fixture
-    def published(self):
-        return []
-
-    @pytest.fixture
-    def pipeline(self, published):
-        async def publish_fn(session_id, channel_id, action, payload, key):
-            published.append(
-                {"session_id": session_id, "channel_id": channel_id,
-                 "action": action, "payload": payload, "key": key}
-            )
-
-        return Pipeline(
-            provider=EchoProvider(),
-            publish_fn=publish_fn,
-            debounce_ms=50,  # Short debounce for faster tests
-            change_threshold=85,
-            min_new_chars=10,
-            stability_threshold=0.6,
-            max_hold_seconds=1.0,
-            max_consecutive_holds=3,
-        )
-
-    @pytest.mark.asyncio
-    async def test_first_partial_publishes_after_debounce(self, pipeline, published):
-        """First partial should pass change gate and publish after debounce."""
-        transcription = _make_transcription(text="Bonjour le monde entier")
-        targets = _make_targets()
-
-        await pipeline.handle_partial("sess1", "0", transcription, targets)
-        # Nothing published yet (debounce pending)
-        assert len(published) == 0
-
-        # Wait for debounce
-        await asyncio.sleep(0.15)
-        assert len(published) == 1
-        assert published[0]["action"] == "partial"
-
-    @pytest.mark.asyncio
-    async def test_debounce_cancelled_by_new_partial(self, pipeline, published):
-        """New partial should reset the debounce timer."""
-        transcription1 = _make_transcription(text="Bonjour le monde entier")
-        transcription2 = _make_transcription(
-            text="Bonjour le monde entier et bienvenue"
-        )
-        targets = _make_targets()
-
-        await pipeline.handle_partial("sess1", "0", transcription1, targets)
-        await asyncio.sleep(0.02)  # Less than debounce
-        await pipeline.handle_partial("sess1", "0", transcription2, targets)
-
-        await asyncio.sleep(0.15)
-
-        # Should have published the second text (first debounce was cancelled)
-        assert len(published) >= 1
-        last_text = published[-1]["payload"]["text"]
-        assert "bienvenue" in last_text
-
-    @pytest.mark.asyncio
-    async def test_change_gate_skips_minor_addition(self, pipeline, published):
-        """Change gate should skip when source barely changed."""
-        transcription1 = _make_transcription(text="Bonjour le monde entier")
-        targets = _make_targets()
-
-        # First partial: should eventually publish
-        await pipeline.handle_partial("sess1", "0", transcription1, targets)
-        await asyncio.sleep(0.15)
-        assert len(published) == 1
-
-        # Minor addition (< 10 chars, similar)
-        transcription2 = _make_transcription(text="Bonjour le monde entier,")
-        await pipeline.handle_partial("sess1", "0", transcription2, targets)
-        await asyncio.sleep(0.15)
-
-        # Should still be 1 publish (minor change skipped)
-        assert len(published) == 1
-
-    @pytest.mark.asyncio
-    async def test_sentence_boundary_triggers_immediate_translate(self, pipeline, published):
-        """Sentence boundary should bypass debounce."""
-        # First partial with no sentence boundary
-        transcription1 = _make_transcription(text="Bonjour le monde entier")
-        targets = _make_targets()
-        await pipeline.handle_partial("sess1", "0", transcription1, targets)
-        await asyncio.sleep(0.15)
-        initial_count = len(published)
-
-        # New partial with sentence boundary (period + space)
-        transcription2 = _make_transcription(
-            text="Bonjour le monde entier. Comment allez"
-        )
-        await pipeline.handle_partial("sess1", "0", transcription2, targets)
-
-        # Should publish immediately (no debounce wait needed)
-        # Give a tiny bit of time for the async path
-        await asyncio.sleep(0.02)
-        assert len(published) > initial_count
-
-    @pytest.mark.asyncio
-    async def test_pipeline_cleanup_on_stop(self, pipeline, published):
-        """Pipeline stop should cancel all pending tasks."""
-        transcription = _make_transcription(text="Bonjour le monde entier")
-        targets = _make_targets()
-
-        await pipeline.handle_partial("sess1", "0", transcription, targets)
-        # Debounce task is pending
-        state = pipeline._states.get("sess1/0/en")
-        assert state is not None
-        debounce_task = state.debounce_task
-        assert debounce_task is not None
-
-        await pipeline.stop()
-        # Allow event loop tick for cancellation to complete
-        await asyncio.sleep(0)
-        # After stop, tasks should be cancelled or done
-        assert debounce_task.done()
+    async def test_asr_rewrite_resets_and_refreezes(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Bonjour monde."), TARGETS)
+        await drain(p)
+        await p.handle_partial("s", "c", trans("Bonsoir monde."), TARGETS)  # rewrite
+        await drain(p)
+        assert prov.calls == ["Bonjour monde.", "Bonsoir monde."]
+        assert log.events[-1][1]["text"] == "T(Bonsoir monde.)"
 
 
-class TestPipelineStabilityHold:
-    """Test stability gate hold/force-publish behavior.
+class TestRobustness:
+    async def test_unsupported_lang_does_not_crash(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Ola tudo bem.", lang="pt-BR"), TARGETS)
+        await drain(p)
+        assert prov.calls == ["Ola tudo bem."]  # regex fallback froze it
 
-    Uses a mock provider that returns controllable translations.
-    """
-
-    @pytest.fixture
-    def published(self):
-        return []
-
-    @pytest.fixture
-    def translations(self):
-        """Queue of translations to return."""
-        return []
-
-    @pytest.fixture
-    def pipeline(self, published, translations):
-        class MockProvider:
+    async def test_provider_error_on_freeze_does_not_crash(self):
+        class Failing(FakeProvider):
             async def translate(self, text, source_lang, target_lang):
-                if translations:
-                    return translations.pop(0)
-                return text
+                raise RuntimeError("down")
 
-        async def publish_fn(session_id, channel_id, action, payload, key):
-            published.append(
-                {"session_id": session_id, "channel_id": channel_id,
-                 "action": action, "payload": payload, "key": key}
-            )
+        prov, log = Failing(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.handle_partial("s", "c", trans("Une phrase."), TARGETS)
+        await drain(p)
+        assert log.events == []  # nothing published, no exception escaped
 
-        return Pipeline(
-            provider=MockProvider(),
-            publish_fn=publish_fn,
-            debounce_ms=10,
-            stability_threshold=0.6,
-            max_hold_seconds=0.3,
-            max_consecutive_holds=3,
-        )
-
-    @pytest.mark.asyncio
-    async def test_hold_on_prefix_break(self, pipeline, published, translations):
-        """Unstable prefix should trigger hold."""
-        targets = _make_targets()
-
-        # First partial: "it walks on a" -> publishes (first display)
-        translations.append("it walks on a")
-        t1 = _make_transcription(text="ça marche sur une")
-        await pipeline.handle_partial("sess1", "0", t1, targets)
-        await asyncio.sleep(0.05)
-        assert len(published) == 1
-        assert published[0]["payload"]["text"] == "it walks on a"
-
-        # Second partial: "it works on an RTX card" -> prefix break -> HOLD
-        translations.append("it works on an RTX card")
-        t2 = _make_transcription(text="ça marche sur une carte RTX tout neuf")
-        await pipeline.handle_partial("sess1", "0", t2, targets)
-        await asyncio.sleep(0.05)
-
-        # Should still be 1 publish (second was held)
-        assert len(published) == 1
-
-    @pytest.mark.asyncio
-    async def test_max_hold_timer_force_publishes(self, pipeline, published, translations):
-        """After max_hold_seconds, held translation should be force-published."""
-        targets = _make_targets()
-
-        # First publish
-        translations.append("it walks on a")
-        t1 = _make_transcription(text="ça marche sur une")
-        await pipeline.handle_partial("sess1", "0", t1, targets)
-        await asyncio.sleep(0.05)
-        assert len(published) == 1
-
-        # Hold (prefix break)
-        translations.append("it works on an RTX card")
-        t2 = _make_transcription(text="ça marche sur une carte RTX tout neuf")
-        await pipeline.handle_partial("sess1", "0", t2, targets)
-        await asyncio.sleep(0.05)
-        assert len(published) == 1
-
-        # Wait for max_hold_seconds to expire (0.3s)
-        await asyncio.sleep(0.4)
-        assert len(published) == 2
-        assert published[1]["payload"]["text"] == "it works on an RTX card"
-
-    @pytest.mark.asyncio
-    async def test_max_consecutive_holds_force_publishes(
-        self, pipeline, published, translations
-    ):
-        """After max_consecutive_holds, should force-publish."""
-        targets = _make_targets()
-
-        # First publish (establishes 4-word baseline)
-        translations.append("the quick brown fox")
-        t1 = _make_transcription(text="premier texte source assez long")
-        await pipeline.handle_partial("sess1", "0", t1, targets)
-        await asyncio.sleep(0.05)
-        assert len(published) == 1
-
-        # Now send 3 partials that all break prefix (each with enough change)
-        # consecutive_holds will hit max_consecutive_holds=3 on the 3rd
-        base_texts = [
-            "deuxieme texte completement different ici",
-            "troisieme version du texte toujours differente",
-            "quatrieme iteration encore une fois differente",
-        ]
-        for i, base in enumerate(base_texts):
-            translations.append(f"x y z w v{i}")  # Always breaks "the quick brown fox" prefix
-            t = _make_transcription(text=base)
-            await pipeline.handle_partial("sess1", "0", t, targets)
-            await asyncio.sleep(0.05)
-
-        # The 3rd hold should trigger force-publish
-        assert len(published) == 2  # Initial + force on 3rd hold
+    async def test_stats_logger_idempotent(self):
+        prov, log = FakeProvider(), PublishLog()
+        p = make_pipeline(prov, log)
+        await p.start_stats_logger()
+        first = p._stats_task
+        await p.start_stats_logger()  # reconnection: must cancel previous (D10)
+        await asyncio.sleep(0)
+        assert first.cancelled() or first.done()
+        await p.stop()

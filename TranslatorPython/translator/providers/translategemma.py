@@ -16,7 +16,8 @@ class TranslateGemmaProvider(TranslationProvider):
         self,
         endpoint: str = "",
         model: str = "Infomaniak-AI/vllm-translategemma-4b-it",
-        max_tokens: int = 500,
+        max_tokens: int = 160,
+        temperature: float = 0.0,
     ) -> None:
         # Import here to allow non-translategemma configs to skip validation
         if not endpoint:
@@ -24,11 +25,13 @@ class TranslateGemmaProvider(TranslationProvider):
                 TRANSLATEGEMMA_ENDPOINT,
                 TRANSLATEGEMMA_MAX_TOKENS,
                 TRANSLATEGEMMA_MODEL,
+                TRANSLATEGEMMA_TEMPERATURE,
             )
 
             endpoint = TRANSLATEGEMMA_ENDPOINT
             model = TRANSLATEGEMMA_MODEL
             max_tokens = TRANSLATEGEMMA_MAX_TOKENS
+            temperature = TRANSLATEGEMMA_TEMPERATURE
 
         if not endpoint:
             raise ValueError(
@@ -38,7 +41,13 @@ class TranslateGemmaProvider(TranslationProvider):
         self.endpoint: str = endpoint.rstrip("/")
         self.model: str = model
         self.max_tokens: int = max_tokens
+        self.temperature: float = temperature
         self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=30.0)
+        # Cumulative token usage, reported by the pipeline stats loop
+        self.prompt_tokens: int = 0
+        self.completion_tokens: int = 0
+        self.requests: int = 0
+        self.truncated: int = 0
 
     async def translate(self, text: str, source_lang: str | None, target_lang: str) -> str:
         # TranslateGemma uses short codes (fr, en, de) not BCP-47 (fr-FR)
@@ -53,6 +62,7 @@ class TranslateGemmaProvider(TranslationProvider):
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
         }
 
         try:
@@ -62,7 +72,6 @@ class TranslateGemmaProvider(TranslationProvider):
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
         except httpx.HTTPStatusError as exc:
             logger.error(
                 "TranslateGemma API error: %s %s",
@@ -73,6 +82,29 @@ class TranslateGemmaProvider(TranslationProvider):
         except Exception:
             logger.exception("TranslateGemma request failed")
             raise
+
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            self.truncated += 1
+            logger.warning(
+                "TranslateGemma output truncated at max_tokens=%d (input %d chars): "
+                "the published translation is incomplete",
+                self.max_tokens, len(text),
+            )
+        usage = data.get("usage") or {}
+        self.requests += 1
+        self.prompt_tokens += usage.get("prompt_tokens", 0) or 0
+        self.completion_tokens += usage.get("completion_tokens", 0) or 0
+
+        return choice["message"]["content"].strip()
+
+    def usage_snapshot(self) -> dict[str, int]:
+        return {
+            "requests": self.requests,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "truncated": self.truncated,
+        }
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

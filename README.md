@@ -171,7 +171,7 @@ The project structure includes the following modules:
 - `Session-API`: an API to manage transcription sessions, also serves a front-end using Swagger client (Open API spec)
 - `Transcriber`: a transcription service (streaming endpoint & relay to ASR services)
 - `Scheduler`: a scheduling service that bridges the transcribers & subtitle-delivery with session manager, database, and message broker
-- `Translator`: (stub/PoC) an external translation microservice that subscribes to transcription finals via MQTT, translates text using pluggable providers (echo, TranslateGemma), and publishes results back to the broker. Not yet production-ready.
+- `TranslatorPython`: an external translation microservice that subscribes to transcription partials and finals via MQTT, translates text sentence by sentence using pluggable providers (echo, TranslateGemma), and publishes results back to the broker. See [TranslatorPython/README.md](./TranslatorPython/README.md) for the translation model (prefix freezing) and tuning.
 - The `lib` folder contains generic tooling for the project as a whole and is treated as another Node.js package. It is required from the modules using the package.json local file API. This allows the modules to access the tools provided by the `lib` package and use them in their implementation.
 
 See `doc` folder (developer informations) or specific READMEs within modules folders for more infos.
@@ -543,19 +543,20 @@ The Session-API dynamically injects online translators into profile responses at
 
 `discrete` comes from the profile's stored config; `external` comes from the `translators` table (online only). Both may overlap for the same language -- the frontend lets the user choose.
 
-### Translator Module (stub/PoC)
+### Translator Module
 
-Located in `Translator/`. This is a proof-of-concept stub for development and testing. A production-ready translator service (containerized, with proper error handling and scaling) is yet to be developed. No Dockerfile is provided yet.
+Located in `TranslatorPython/` (Python, containerized — the former Node.js stub in `Translator/` is gone). The unit of translation is the sentence: text closed by punctuation is translated once and frozen, the in-progress sentence is only translated live as an opt-in, and finals reuse the frozen translations (zero-cost when nothing changed). Total demand towards the backend is bounded by a global concurrency cap.
 
-Environment variables:
+Key environment variables (full reference and measured costs in [TranslatorPython/README.md](./TranslatorPython/README.md)):
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TRANSLATOR_NAME` | Yes | Name registered in `translators` table |
 | `TRANSLATION_PROVIDER` | No | Provider backend: `echo` (default) or `translategemma` |
 | `TRANSLATEGEMMA_ENDPOINT` | For translategemma | vLLM OpenAI-compatible endpoint |
-| `TRANSLATEGEMMA_MODEL` | No | Model name (default: `Infomaniak-AI/vllm-translategemma-4b-it`) |
-| `PARTIAL_DEBOUNCE_MS` | No | Debounce for partial translations in ms (default: 500) |
+| `TRANSLATE_PARTIALS` | No | `false` = eco mode, only finals are translated (default: `true`) |
+| `TAIL_LIVE_MS` | No | 0 = translate only at punctuation (default); N>0 = refresh the in-progress sentence at most every N ms |
+| `MAX_CONCURRENT_TRANSLATIONS` | No | Global cap on in-flight backend requests (default: 8) |
 | `BROKER_HOST` / `BROKER_PORT` | No | MQTT broker (default: `localhost:1883`) |
 
 ## Some useful documentation below

@@ -49,6 +49,21 @@ const WATCHDOG_NO_RESULT_MS = parseInt(process.env.ASR_WATCHDOG_NO_RESULT_MS || 
 const WATCHDOG_MAX_RETRIES = parseInt(process.env.ASR_WATCHDOG_MAX_RETRIES || '3', 10);
 const WATCHDOG_SLOW_RETRY_MS = parseInt(process.env.ASR_WATCHDOG_SLOW_RETRY_MS || '30000', 10);
 
+// Mute watchdog (vLLM protocol): guards against the realtime "silent
+// collapse", where the server keeps streaming EMPTY deltas at frame rate
+// while real speech is flowing (greedy silence rut, self-sustained for
+// minutes). Neither the startup watchdog (any delta, even empty, disarms it)
+// nor a wall-clock timer (indistinguishable from legitimate silence) can
+// catch it. Instead we count milliseconds of VOICED audio -- chunks whose
+// RMS exceeds ASR_MUTE_RMS_DBFS -- since the last non-empty delta: real
+// silence never accumulates, sustained speech with no text does. On trigger
+// the session is restarted (a fresh server-side session unblocks
+// immediately; the pre-arm buffer carries the last seconds of audio across).
+// Long music passages may cause periodic harmless resessions (accepted).
+// ASR_MUTE_WATCHDOG_SPEECH_MS=0 disables.
+const MUTE_WATCHDOG_SPEECH_MS = parseInt(process.env.ASR_MUTE_WATCHDOG_SPEECH_MS || '25000', 10);
+const MUTE_RMS_DBFS = parseFloat(process.env.ASR_MUTE_RMS_DBFS || '-45');
+
 class OpenAIStreamingTranscriber extends EventEmitter {
     static ERROR_MAP = {
         0: 'NO_ERROR',
@@ -92,6 +107,12 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._updateSent = false;
         this._watchdogTimer = null;
         this._watchdogRetries = 0;
+
+        // Mute watchdog state (see constant block above): voiced-audio ms
+        // accumulated since the last non-empty delta, and how many times a
+        // mute session was force-restarted (separate from _watchdogRetries).
+        this._speechMsSinceLastText = 0;
+        this._muteResessions = 0;
 
         const config = channel.transcriberProfile.config;
 
@@ -210,10 +231,52 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         if (this._watchdogRetries === WATCHDOG_MAX_RETRIES) {
             this.emit('error', OpenAIStreamingTranscriber.ERROR_MAP[5]);
         }
+        this._forceResession();
+    }
+
+    /**
+     * Tear down the current connection and schedule a fresh session. The
+     * pre-arm buffer survives, so the restart resumes without an audio gap.
+     * Shared by the startup watchdog and the mute watchdog.
+     */
+    _forceResession() {
         this.stop();
         this.logger.info(`Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
         const t = setTimeout(() => this.start(), RECONNECT_DELAY_MS);
         this._setupTimers.push(t);
+    }
+
+    /**
+     * Mute watchdog check, evaluated on each segmentation tick: too much
+     * voiced audio accumulated without a single non-empty delta means the
+     * server-side session is in a silence rut; restart it.
+     * @returns {boolean} true if a resession was triggered
+     */
+    _checkMuteWatchdog() {
+        if (MUTE_WATCHDOG_SPEECH_MS <= 0) return false;
+        if (this._speechMsSinceLastText < MUTE_WATCHDOG_SPEECH_MS) return false;
+        this._muteResessions++;
+        this.logger.warn(`No text after ${Math.round(this._speechMsSinceLastText)}ms of voiced audio (silent collapse), forcing a fresh session (resession #${this._muteResessions})`);
+        this._speechMsSinceLastText = 0;
+        this._forceResession();
+        return true;
+    }
+
+    /**
+     * Milliseconds of voiced audio in a PCM chunk (16 kHz mono 16-bit LE):
+     * the chunk duration if its RMS is above MUTE_RMS_DBFS, else 0.
+     */
+    _voicedMs(buf) {
+        const samples = buf.length >> 1;
+        if (samples === 0) return 0;
+        let sumSq = 0;
+        for (let i = 0; i < samples; i++) {
+            const s = buf.readInt16LE(i << 1) / 32768;
+            sumSq += s * s;
+        }
+        const rms = Math.sqrt(sumSq / samples);
+        if (rms === 0) return 0;
+        return 20 * Math.log10(rms) > MUTE_RMS_DBFS ? samples / 16 : 0;
     }
 
     /**
@@ -264,6 +327,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._lastLangCheckLen = 0;
         this._draining = false;
         this._drainStartTime = 0;
+        this._speechMsSinceLastText = 0;
         this.emit('connecting');
 
         // Decrypt apiKey if present
@@ -374,6 +438,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
 
         if (deltaText && deltaText.length > 0) {
             this.lastDeltaTime = Date.now();
+            this._speechMsSinceLastText = 0;
 
             if (!this.startTime) {
                 this.startTime = Date.now();
@@ -396,6 +461,8 @@ class OpenAIStreamingTranscriber extends EventEmitter {
      */
     handleFinal(text) {
         if (!text || text.trim().length === 0) return;
+
+        this._speechMsSinceLastText = 0;
 
         if (!this.startTime) {
             this.startTime = Date.now();
@@ -468,6 +535,11 @@ class OpenAIStreamingTranscriber extends EventEmitter {
      * @param {number} now - current timestamp in ms
      */
     _runSegmentationTick(now) {
+        // Mute watchdog first: during a silence rut the accumulated text is
+        // usually empty (deltas are empty), so this must run before the
+        // early returns below.
+        if (this._checkMuteWatchdog()) return;
+
         if (!this.accumulatedText || this.accumulatedText.trim().length === 0) return;
         if (!this.lastDeltaTime) return;
 
@@ -626,6 +698,10 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     transcribe(buffer) {
         // Ensure we have a Node.js Buffer (CircularBuffer returns Uint8Array)
         const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+
+        if (this.protocolName === 'vllm' && MUTE_WATCHDOG_SPEECH_MS > 0) {
+            this._speechMsSinceLastText += this._voicedMs(buf);
+        }
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN && this._sessionReady) {
             this._sendAudio(buf);

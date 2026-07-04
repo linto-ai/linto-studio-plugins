@@ -88,25 +88,30 @@ describe('OpenAIStreamingTranscriber handshake', function () {
         t.stop();
     });
 
-    it('arms on first audio when session.created arrived first', function () {
+    it('arms on session.created even when no audio is buffered yet (server defers generation)', function () {
+        // Regression: gating the arming commit on buffered audio left the
+        // server idle on the real SRT path (audio is not buffered at the
+        // instant session.created fires). The commit must go out on
+        // session-configured; the server defer-arm holds generation until the
+        // first append.
         const t = createTranscriber();
         t.start();
         emitSessionCreated(t);
 
         let sent = parseSent(t.ws);
-        assert.strictEqual(sent.length, 1); // only session.update, no commit yet
+        assert.strictEqual(sent.length, 2); // session.update + arming commit
         assert.strictEqual(sent[0].type, 'session.update');
-        assert.strictEqual(t._sessionReady, false);
+        assert.strictEqual(sent[1].type, 'input_audio_buffer.commit');
+        assert.strictEqual(sent[1].final, false);
+        assert.strictEqual(t._sessionReady, true);
 
         t.transcribe(AUDIO);
         sent = parseSent(t.ws);
-        assert.strictEqual(sent[1].type, 'input_audio_buffer.commit');
         assert.strictEqual(sent[2].type, 'input_audio_buffer.append');
-        assert.strictEqual(t._sessionReady, true);
         t.stop();
     });
 
-    it('never arms nor commits when no audio ever arrives (dead-born connection)', function () {
+    it('sends the arming commit but no append when no audio ever arrives', function () {
         const t = createTranscriber();
         t.start();
         emitSessionCreated(t);
@@ -114,9 +119,10 @@ describe('OpenAIStreamingTranscriber handshake', function () {
         t.stop();
 
         const types = parseSent(ws).map(m => m.type);
-        assert.deepStrictEqual(types, ['session.update']);
-        // No arming commit, and no final commit on teardown of an un-armed session
-        assert.ok(!types.includes('input_audio_buffer.commit'));
+        // The arming commit is sent (server defers generation until an append);
+        // no audio was ever appended.
+        assert.ok(types.includes('input_audio_buffer.commit'));
+        assert.ok(!types.includes('input_audio_buffer.append'));
     });
 
     it('sends the final commit on stop() when the session was armed', function () {

@@ -173,18 +173,22 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     }
 
     /**
-     * vLLM arming: send the initial commit once the session is configured AND
-     * the first real audio is available, then flush the retained audio.
-     * Called from _onSessionCreated (audio arrived first) and transcribe()
-     * (session was configured first).
+     * vLLM arming: send the initial commit as soon as the session is
+     * configured (session.update acked), then flush any audio buffered during
+     * the handshake. We do NOT wait for buffered audio before committing: the
+     * server defers the actual generation start to the first audio append
+     * (defer-arm), so an empty queue at commit time is safe. Gating the commit
+     * on buffered audio broke arming on the real SRT/GStreamer path (audio is
+     * not buffered at the instant _tryArm runs), leaving the server idle.
+     * Called from _onSessionCreated (normal case) and transcribe() (audio
+     * arrived before the session was configured).
      */
     _tryArm() {
         if (this._armed || !this._updateSent) return;
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-        if (this._preArmBufferBytes === 0) return; // no audio yet
         const commit = this.protocol.buildCommit(false);
         this.ws.send(JSON.stringify(commit));
-        this.logger.debug('Sent initial commit (vLLM), armed on first audio');
+        this.logger.debug('Sent initial commit (vLLM), armed');
         this._armed = true;
         this._sessionReady = true;
         this._flushPreArmBuffer();

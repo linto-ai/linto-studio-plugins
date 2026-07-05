@@ -10,13 +10,6 @@ const {
     STREAMING_SRT_UDP_PORT,
 } = process.env;
 
-// SRT max segment size. Default 1500 (SRT default) produces full-MTU
-// datagrams that overflow when the ingress path adds encapsulation overhead
-// (flannel VXLAN adds ~50 bytes), which makes a UDP reverse proxy read
-// "message too long" and tear the flow down periodically. Cap below the
-// path MTU minus overhead so every SRT datagram stays within it.
-const STREAMING_SRT_MSS = parseInt(process.env.STREAMING_SRT_MSS || '1400', 10);
-
 class MultiplexedSRTServer extends EventEmitter {
     constructor(app) {
         super();
@@ -97,11 +90,6 @@ class MultiplexedSRTServer extends EventEmitter {
                 this.onConnection(connection);
             });
             this.server = await this.asyncSrtServer.create();
-            // Cap MSS before bind so negotiated SRT datagrams (both directions)
-            // stay under the ingress path MTU (VXLAN overhead). 0 disables.
-            if (STREAMING_SRT_MSS > 0) {
-                await this.server.setSocketFlags([SRT.SRTO_MSS], [STREAMING_SRT_MSS]);
-            }
             // Check if STREAMING_PASSPHRASE is set and apply it along with key length
             const hasPassphrase = STREAMING_PASSPHRASE && STREAMING_PASSPHRASE.length > 0 && STREAMING_PASSPHRASE !== 'false';
             if (hasPassphrase) {

@@ -64,6 +64,22 @@ const WATCHDOG_SLOW_RETRY_MS = parseInt(process.env.ASR_WATCHDOG_SLOW_RETRY_MS |
 const MUTE_WATCHDOG_SPEECH_MS = parseInt(process.env.ASR_MUTE_WATCHDOG_SPEECH_MS || '25000', 10);
 const MUTE_RMS_DBFS = parseFloat(process.env.ASR_MUTE_RMS_DBFS || '-45');
 
+// --- Silence-fill pacing (vLLM realtime) ---
+// The realtime server transcribes CONTINUOUSLY after the arming commit and
+// takes no mid-session commit, so it needs an uninterrupted audio stream. SRT
+// provides one by construction: GStreamer decodes the transport at 1x and emits
+// silent PCM through speech gaps, so transcribe() is called at a steady rate.
+// The WebSocket path has no such floor -- audio reaches the ASR only when the
+// client sends it, so a silent or bursty WS client starves the server and the
+// realtime generation stalls or wedges. This pump keeps the audio timeline at
+// wall-clock pace by appending digital silence whenever the real audio falls
+// more than ASR_SILENCE_KEEPALIVE_MS behind. When audio already flows at
+// real-time (SRT) the lag never crosses the threshold, so in steady state the
+// pump emits nothing and the SRT path is unchanged. 0 disables it.
+const SILENCE_KEEPALIVE_MS = parseInt(process.env.ASR_SILENCE_KEEPALIVE_MS || '200', 10);
+const PACING_INTERVAL_MS = 100;
+const SILENCE_FILL_MAX_MS = 2000; // cap one fill (bounds a stalled timer / very long gap)
+
 class OpenAIStreamingTranscriber extends EventEmitter {
     static ERROR_MAP = {
         0: 'NO_ERROR',
@@ -113,6 +129,16 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         // mute session was force-restarted (separate from _watchdogRetries).
         this._speechMsSinceLastText = 0;
         this._muteResessions = 0;
+
+        // Silence-fill pacing state (see constant block). `_streamStartWall` is
+        // the wall-clock anchor set on the first real audio append; from then on
+        // `_audioMsAppended` (real audio + injected silence) is kept level with
+        // wall-clock. Null until the stream's first audio, so a session that
+        // never receives any audio injects nothing.
+        this._streamStartWall = null;
+        this._audioMsAppended = 0;
+        this._pacingTimer = null;
+        this._silenceKeepaliveMs = SILENCE_KEEPALIVE_MS;
 
         const config = channel.transcriberProfile.config;
 
@@ -195,6 +221,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.emit('ready');
         this.startSegmentationTimer();
         this._startWatchdog();
+        this._startPacing();
     }
 
     _flushPreArmBuffer() {
@@ -332,6 +359,10 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._draining = false;
         this._drainStartTime = 0;
         this._speechMsSinceLastText = 0;
+        // Reset the pacing clock; a reconnect re-anchors on its first audio.
+        this._streamStartWall = null;
+        this._audioMsAppended = 0;
+        this._stopPacing();
         this.emit('connecting');
 
         // Decrypt apiKey if present
@@ -723,6 +754,10 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     }
 
     _sendAudio(buf) {
+        // Anchor the pacing clock on the stream's first real audio. Silence is
+        // only ever injected once this is set, so the first _sendAudio is always
+        // real audio and the anchor is honest.
+        if (this._streamStartWall === null) this._streamStartWall = Date.now();
         // Split large buffers into chunks of MAX_CHUNK_BYTES (200ms @ 16kHz mono 16-bit)
         const MAX_CHUNK_BYTES = 6400;
         let offset = 0;
@@ -733,6 +768,55 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             this.ws.send(JSON.stringify(msg));
             offset += MAX_CHUNK_BYTES;
         }
+        // Advance the audio timeline (real audio and injected silence alike).
+        this._audioMsAppended += buf.length / PCM_BYTES_PER_MS;
+    }
+
+    // --- Silence-fill pacing (see constant block) ---
+
+    _startPacing() {
+        if (this._silenceKeepaliveMs <= 0) return;
+        this._stopPacing();
+        this._pacingTimer = setInterval(() => this._runPacingTick(Date.now()), PACING_INTERVAL_MS);
+        // Never keep the event loop alive just for the pump.
+        if (this._pacingTimer.unref) this._pacingTimer.unref();
+    }
+
+    _stopPacing() {
+        if (this._pacingTimer) {
+            clearInterval(this._pacingTimer);
+            this._pacingTimer = null;
+        }
+    }
+
+    /**
+     * One pacing tick. Extracted from the interval callback so it can be
+     * unit-tested with a controlled clock (same pattern as _runSegmentationTick).
+     * Appends just enough digital silence to bring the audio timeline back to
+     * wall-clock when real audio has fallen more than `_silenceKeepaliveMs`
+     * behind. Returns the ms of silence sent (0 when none is needed).
+     * @param {number} now - current timestamp in ms
+     */
+    _runPacingTick(now) {
+        if (this._silenceKeepaliveMs <= 0) return 0;
+        // No real audio yet: a session that never streams injects nothing.
+        if (this._streamStartWall === null) return 0;
+        if (!this._armed) return 0;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return 0;
+
+        const lagMs = (now - this._streamStartWall) - this._audioMsAppended;
+        if (lagMs <= this._silenceKeepaliveMs) return 0; // real audio is keeping up
+
+        const fillMs = Math.min(Math.floor(lagMs), SILENCE_FILL_MAX_MS);
+        if (fillMs <= 0) return 0;
+        this._sendSilence(fillMs);
+        return fillMs;
+    }
+
+    _sendSilence(ms) {
+        // PCM S16LE zeros = digital silence. Routed through _sendAudio so it is
+        // chunked into the same 200ms appends and advances the audio clock.
+        this._sendAudio(Buffer.alloc(ms * PCM_BYTES_PER_MS));
     }
 
     _bufferPreArm(buf) {
@@ -757,6 +841,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._connGeneration++;
 
         this._clearWatchdog();
+        this._stopPacing();
 
         // Clear all pending timers (setup delays, reconnection)
         for (const t of this._setupTimers) clearTimeout(t);

@@ -272,6 +272,7 @@ module.exports = (webserver) => {
                 const results = await Model.Session.findAndCountAll({
                     limit: limit,
                     offset: offset,
+                    distinct: true,
                     include: {
                         model: Model.Channel,
                         attributes: {

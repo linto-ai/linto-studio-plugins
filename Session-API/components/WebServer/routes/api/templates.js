@@ -73,6 +73,7 @@ module.exports = (webserver) => {
                 const results = await Model.SessionTemplate.findAndCountAll({
                     limit: limit,
                     offset: offset,
+                    distinct: true,
                     include: {
                         model: Model.ChannelTemplate,
                         attributes: {

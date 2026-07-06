@@ -64,6 +64,13 @@ const WATCHDOG_SLOW_RETRY_MS = parseInt(process.env.ASR_WATCHDOG_SLOW_RETRY_MS |
 const SILENCE_KEEPALIVE_MS = parseInt(process.env.ASR_SILENCE_KEEPALIVE_MS || '200', 10);
 const PACING_INTERVAL_MS = 100;
 const SILENCE_FILL_MAX_MS = 2000; // cap one fill (bounds a stalled timer / very long gap)
+// Peak amplitude (S16 LSB) of the dither noise used to fill silence instead of
+// digital zeros. |sample| <= this; ~4 gives an RMS around -82 dBFS, inaudible
+// and far below any speech/VAD level. A stream of exact zeros is out of the
+// audio encoder's distribution and makes the realtime model hallucinate
+// spurious tokens on injected silence; a faint noise floor reads as real
+// silence. Configurable; 0 falls back to pure zeros.
+const SILENCE_DITHER_AMP = parseInt(process.env.ASR_SILENCE_DITHER_AMP || '4', 10);
 
 class OpenAIStreamingTranscriber extends EventEmitter {
     static ERROR_MAP = {
@@ -747,9 +754,22 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     }
 
     _sendSilence(ms) {
-        // PCM S16LE zeros = digital silence. Routed through _sendAudio so it is
-        // chunked into the same 200ms appends and advances the audio clock.
-        this._sendAudio(Buffer.alloc(ms * PCM_BYTES_PER_MS));
+        // Fill with a faint noise floor (dither) rather than digital zeros:
+        // exact zeros are out of the audio encoder's distribution and make the
+        // realtime model hallucinate spurious tokens on injected silence. Kept
+        // far below any speech level (see SILENCE_DITHER_AMP). Routed through
+        // _sendAudio so it is chunked into 200ms appends and advances the clock.
+        const bytes = ms * PCM_BYTES_PER_MS;
+        if (SILENCE_DITHER_AMP <= 0) {
+            this._sendAudio(Buffer.alloc(bytes));
+            return;
+        }
+        const buf = Buffer.allocUnsafe(bytes);
+        const span = 2 * SILENCE_DITHER_AMP + 1;
+        for (let i = 0; i + 1 < bytes; i += 2) {
+            buf.writeInt16LE((Math.random() * span | 0) - SILENCE_DITHER_AMP, i);
+        }
+        this._sendAudio(buf);
     }
 
     _bufferPreArm(buf) {

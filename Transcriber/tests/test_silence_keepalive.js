@@ -23,8 +23,15 @@ function appends(t) {
         .map(m => JSON.parse(m))
         .filter(m => m.type === 'input_audio_buffer.append');
 }
+// Injected silence is a faint noise floor (dither), not exact zeros: every
+// sample stays at a tiny amplitude, far below the real-audio marker (value 1
+// bytes -> int16 257 in pcm()).
 function isSilent(appendMsg) {
-    return Buffer.from(appendMsg.audio, 'base64').every(b => b === 0);
+    const buf = Buffer.from(appendMsg.audio, 'base64');
+    for (let i = 0; i + 1 < buf.length; i += 2) {
+        if (Math.abs(buf.readInt16LE(i)) > 16) return false;
+    }
+    return true;
 }
 function silenceAppends(t) {
     return appends(t).filter(isSilent).length;

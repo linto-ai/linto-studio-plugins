@@ -29,6 +29,14 @@ def _validate_env() -> None:
     """
     if os.environ.get("DEVELOPMENT", "").lower() in ("1", "true"):
         return
+    if os.environ.get("LIVEKIT_TOKEN_FROM_PAYLOAD", "false").strip().lower() in (
+        "1",
+        "true",
+    ):
+        # Payload-token mode: the bot never signs its own JWT (Meet mints per-room),
+        # so it holds NO LiveKit signing credential — the devkey/secret guard would
+        # wrongly refuse a correctly credential-agnostic replica. Skip it.
+        return
     key = os.environ.get("LIVEKIT_API_KEY", "devkey")
     secret = os.environ.get("LIVEKIT_API_SECRET", "secret")
     if not key or not secret or key == "devkey" or secret == "secret":

@@ -38,6 +38,14 @@ class BrokerClient:
         ]
         self.broker_host = os.environ.get("BROKER_HOST", "mosquitto")
         self.broker_port = int(os.environ.get("BROKER_PORT", "1883"))
+        # When true, the join token MUST come from the startbot payload (Meet-minted,
+        # per-room). The bot never env-mints in this mode — a missing token fails
+        # closed (bot-error) rather than signing a devkey against a real LiveKit.
+        # Default false keeps the dev env-mint path (coinciding devkey/secret).
+        self.token_from_payload = (
+            os.environ.get("LIVEKIT_TOKEN_FROM_PAYLOAD", "false").strip().lower()
+            in ("1", "true")
+        )
 
         self.bots: dict[str, LiveKitBot] = {}  # `${sessionId}_${channelId}` -> LiveKitBot
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -77,6 +85,14 @@ class BrokerClient:
 
     def _publish_bot_error(self, bot_id, reason: str) -> None:
         if not isinstance(bot_id, int) or bot_id <= 0:
+            # No addressable botId to publish under — but the failure must not
+            # vanish silently (e.g. a fail-closed startbot with no botId): surface
+            # it in the logs so it stays observable.
+            print(
+                f"visio-bot-service: bot-error '{reason}' dropped — "
+                f"missing/invalid botId {bot_id!r}",
+                flush=True,
+            )
             return
         if self.client is None:
             return
@@ -206,12 +222,28 @@ class BrokerClient:
 
         bot = None
         try:
-            native = session["meta"]["linto_native"]
+            # Resolve the capability descriptor generically: the generic map
+            # meta.native[<botType>] wins, with meta.linto_native as the one-release
+            # back-compat alias for "visio-native". A malformed/missing descriptor
+            # trips the KeyError/TypeError below -> bot-error (invalid payload).
+            meta = session["meta"]
+            desc = (meta.get("native") or {}).get(data.get("botType")) or meta.get(
+                "linto_native"
+            )
+            token = desc.get("token") if desc else None
+            # Fail closed in payload-token mode: never env-mint a devkey against a
+            # real LiveKit. No token -> bot-error (the Scheduler re-routes to web).
+            if self.token_from_payload and not token:
+                raise RuntimeError(
+                    "LIVEKIT_TOKEN_FROM_PAYLOAD set but startbot payload carries no "
+                    "join token — failing closed (no env-mint)"
+                )
             bot = LiveKitBot(
-                livekit_url=native["livekitUrl"],
-                room_name=native["room"],
+                livekit_url=desc["livekitUrl"],
+                room_name=desc["room"],
                 websocket_url=data["websocketUrl"],
                 bot_id=bot_id,
+                join_token=token,
             )
             ok = await bot.start()
             if not ok:

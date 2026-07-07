@@ -4,8 +4,10 @@ Joins one LiveKit room as a HIDDEN participant (can_subscribe, !can_publish),
 subscribes to every remote audio track, pumps each track's frames into the
 AudioMixer and forwards the mixed stream to the Transcriber.
 
-Token is minted LOCALLY from LIVEKIT_API_KEY/SECRET (env) — no secret ever
-travels over MQTT. livekit 1.1.12 signatures match smoke_connect.py exactly.
+Token: prefer a room-scoped bearer JWT supplied in the startbot payload (minted
+by the room owner, Meet, with ITS secret — so no signing secret lives here and a
+replica is credential-agnostic). Absent (dev fallback), it is minted LOCALLY from
+LIVEKIT_API_KEY/SECRET (env). livekit 1.1.12 signatures match smoke_connect.py.
 """
 import asyncio
 import heapq
@@ -26,12 +28,25 @@ OVERFLOW_TAG = 255
 
 
 class LiveKitBot:
-    def __init__(self, livekit_url: str, room_name: str, websocket_url: str, bot_id=None) -> None:
+    def __init__(
+        self,
+        livekit_url: str,
+        room_name: str,
+        websocket_url: str,
+        bot_id=None,
+        join_token=None,
+    ) -> None:
         self.livekit_url = livekit_url
         self.room_name = room_name
         self.websocket_url = websocket_url
         self.bot_id = bot_id
 
+        # join_token: a room-scoped bearer JWT minted by the room owner (Meet) and
+        # carried in the startbot payload (meta.native/linto_native). When present
+        # the bot NEVER signs its own token — the signing secret stays in Meet, so
+        # a single credential-agnostic replica serves any tenant. Absent (dev
+        # fallback), _token() env-mints below with the coinciding devkey/secret.
+        self.join_token = join_token
         self.api_key = os.environ.get("LIVEKIT_API_KEY", "devkey")
         self.api_secret = os.environ.get("LIVEKIT_API_SECRET", "secret")
 
@@ -77,6 +92,11 @@ class LiveKitBot:
 
     # ---- token ------------------------------------------------------------
     def _token(self) -> str:
+        # Prefer the payload-supplied token (minted by Meet with ITS secret). Only
+        # fall back to env-minting when none was provided — the dev path where the
+        # bot's LIVEKIT_API_KEY/SECRET coincide with Meet's.
+        if self.join_token:
+            return self.join_token
         return (
             AccessToken(self.api_key, self.api_secret)
             .with_identity(f"linto-visio-bot-{self.room_name}")

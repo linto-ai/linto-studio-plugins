@@ -699,7 +699,10 @@ describe('BrokerClient bot routing (BotService)', () => {
 
   describe('#startBot() provider fallback (BOT_PROVIDER_FALLBACK_*)', () => {
     function visioNativeBotModel() {
-      // Bot requests the primary capability "visio-native".
+      // Bot requests the primary capability "visio-native". The session carries a
+      // valid native signal (meta.native + token) so the §2b capability gate keeps
+      // the native leg — these cases exercise fallback capability MATCHING, not the
+      // gate (a signalless native session is demoted to web, covered separately).
       return buildModel({
         Bot: {
           findByPk: async () => ({ id: 42, channelId: 10, url: 'https://meet.example/room', provider: 'visio-native', enableDisplaySub: false, subSource: null }),
@@ -707,7 +710,7 @@ describe('BrokerClient bot routing (BotService)', () => {
           destroy: async () => [1, []]
         },
         Channel: { findByPk: async () => ({ id: 10, sessionId: 'sess-1' }) },
-        Session: { findByPk: async () => ({ id: 'sess-1', channels: [{ id: 10, transcriberProfile: null }] }) }
+        Session: { findByPk: async () => ({ id: 'sess-1', meta: { native: { 'visio-native': { livekitUrl: 'ws://lk', room: 'room-1', token: 'jwt-tok' } } }, channels: [{ id: 10, transcriberProfile: null }] }) }
       });
     }
 
@@ -793,6 +796,217 @@ describe('BrokerClient bot routing (BotService)', () => {
           assert.ok(pub);
           assert.equal(pub.payload.botType, 'visio-native');
           // A lone web replica would NOT be selected without an explicit fallback.
+        } finally { uninstallMocks(); }
+      });
+    });
+  });
+
+  describe('#startBot() capability gate (SESSION_GATED_CAPABILITIES) + native re-route', () => {
+    // Studio-UI / Meet both create the bot with provider "visio"; the fallback
+    // env expands it to [visio-native, visio]. Whether the native leg survives
+    // the gate depends on the session meta (signal + token), not the replicas.
+    function visioBotModel({ meta } = {}) {
+      return buildModel({
+        Bot: {
+          findByPk: async () => ({ id: 42, channelId: 10, url: 'https://meet.example/room', provider: 'visio', enableDisplaySub: false, subSource: null }),
+          update: async () => [1, []],
+          destroy: async () => [1, []]
+        },
+        Channel: { findByPk: async () => ({ id: 10, sessionId: 'sess-1' }) },
+        Session: { findByPk: async () => ({ id: 'sess-1', meta, channels: [{ id: 10, transcriberProfile: null }] }) }
+      });
+    }
+
+    // Both env vars scoped and restored around each case: the fallback that
+    // enables the native leg, and the gate that guards it.
+    const FB = 'BOT_PROVIDER_FALLBACK_VISIO';
+    const GATE = 'SESSION_GATED_CAPABILITIES';
+    function withGateEnv(fallback, gated, fn) {
+      const saved = { [FB]: process.env[FB], [GATE]: process.env[GATE] };
+      if (fallback === undefined) delete process.env[FB]; else process.env[FB] = fallback;
+      if (gated === undefined) delete process.env[GATE]; else process.env[GATE] = gated;
+      return Promise.resolve().then(fn).finally(() => {
+        for (const k of [FB, GATE]) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      });
+    }
+
+    const nativeSignal = { native: { 'visio-native': { livekitUrl: 'ws://lk', room: 'room-1', token: 'jwt-tok' } } };
+
+    it('(a) provider=visio + native replica + meta.native with token -> routes native', async () => {
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: nativeSignal }) });
+        try {
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/native/startbot');
+          assert.ok(pub, 'routed to the native replica');
+          assert.equal(pub.payload.botType, 'visio-native');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('(b) provider=visio + native replica but NO native signal -> demotes to web', async () => {
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: {} }) });
+        try {
+          // A native replica is online, but with no signal the gate strips the
+          // native leg before dispatch, so the web replica is chosen instead.
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/web/startbot');
+          assert.ok(pub, 'routed to the web replica (gated out native)');
+          assert.equal(pub.payload.botType, 'visio');
+          assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/native/startbot').length, 0);
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('(c) native signal present but native replica offline -> falls back to web', async () => {
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: nativeSignal }) });
+        try {
+          // Signal keeps the native leg, but only a web replica is online.
+          instance.botservices = [{ uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/web/startbot');
+          assert.ok(pub, 'fell back to the web replica');
+          assert.equal(pub.payload.botType, 'visio');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('(d) meta.linto_native present but WITHOUT a token -> demotes to web', async () => {
+      // Skew case: native flag ON but token mint OFF (old Meet). The alias is
+      // present but tokenless, so the gate must demote rather than pin native.
+      const tokenless = { linto_native: { livekitUrl: 'ws://lk', room: 'room-1' } };
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: tokenless }) });
+        try {
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/web/startbot');
+          assert.ok(pub, 'tokenless signal demotes to web');
+          assert.equal(pub.payload.botType, 'visio');
+          assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/native/startbot').length, 0);
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('honours the meta.linto_native alias WITH a token -> routes native', async () => {
+      const aliasSignal = { linto_native: { livekitUrl: 'ws://lk', room: 'room-1', token: 'jwt-tok' } };
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: aliasSignal }) });
+        try {
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42);
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/native/startbot');
+          assert.ok(pub, 'legacy alias with a token still routes native');
+          assert.equal(pub.payload.botType, 'visio-native');
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('(e) native join-failed -> re-dispatched ONCE to the web sibling', async () => {
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes, logs } = await loadBrokerClient({ model: visioBotModel({ meta: nativeSignal }) });
+        try {
+          // Realistic flow: the bot is first dispatched to the native replica
+          // (recording the native-dispatch marker), which then reports
+          // join-failed. Only then must recordBotError re-dispatch to web once.
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42);
+          assert.ok(instance.nativeBots.has(42), 'dispatched on a native capability');
+          await instance.recordBotError(42, 'join-failed');
+          const pub = mqttPublishes.find(p => p.topic === 'botservice/in/web/startbot');
+          assert.ok(pub, 're-dispatched to the web sibling');
+          assert.equal(pub.payload.botType, 'visio');
+          assert.ok(logs.some(l => l.level === 'warn' && /re-dispatching once/.test(l.msg)));
+          assert.ok(instance.reroutedBots.has(42));
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('re-routes a native join-failed at most once (loop guard)', async () => {
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: nativeSignal }) });
+        try {
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42); // native dispatch
+          await instance.recordBotError(42, 'join-failed');
+          await instance.recordBotError(42, 'join-failed'); // a second failure must NOT re-route again
+          assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/web/startbot').length, 1);
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('does NOT re-route on a non-join-failed error (e.g. web page crash)', async () => {
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: nativeSignal }) });
+        try {
+          instance.botservices = [
+            { uniqueId: 'native', online: true, activeBots: 0, capabilities: ['visio-native'] },
+            { uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }
+          ];
+          await instance.startBot(42); // native dispatch (one native startbot)
+          await instance.recordBotError(42, 'Page crashed');
+          // No re-dispatch to the web sibling on a non-join-failed reason.
+          assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/web/startbot').length, 0);
+          assert.equal(instance.reroutedBots.has(42), false);
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('(f) web-only session (no native signal) join-failed -> does NOT re-route', async () => {
+      // The web Chromium BotService also emits 'join-failed' on bot.init()
+      // failure. A session with no native signal is dispatched to the web bot
+      // (the gate demoted the native leg), so its join failure must NOT trigger
+      // a native re-route — the byte-for-byte web path must be preserved.
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: {} }) });
+        try {
+          instance.botservices = [{ uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }];
+          await instance.startBot(42); // gated out native -> dispatched to web
+          assert.equal(instance.nativeBots.has(42), false, 'not a native dispatch');
+          await instance.recordBotError(42, 'join-failed');
+          // Exactly one web startbot (the original dispatch); NO re-dispatch.
+          assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/web/startbot').length, 1);
+          assert.equal(instance.reroutedBots.has(42), false);
+        } finally { uninstallMocks(); }
+      });
+    });
+
+    it('(g) native signal present but dispatched to web (native offline) join-failed -> does NOT re-route', async () => {
+      // Subtle case the in-memory dispatch marker gets right where re-deriving
+      // from meta would not: the native signal is valid, but with no native
+      // replica online the bot is dispatched to web. A web join failure must
+      // NOT re-route — the dispatch decision (web), not the meta, governs.
+      await withGateEnv('visio-native,visio', 'visio-native', async () => {
+        const { instance, mqttPublishes } = await loadBrokerClient({ model: visioBotModel({ meta: nativeSignal }) });
+        try {
+          instance.botservices = [{ uniqueId: 'web', online: true, activeBots: 0, capabilities: ['visio'] }];
+          await instance.startBot(42); // native offline -> dispatched to web
+          assert.equal(instance.nativeBots.has(42), false, 'dispatched to web, not native');
+          await instance.recordBotError(42, 'join-failed');
+          assert.equal(mqttPublishes.filter(p => p.topic === 'botservice/in/web/startbot').length, 1);
+          assert.equal(instance.reroutedBots.has(42), false);
         } finally { uninstallMocks(); }
       });
     });

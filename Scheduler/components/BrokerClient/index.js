@@ -24,6 +24,19 @@ class BrokerClient extends Component {
     this.transcribers = new Array(); // internal scheduler representation of system transcribers.
     this.botservices = new Array(); // registered BotService replicas {uniqueId, online, activeBots, capabilities}
     this.botOwnership = new Map(); // `${sessionId}_${channelId}` -> botservice uniqueId, for targeted stopbot
+    // Bot ids already re-dispatched to their web sibling after a native
+    // 'join-failed'. Bounds the native->web re-route to ONE retry per bot so a
+    // repeatedly-failing dispatch can never loop.
+    this.reroutedBots = new Set();
+    // Bot ids we actually dispatched on a *native* (gated, "-native") capability.
+    // This is the ONLY signal that gates the 'join-failed' re-route: the web
+    // Chromium BotService also emits 'join-failed' when its own bot.init() fails,
+    // so the reason string alone cannot tell a native failure apart from a web
+    // one. We record the real dispatch decision here (not the session meta) so a
+    // web bot's join failure never triggers a native re-route, and so a session
+    // whose native replica was offline (dispatched to web despite a native
+    // signal) is likewise never re-routed.
+    this.nativeBots = new Set();
     // Per-channel persistence chains: serialize writes so the Postgres commit
     // order matches MQTT arrival order, making the end-of-stream marker and
     // 'inactive' deactivate true barriers for readers.
@@ -282,7 +295,7 @@ class BrokerClient extends Component {
     return `${proto}://${host}:${port}/${endpoint}/${sessionId},${channelIndex}`;
   }
 
-  async startBot(botId) {
+  async startBot(botId, { forceDemote = false } = {}) {
     try {
       const botData = await this.getStartBotData(botId);
       if (!botData) return;
@@ -297,9 +310,32 @@ class BrokerClient extends Component {
       // misconfigured env never strips the primary provider and silently leaves
       // the bot undispatched.
       if (fallbacks.length === 0) fallbacks.push(botData.botType);
-      const match = this.selectBotServiceMatch(fallbacks);
+      // Capability gate (§2b): a GATED capability (default "visio-native", per
+      // SESSION_GATED_CAPABILITIES) survives in the fallback list ONLY when the
+      // session both DECLARES it (meta.native map, or the legacy meta.linto_native
+      // alias for "visio-native") AND carries a usable join TOKEN. Otherwise it
+      // demotes to its web sibling (strip the "-native" suffix) — never dropped,
+      // never re-pushed — so Studio-UI / Teams / DINUM sessions (no native signal)
+      // deterministically route to the web bot BEFORE any dispatch. `forceDemote`
+      // (set by the native 'join-failed' re-route below) strips the native signal
+      // unconditionally for that one retry.
+      const gated = (process.env.SESSION_GATED_CAPABILITIES || 'visio-native')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const meta = (botData.session && botData.session.meta) || {};
+      const declared = new Set(Object.keys(meta.native || {}));
+      if (meta.linto_native) declared.add('visio-native');
+      const hasToken = (c) => {
+        const d = (meta.native && meta.native[c]) || (c === 'visio-native' ? meta.linto_native : null);
+        return !!(d && d.token);
+      };
+      const effective = fallbacks
+        .map(p => (gated.includes(p) && (forceDemote || !(declared.has(p) && hasToken(p))))
+          ? p.replace(/-native$/, '') // demote to the web sibling
+          : p)
+        .filter((p, i, a) => a.indexOf(p) === i); // dedupe
+      const match = this.selectBotServiceMatch(effective);
       if (!match) {
-        logger.error(`No BotService available with capability '${fallbacks.join(',')}' to start bot ${botId}.`);
+        logger.error(`No BotService available with capability '${effective.join(',')}' to start bot ${botId}.`);
         return;
       }
       const botservice = match.botservice;
@@ -309,6 +345,12 @@ class BrokerClient extends Component {
       // only recognises the matched type. For the primary path this is a no-op
       // (match.capability === botData.botType).
       botData.botType = match.capability;
+      // Remember whether THIS dispatch went to a native (gated, "-native")
+      // capability. recordBotError() consults this — never the reason string or
+      // the session meta — to decide if a 'join-failed' warrants a native->web
+      // re-route. A web dispatch (primary or a demoted re-route) clears the flag.
+      if (match.capability.endsWith('-native')) this.nativeBots.add(botId);
+      else this.nativeBots.delete(botId);
       this.botOwnership.set(`${botData.session.id}_${botData.channel.id}`, botservice.uniqueId);
       // Persist ownership so a stopbot can still be routed (and orphans reaped)
       // after a Scheduler restart, when the in-memory map is gone.
@@ -359,6 +401,8 @@ class BrokerClient extends Component {
       if (!bot) { logger.error(`Bot ${botId} not found`); return; }
       const channel = bot.channel;
 
+      this.reroutedBots.delete(bot.id); // clear the one-retry re-route guard
+      this.nativeBots.delete(bot.id);   // clear the native-dispatch marker
       await Model.Bot.destroy({ where: { id: bot.id } });
 
       if (!channel) {
@@ -444,6 +488,23 @@ class BrokerClient extends Component {
       }
     }
     this.client.publish('system/out/bots/error', { botId, reason }, 1, false, true);
+    // Native fail-safe (§2c). NOTE: 'join-failed' is NOT native-exclusive — the
+    // web Chromium BotService emits the same reason when its own bot.init()
+    // fails (BotService/components/BrokerClient/index.js:194). So the reason
+    // string alone must NOT trigger a re-route, or every web-bot join failure
+    // (Studio-UI, Teams, DINUM, a bad/unadmitted URL) would be re-dispatched
+    // back to the web bot — regressing the byte-for-byte web path. We gate on
+    // this.nativeBots: the bot must have ACTUALLY been dispatched on a native
+    // capability. Only then re-dispatch ONCE to its web sibling (forceDemote
+    // strips the native signal so the gate routes it to the web bot), guarded
+    // against loops by reroutedBots. Neutralises a forged/expired meta.native, a
+    // replica that died mid-join, or a token that expired at dispatch — degrading
+    // to the web bot instead of failing terminally.
+    if (reason === 'join-failed' && this.nativeBots.has(botId) && !this.reroutedBots.has(botId)) {
+      this.reroutedBots.add(botId);
+      logger.warn(`Native bot ${botId} join-failed; re-dispatching once to the web sibling`);
+      await this.startBot(botId, { forceDemote: true });
+    }
   }
 
   registerBotService(botservice) {

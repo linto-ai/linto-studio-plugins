@@ -151,6 +151,35 @@ async function getSessionResult(sessionId, withCaptions=false) {
     return session;
 }
 
+// Strip the native join token from a serialized session before it leaves a read path.
+// meta.native[<cap>].token (generic capability map) and the meta.linto_native.token
+// back-compat alias are per-room join credentials minted by Meet; they must never reach
+// a client. The token is a sub-key of the JSON `meta` column, so it cannot be an
+// attributes.exclude — it is stripped from the plain object after toJSON/serialization.
+// Every other meta key (room, state, livekitUrl, ...) is preserved untouched: the PATH-A
+// frontend polls the session for those. The input plain object is returned (with a fresh
+// meta / native / descriptor objects so the underlying instance is never mutated).
+function scrubNativeTokens(session) {
+    const meta = session && session.meta;
+    if (!meta || typeof meta !== 'object') return session;
+    const stripToken = (desc) => {
+        if (!desc || typeof desc !== 'object' || !('token' in desc)) return desc;
+        const { token, ...rest } = desc;
+        return rest;
+    };
+    const scrubbed = { ...meta };
+    if (meta.native && typeof meta.native === 'object') {
+        scrubbed.native = Object.fromEntries(
+            Object.entries(meta.native).map(([cap, desc]) => [cap, stripToken(desc)])
+        );
+    }
+    if (meta.linto_native) {
+        scrubbed.linto_native = stripToken(meta.linto_native);
+    }
+    session.meta = scrubbed;
+    return session;
+}
+
 module.exports = (webserver) => {
     return [
     {
@@ -163,7 +192,7 @@ module.exports = (webserver) => {
                 if (!session) {
                     return res.status(404).json({ error: 'Session not found' });
                 }
-                res.json(session);
+                res.json(scrubNativeTokens(session.toJSON()));
             } catch (err) {
                 next(err);
             }
@@ -291,7 +320,7 @@ module.exports = (webserver) => {
                 });
 
                 res.json({
-                    sessions: results.rows,
+                    sessions: results.rows.map(session => scrubNativeTokens(session.toJSON())),
                     totalItems: results.count
                 });
             } catch (err) {

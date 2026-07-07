@@ -1,5 +1,33 @@
 const { MqttClient, Component, Model, logger } = require('live-srt-lib')
 
+// Strip the native join token from a serialized session before it is broadcast on the
+// broker. meta.native[<cap>].token and the meta.linto_native.token back-compat alias are
+// per-room join credentials minted by Meet and must never reach a client polling the
+// session-status broadcast. The token is a sub-key of the JSON `meta` column, so it is
+// stripped from the plain object; every other meta key is preserved. NOTE: publishSessions
+// currently whitelists attributes WITHOUT `meta`, so no token is emitted today — this is a
+// defensive projection that keeps the invariant if `meta` is ever added to that whitelist.
+function scrubNativeTokens(session) {
+  const meta = session && session.meta;
+  if (!meta || typeof meta !== 'object') return session;
+  const stripToken = (desc) => {
+    if (!desc || typeof desc !== 'object' || !('token' in desc)) return desc;
+    const { token, ...rest } = desc;
+    return rest;
+  };
+  const scrubbed = { ...meta };
+  if (meta.native && typeof meta.native === 'object') {
+    scrubbed.native = Object.fromEntries(
+      Object.entries(meta.native).map(([cap, desc]) => [cap, stripToken(desc)])
+    );
+  }
+  if (meta.linto_native) {
+    scrubbed.linto_native = stripToken(meta.linto_native);
+  }
+  session.meta = scrubbed;
+  return session;
+}
+
 class BrokerClient extends Component {
 
   static states = {
@@ -49,7 +77,7 @@ class BrokerClient extends Component {
       ]
     });
     logger.debug('Session API update --> Publishing non terminated sessions on broker:  2: ', sessions.length);
-    this.client.publish('statuses', sessions, 1, true, true);
+    this.client.publish('statuses', sessions.map(session => scrubNativeTokens(session.toJSON())), 1, true, true);
   }
 
   /**

@@ -116,6 +116,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
                 const commit = this.protocol.buildCommit(false);
                 this.ws.send(JSON.stringify(commit));
                 this.logger.debug('Sent initial commit (vLLM) to arm pipeline');
+                this._armed = true;
 
                 const t2 = setTimeout(() => {
                     if (gen !== this._connGeneration) return;
@@ -193,6 +194,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.ws = new WebSocket(wsUrl, wsOptions);
 
         this._sessionReady = false;
+        this._armed = false;
         this._connGeneration++;
         const gen = this._connGeneration;
 
@@ -226,6 +228,10 @@ class OpenAIStreamingTranscriber extends EventEmitter {
                     break;
 
                 case 'final':
+                    if (this.protocolName === 'vllm' && this._armed) {
+                        this._onServerSessionEnd(event.data);
+                        break;
+                    }
                     this.handleFinal(event.data.text);
                     break;
 
@@ -256,6 +262,24 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             this.logger.debug(`WebSocket closed: ${code} ${reason}`);
             this.emit('closed', { code, reason, error: OpenAIStreamingTranscriber.ERROR_MAP[code] || 'UNKNOWN_ERROR' });
         });
+    }
+
+    /**
+     * vLLM ended the session on its own (max_model_len cap or blank-run
+     * abort) and sent transcription.done with the FULL session text; the
+     * socket stays open but nothing transcribes anymore. Our own final
+     * commit never lands here (stop() bumps _connGeneration first). The
+     * full text was already delivered as deltas: drop it (emitting it would
+     * duplicate the transcript), flush the pending segment, reconnect.
+     */
+    _onServerSessionEnd(data) {
+        const usage = data.usage ? ` (usage ${JSON.stringify(data.usage)})` : '';
+        this.logger.warn(`Server ended the realtime session${usage}: reconnecting`);
+        this._emitSegment('server session end');
+        this.stop();
+        this.logger.info(`Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
+        const t = setTimeout(() => this.start(), RECONNECT_DELAY_MS);
+        this._setupTimers.push(t);
     }
 
     /**

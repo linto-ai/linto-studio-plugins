@@ -264,12 +264,18 @@ class MeterProvider(TranslationProvider):
 class PublishLog:
     partials: int = 0
     finals: int = 0
+    dump: object = None       # optional text file: capture-format payload dump
+    ts_offset: float = 0.0    # virtual loop.time() -> original capture unix ts
 
     async def publish(self, session_id, channel_id, action, payload, key):
         if action == "final":
             self.finals += 1
         else:
             self.partials += 1
+        if self.dump is not None:
+            ts = asyncio.get_running_loop().time() + self.ts_offset
+            topic = f"transcriber/out/{session_id}/{channel_id}/{action}/translations"
+            self.dump.write(f"{ts:.6f} | {topic} | {json.dumps(payload, ensure_ascii=False)}\n")
 
 
 async def replay(events: list[Event], pipeline: Pipeline, publog: PublishLog,
@@ -280,6 +286,7 @@ async def replay(events: list[Event], pipeline: Pipeline, publog: PublishLog,
     session = "replay"
     t0 = events[0].ts
     start = loop.time()
+    publog.ts_offset = t0 - start
     next_progress = progress_every_s
     wall0 = _time.monotonic()
 
@@ -484,6 +491,9 @@ def main() -> None:
     ap.add_argument("--no-dedupe", action="store_true",
                     help="keep consecutive duplicate capture lines (default: dedupe)")
     ap.add_argument("--json", type=Path, default=None, help="write full JSON report here")
+    ap.add_argument("--dump-payloads", type=Path, default=None,
+                    help="write published translation payloads in capture format "
+                         "(consumable by banner_sim.py)")
     args = ap.parse_args()
 
     channels = set(args.channels.split(",")) if args.channels else None
@@ -503,6 +513,8 @@ def main() -> None:
 
     provider = MeterProvider(args.latency_ms, args.decode_tps)
     publog = PublishLog()
+    if args.dump_payloads:
+        publog.dump = args.dump_payloads.open("w")
     pipeline = Pipeline(
         provider=provider,
         publish_fn=publog.publish,
@@ -525,6 +537,8 @@ def main() -> None:
         loop.run_until_complete(replay(events, pipeline, publog, args.finals_only, languages, handler_errors))
     finally:
         loop.close()
+        if publog.dump is not None:
+            publog.dump.close()
     wall_s = _time.monotonic() - wall0
 
     report = summarize(args, events, provider.calls, publog, pipeline,

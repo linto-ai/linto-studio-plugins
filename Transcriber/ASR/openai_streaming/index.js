@@ -374,6 +374,10 @@ class OpenAIStreamingTranscriber extends EventEmitter {
 
                 case 'final':
                     this._onTranscriptionEvidence();
+                    if (this.protocolName === 'vllm' && this._armed) {
+                        this._onServerSessionEnd(event.data);
+                        break;
+                    }
                     this.handleFinal(event.data.text);
                     break;
 
@@ -404,6 +408,21 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             this.logger.debug(`WebSocket closed: ${code} ${reason}`);
             this.emit('closed', { code, reason, error: OpenAIStreamingTranscriber.ERROR_MAP[code] || 'UNKNOWN_ERROR' });
         });
+    }
+
+    /**
+     * vLLM ended the session on its own (max_model_len cap or blank-run
+     * abort) and sent transcription.done with the FULL session text; the
+     * socket stays open but nothing transcribes anymore. Our own final
+     * commit never lands here (stop() bumps _connGeneration first). The
+     * full text was already delivered as deltas: drop it (emitting it would
+     * duplicate the transcript), flush the pending segment, reconnect.
+     */
+    _onServerSessionEnd(data) {
+        const usage = data.usage ? ` (usage ${JSON.stringify(data.usage)})` : '';
+        this.logger.warn(`Server ended the realtime session${usage}: reconnecting`);
+        this._emitSegment('server session end');
+        this._forceResession();
     }
 
     /**

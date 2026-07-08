@@ -2,9 +2,10 @@ const assert = require('assert');
 const { setupMocks, fromTranscriber } = require('./helpers/asr_mocks');
 
 // vLLM can end a realtime session on its own (max_model_len cap, blank-run
-// abort): transcription.done arrives with the full session text and the
-// socket stays open on a dead session. Expected reaction: drop the full text
-// (already delivered as deltas), flush the pending segment, reconnect.
+// abort -- including on music/silence): transcription.done arrives with the
+// full session text. Expected reaction: drop the full text (already delivered
+// as deltas), flush the pending segment, close, then DEFER the new session
+// until a speech onset (no churn on music).
 
 describe('OpenAIStreamingTranscriber server-ended session recovery (vLLM)', function () {
     let OpenAIStreamingTranscriber;
@@ -42,7 +43,7 @@ describe('OpenAIStreamingTranscriber server-ended session recovery (vLLM)', func
         t.ws.emit('message', JSON.stringify({ type: 'session.created', id: 'srv-1' }));
     }
 
-    it('drops the full-text done, emits the pending segment and reconnects', function () {
+    it('drops the full-text done, emits the pending segment, defers re-session', function () {
         const t = createTranscriber();
         arm(t);
         const finals = [];
@@ -60,28 +61,33 @@ describe('OpenAIStreamingTranscriber server-ended session recovery (vLLM)', func
 
         // Only the pending segment is emitted; the cumulative text is dropped.
         assert.deepStrictEqual(finals, ['Bonjour le monde']);
-        // The connection was torn down and a fresh session is scheduled.
+        // Torn down, and the next session waits for speech (no blind retry).
         assert.strictEqual(oldWs.closed, true);
-        assert.ok(t._setupTimers.length > 0, 'expected a scheduled reconnect');
+        assert.strictEqual(t._resessionDeferred, true);
+        assert.strictEqual(t._setupTimers.length, 0);
         t.stop();
     });
 
-    it('emits nothing extra when no segment is pending, still reconnects', function () {
+    it('re-opens a session on speech onset after a deferred end', function () {
         const t = createTranscriber();
         arm(t);
-        const finals = [];
-        t.on('transcribed', p => finals.push(p.text));
-
         const oldWs = t.ws;
         t.ws.emit('message', JSON.stringify({
-            type: 'transcription.done',
-            text: 'TEXTE COMPLET',
-            usage: null
+            type: 'transcription.done', text: 'X', usage: null
         }));
+        assert.strictEqual(t._resessionDeferred, true);
 
-        assert.deepStrictEqual(finals, []);
-        assert.strictEqual(oldWs.closed, true);
-        assert.ok(t._setupTimers.length > 0, 'expected a scheduled reconnect');
+        // No speech: audio only reaches the pre-arm buffer, no new session.
+        t._vadWatchdog.ingest = () => {};
+        t._vadWatchdog.speechOnset = () => false;
+        t.transcribe(Buffer.alloc(640, 1));
+        assert.strictEqual(t._resessionDeferred, true);
+
+        // Speech onset: a fresh session opens immediately.
+        t._vadWatchdog.speechOnset = () => true;
+        t.transcribe(Buffer.alloc(640, 1));
+        assert.strictEqual(t._resessionDeferred, false);
+        assert.ok(t.ws && t.ws !== oldWs, 'expected a fresh connection');
         t.stop();
     });
 

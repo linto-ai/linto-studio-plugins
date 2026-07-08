@@ -3,6 +3,7 @@ const { Security } = require('live-srt-lib');
 const logger = require('../../logger');
 const EventEmitter = require('eventemitter3');
 const { loadProtocol } = require('./protocols');
+const { VadWatchdog } = require('./vad_watchdog');
 const { createLangDetector } = require('../lang-detect');
 
 // Sentence-ending punctuation (multilingual)
@@ -140,6 +141,16 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         const protocolName = config.protocol || 'vllm';
         const ProtocolClass = loadProtocol(protocolName);
         this.protocolName = protocolName;
+        // Speech-aware session net (vLLM realtime only, other engines
+        // untouched): watchdog on mute sessions + speech gate for deferred
+        // re-sessions after a server-side session end.
+        this._vadWatchdog = protocolName === 'vllm'
+            ? new VadWatchdog({
+                logger: this.logger,
+                onFire: (verdict) => this._onVadWatchdog(verdict),
+            })
+            : null;
+        this._resessionDeferred = false;
 
         // Language detection via shared module
         const candidates = (config.languages || []).map(l => l.candidate);
@@ -339,6 +350,8 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this._sessionReady = false;
         this._armed = false;
         this._updateSent = false;
+        this._resessionDeferred = false;
+        this._vadWatchdog?.reset(Date.now());
         this._connGeneration++;
         const gen = this._connGeneration;
 
@@ -411,6 +424,26 @@ class OpenAIStreamingTranscriber extends EventEmitter {
     }
 
     /**
+     * Sustained speech, zero transcription events over the whole window: the
+     * session is dead whatever the cause (decode rut, wedge, lost server
+     * event). Reconnect; the pre-arm buffer carries the audio across.
+     */
+    _onVadWatchdog(verdict) {
+        const s = (verdict.speechMs / 1000).toFixed(1);
+        const w = (verdict.windowMs / 1000).toFixed(0);
+        if (verdict.mode !== 'enforce' || !this._armed) {
+            this.logger.warn(
+                `VAD watchdog (${verdict.mode === 'enforce' ? 'not armed' : 'observe'}): `
+                + `${s}s of speech in the last ${w}s with no transcription events`);
+            return;
+        }
+        this.logger.warn(
+            `VAD watchdog: ${s}s of speech in the last ${w}s with no `
+            + `transcription events: re-session (fresh server session)`);
+        this._forceResession();
+    }
+
+    /**
      * vLLM ended the session on its own (max_model_len cap or blank-run
      * abort) and sent transcription.done with the FULL session text; the
      * socket stays open but nothing transcribes anymore. Our own final
@@ -420,8 +453,21 @@ class OpenAIStreamingTranscriber extends EventEmitter {
      */
     _onServerSessionEnd(data) {
         const usage = data.usage ? ` (usage ${JSON.stringify(data.usage)})` : '';
-        this.logger.warn(`Server ended the realtime session${usage}: reconnecting`);
         this._emitSegment('server session end');
+        if (this._vadWatchdog && this._vadWatchdog.mode !== 'off') {
+            // The server ends sessions stuck on non-speech too (music): only
+            // open the next one on a speech onset. The pre-arm buffer keeps
+            // the last seconds of audio meanwhile.
+            this.logger.warn(
+                `Server ended the realtime session${usage}: `
+                + `waiting for speech to re-session`);
+            this._resessionDeferred = true;
+            this.stop();
+            return;
+        }
+        this.logger.warn(
+            `Server ended the realtime session${usage}: `
+            + `re-session (fresh server session)`);
         this._forceResession();
     }
 
@@ -444,6 +490,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
 
         if (deltaText && deltaText.length > 0) {
             this.lastDeltaTime = Date.now();
+            this._vadWatchdog?.noteEvent(this.lastDeltaTime);
 
             if (!this.startTime) {
                 this.startTime = Date.now();
@@ -697,6 +744,17 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         // Ensure we have a Node.js Buffer (CircularBuffer returns Uint8Array)
         const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
 
+        if (this._vadWatchdog) {
+            this._vadWatchdog.ingest(buf, Date.now());
+            // Server ended the previous session (cap, blank-run abort): a new
+            // one is only worth opening when there is speech to transcribe.
+            if (this._resessionDeferred && this._vadWatchdog.speechOnset()) {
+                this._resessionDeferred = false;
+                this.logger.warn('Speech resumed: re-session (fresh server session)');
+                this.start();
+            }
+        }
+
         if (this.ws && this.ws.readyState === WebSocket.OPEN && this._sessionReady) {
             this._sendAudio(buf);
             return;
@@ -801,7 +859,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
             this._preArmBufferBytes -= dropped.length;
             droppedBytes += dropped.length;
         }
-        if (droppedBytes > 0 && !this._transcribeWarnThrottled) {
+        if (droppedBytes > 0 && !this._transcribeWarnThrottled && !this._resessionDeferred) {
             this._transcribeWarnThrottled = true;
             this.logger.warn(`Session not ready after ${PRE_ARM_BUFFER_MAX_MS}ms of audio, dropping oldest buffered audio (${droppedBytes} bytes)`);
             setTimeout(() => { this._transcribeWarnThrottled = false; }, 5000);

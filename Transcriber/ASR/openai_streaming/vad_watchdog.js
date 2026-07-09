@@ -14,8 +14,8 @@
 //
 // ENV:
 //   ASR_VAD_WATCHDOG        enforce | observe | off   (default enforce)
-//   ASR_VAD_WINDOW_MS       rolling window            (default 15000)
-//   ASR_VAD_MIN_SPEECH_MS   speech needed in window   (default 8000)
+//   ASR_VAD_WINDOW_MS       rolling window            (default 8000)
+//   ASR_VAD_MIN_SPEECH_MS   speech needed in window   (default 4000)
 //   ASR_VAD_MIN_CPS         min chars emitted per second of speech
 //                           in the window (default 1.0)
 //   ASR_VAD_SPEECH_PROB     Silero speech threshold   (default 0.5)
@@ -26,8 +26,12 @@
 const path = require('path');
 
 const MODE = (process.env.ASR_VAD_WATCHDOG || 'enforce').toLowerCase();
-const WINDOW_MS = parseInt(process.env.ASR_VAD_WINDOW_MS || '15000', 10);
-const MIN_SPEECH_MS = parseInt(process.env.ASR_VAD_MIN_SPEECH_MS || '8000', 10);
+// The window is the detection latency: on a mid-speech death the healthy
+// text ages out of it before cps collapses. 8s clears the worst healthy
+// model latency (~2-4s at sentence starts) with margin; a false fire only
+// costs a ~2s re-session.
+const WINDOW_MS = parseInt(process.env.ASR_VAD_WINDOW_MS || '8000', 10);
+const MIN_SPEECH_MS = parseInt(process.env.ASR_VAD_MIN_SPEECH_MS || '4000', 10);
 const SPEECH_PROB = parseFloat(process.env.ASR_VAD_SPEECH_PROB || '0.5');
 const MIN_CPS = parseFloat(process.env.ASR_VAD_MIN_CPS || '1.0');
 const ONSET_MS = parseInt(process.env.ASR_VAD_ONSET_MS || '400', 10);

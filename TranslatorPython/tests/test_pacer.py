@@ -294,3 +294,62 @@ class TestOrdering:
         assert {p["text"] for p in log.finals()} == {
             "English text here.", "Texte allemand ici.",
         }
+
+
+def make_tail(cps=16.0):
+    clock = FakeClock()
+    log = PublishLog()
+    pacer = BannerPacer(log.publish, cps=cps, clock=clock, autostart=False,
+                        tail_mode=True)
+    return pacer, log, clock
+
+
+class TestTailMode:
+    async def test_tail_words_need_two_hypotheses(self):
+        pacer, log, clock = make_tail()
+        await feed(pacer, "partial", payload("Alpha beta gamma"))
+        for _ in range(20):
+            await tick(pacer, clock)
+        # single hypothesis: nothing confirmed yet, nothing dripped
+        assert not log.partials()
+        await feed(pacer, "partial", payload("Alpha beta DELTA"))
+        for _ in range(20):
+            await tick(pacer, clock)
+        assert log.partials()[-1]["text"] == "Alpha beta"
+
+    async def test_tail_rewrite_before_display_is_free(self):
+        pacer, log, clock = make_tail()
+        await feed(pacer, "partial", payload("Alpha beta gamma tail one"))
+        await feed(pacer, "partial", payload("Alpha beta gamma tail two"))
+        await feed(pacer, "final", payload("Alpha beta gamma tail two.", final=True))
+        await run_until_final(pacer, log, clock)
+        assert pacer._stats.burned_words == 0
+        assert pacer._stats.realigned == 0
+        for t in [p["text"] for p in log.partials()]:
+            assert "Alpha beta gamma tail two.".startswith(t)
+
+    async def test_displayed_contradiction_realigns_and_burns(self):
+        pacer, log, clock = make_tail()
+        await feed(pacer, "partial", payload("Alpha beta DELTA"))
+        await feed(pacer, "partial", payload("Alpha beta DELTA"))  # confirmed
+        for _ in range(30):
+            await tick(pacer, clock)
+        assert log.partials()[-1]["text"] == "Alpha beta DELTA"
+        await feed(pacer, "partial", payload("Alpha beta GAMMA more"))
+        await feed(pacer, "partial", payload("Alpha beta GAMMA more"))
+        for _ in range(30):
+            await tick(pacer, clock)
+        assert pacer._stats.realigned >= 1
+        assert pacer._stats.burned_words >= 1
+        # display keeps the burned word, continues with the new continuation
+        assert log.partials()[-1]["text"] == "Alpha beta DELTA more"
+
+    async def test_final_wins_after_tail(self):
+        pacer, log, clock = make_tail()
+        await feed(pacer, "partial", payload("Alpha beta tail"))
+        await feed(pacer, "partial", payload("Alpha beta tail going on"))
+        final = payload("Alpha beta tail going on, done.", final=True)
+        await feed(pacer, "final", final)
+        await run_until_final(pacer, log, clock)
+        assert log.finals() == [final]
+        assert log.events[-1][0] == "final"

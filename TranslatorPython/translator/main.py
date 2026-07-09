@@ -32,12 +32,6 @@ def main() -> None:
     provider = load_provider(config.TRANSLATION_PROVIDER)
 
     tail_live_ms = config.TAIL_LIVE_MS
-    if config.BANNER_CPS > 0 and tail_live_ms > 0:
-        logger.warning(
-            "BANNER_CPS=%s: forcing TAIL_LIVE_MS=0 (live tail rewrites are "
-            "incompatible with the append-only paced banner)", config.BANNER_CPS,
-        )
-        tail_live_ms = 0
 
     # Create pipeline
     pipeline = Pipeline(
@@ -68,9 +62,16 @@ def main() -> None:
     if config.BANNER_CPS > 0:
         from translator.pacer import BannerPacer
 
-        pacer = BannerPacer(handler.publish_translation, cps=config.BANNER_CPS)
+        pacer = BannerPacer(
+            handler.publish_translation,
+            cps=config.BANNER_CPS,
+            tail_mode=tail_live_ms > 0,
+        )
         pipeline.publish_fn = pacer.publish
-        logger.info("Banner pacing enabled: %.1f chars/s", config.BANNER_CPS)
+        logger.info(
+            "Banner pacing enabled: %.1f chars/s%s", config.BANNER_CPS,
+            " with live tail (agreement-gated)" if tail_live_ms > 0 else "",
+        )
     else:
         pipeline.publish_fn = handler.publish_translation
 

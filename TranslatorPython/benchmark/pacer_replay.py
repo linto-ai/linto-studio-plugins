@@ -44,7 +44,7 @@ def parse_capture(path: Path, lang: str, channel: str | None):
     return events
 
 
-async def replay(events, cps: float, out) -> BannerPacer:
+async def replay(events, cps: float, out, tail_mode: bool = False) -> BannerPacer:
     clock = {"now": events[0][0]}
     holds = []
 
@@ -52,7 +52,8 @@ async def replay(events, cps: float, out) -> BannerPacer:
         topic = f"transcriber/out/{session_id}/{channel_id}/{action}/translations"
         out.write(f"{clock['now']:.6f} | {topic} | {json.dumps(payload, ensure_ascii=False)}\n")
 
-    pacer = BannerPacer(emit, cps=cps, clock=lambda: clock["now"], autostart=False)
+    pacer = BannerPacer(emit, cps=cps, clock=lambda: clock["now"], autostart=False,
+                        tail_mode=tail_mode)
     final_in = {}
 
     for ts, session_id, channel_id, action, payload in events:
@@ -80,16 +81,17 @@ def main() -> None:
     ap.add_argument("--cps", type=float, default=16.0)
     ap.add_argument("--lang", default="en")
     ap.add_argument("--channel", default=None)
+    ap.add_argument("--tail", action="store_true", help="tail_mode (TAIL_LIVE_MS > 0 inputs)")
     args = ap.parse_args()
 
     events = parse_capture(args.capture, args.lang, args.channel)
     if not events:
         sys.exit(f"no translation events for lang={args.lang}")
-    pacer = asyncio.run(replay(events, args.cps, sys.stdout))
+    pacer = asyncio.run(replay(events, args.cps, sys.stdout, tail_mode=args.tail))
     s = pacer._stats
     print(
         f"pacer: drips={s.drips} finals={s.finals} stale={s.stale_partials} "
-        f"divergent={s.divergent_finals} flush_hold={s.flushed_hold} "
+        f"divergent={s.divergent_finals} realigned={s.realigned} burned={s.burned_words} flush_hold={s.flushed_hold} "
         f"flush_backlog={s.flushed_backlog} max_hold={s.max_hold_s:.1f}s "
         f"max_backlog={s.max_backlog}c",
         file=sys.stderr,

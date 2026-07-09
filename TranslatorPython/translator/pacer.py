@@ -26,19 +26,37 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TICK_S = 0.25
-# Rate factor = 1 + backlog / (2 * CATCHUP_CHARS), capped. The cap keeps a
-# 42-char banner line fully visible >= 42 / (16 * 1.75) = 1.5 s during
-# catch-up; above 1.75 lines scroll faster than they can be read, below 1.5
-# the drain no longer absorbs prod bursts (finals pile up past MAX_HOLD_S).
-CATCHUP_CHARS = 60
-MAX_FACTOR = 1.75
+# Rate factor = 1 + backlog / (2 * CATCHUP_CHARS), capped. Calibrated on the
+# real banner: Arial 40px measures ~17 px/char, so a 1080p window shows
+# ~100 chars/line ((1920-200)/17). At the cap a full line stays visible
+# 100 / (16 * 3) >= 2 s during catch-up (1.4 s on a 1366 laptop's 68c lines).
+CATCHUP_CHARS = 40
+MAX_FACTOR = 3.0
 MAX_HOLD_S = 15.0          # a final never waits longer than this
 MAX_BACKLOG_CHARS = 600    # beyond this, oldest finished segments are flushed
 STALL_S = 30.0             # head with no final and no progress: dropped
 # Pause after each published final before dripping the next segment: the
 # banner keeps only the final's last line on screen when the next partial
 # arrives, so its closing lines need this long to be readable.
-SETTLE_S = 1.0
+SETTLE_S = 0.5
+
+
+def _common_word_prefix_chars(a: str, b: str) -> int:
+    """Char length, in b's own spacing, of the longest common word prefix."""
+    if not a or not b:
+        return 0
+    n = 0
+    for x, y in zip(a.split(), b.split()):
+        if x != y:
+            break
+        n += 1
+    i = 0
+    for _ in range(n):
+        while i < len(b) and b[i] == " ":
+            i += 1
+        while i < len(b) and b[i] != " ":
+            i += 1
+    return i
 
 
 @dataclass
@@ -47,9 +65,14 @@ class _Segment:
     template: dict[str, Any]          # latest partial payload, drip template
     target_text: str = ""
     sent_offset: int = 0              # chars of target_text already published
+    drip_limit: int = 0               # admissible chars (tail agreement gate)
+    prev_hyp: str = ""                # previous raw hypothesis (tail mode)
     final_payload: dict[str, Any] | None = None
     final_at: float = 0.0             # clock when the final arrived
     last_progress: float = 0.0
+
+    def drip_end(self) -> int:
+        return min(len(self.target_text), self.drip_limit)
 
 
 @dataclass
@@ -73,6 +96,8 @@ class _PacerStats:
     finals: int = 0
     stale_partials: int = 0
     divergent_finals: int = 0
+    realigned: int = 0        # tail mode: displayed text contradicted mid-segment
+    burned_words: int = 0     # tail mode: words displayed in a superseded version
     flushed_hold: int = 0
     flushed_backlog: int = 0
     dropped_stalled: int = 0
@@ -90,13 +115,20 @@ class BannerPacer:
     Drop-in for the pipeline publish callback: wire
     `pipeline.publish_fn = pacer.publish` and give the real MQTT callback
     as `publish_fn`. The tick task starts lazily on first publish.
+
+    tail_mode (for TAIL_LIVE_MS > 0 inputs, where partial texts include a
+    live tail that gets rewritten): tail words are only dripped once two
+    consecutive hypotheses agree on them, and a rewrite that contradicts
+    already-displayed words realigns word-wise (the display keeps going,
+    the contradicted words are counted as burned) instead of stalling.
     """
 
     def __init__(self, publish_fn, cps: float, clock=time.monotonic,
-                 autostart: bool = True) -> None:
+                 autostart: bool = True, tail_mode: bool = False) -> None:
         self.publish_fn = publish_fn
         self.cps = cps
         self.clock = clock
+        self.tail_mode = tail_mode
         self._lanes: dict[str, _Lane] = {}
         self._stats = _PacerStats()
         self._task: asyncio.Task[None] | None = None
@@ -131,19 +163,48 @@ class BannerPacer:
                 # published as-is when it reaches the head (one visible jump).
                 self._stats.divergent_finals += 1
                 seg.target_text = sent_prefix
+            seg.drip_limit = len(seg.target_text)
             seg.last_progress = now
-        else:
+        elif not self.tail_mode:
             # Only the published prefix is immutable; anything unsent may be
             # replaced. Texts not extending the prefix are stale (freeze
             # completions racing out of order): dropped, the final decides.
-            if text.startswith(sent_prefix) and len(text) >= seg.sent_offset:
+            if text.startswith(sent_prefix):
                 seg.template = payload
                 seg.target_text = text
+                seg.drip_limit = len(text)
                 seg.last_progress = now
             else:
                 self._stats.stale_partials += 1
+        else:
+            self._ingest_tail_partial(seg, payload, text, sent_prefix, now)
 
         self._ensure_task()
+
+    def _ingest_tail_partial(
+        self, seg: _Segment, payload: dict[str, Any], text: str,
+        sent_prefix: str, now: float,
+    ) -> None:
+        if text.startswith(sent_prefix):
+            seg.target_text = text
+        else:
+            # The rewrite contradicts displayed words: keep them on screen
+            # (append-only), realign word-wise and continue with the rest.
+            sent_words = sent_prefix.split()
+            hyp_words = text.split()
+            self._stats.realigned += 1
+            self._stats.burned_words += sum(
+                1 for a, b in zip(sent_words, hyp_words) if a != b
+            ) + max(0, len(sent_words) - len(hyp_words))
+            rest = hyp_words[len(sent_words):]
+            seg.target_text = sent_prefix + (" " + " ".join(rest) if rest else "")
+        # Agreement gate: only words confirmed by two consecutive hypotheses
+        # may be dripped; the moving end of the tail stays in the queue.
+        agreed = _common_word_prefix_chars(seg.prev_hyp, text)
+        seg.drip_limit = max(seg.sent_offset, min(agreed, len(seg.target_text)))
+        seg.prev_hyp = text
+        seg.template = payload
+        seg.last_progress = now
 
     def _get_segment(self, lane: _Lane, payload: dict[str, Any], now: float) -> _Segment:
         seg_id = payload.get("segmentId")
@@ -211,9 +272,9 @@ class BannerPacer:
             break
         if lane.segments:
             head = lane.segments[0]
-            if head.sent_offset >= len(head.target_text) and not head.final_payload:
-                # Nothing left to drip: don't bank budget across the gap,
-                # the next freeze must not burst out in one tick.
+            if head.sent_offset >= head.drip_end() and not head.final_payload:
+                # Nothing drippable (caught up, or tail words unconfirmed):
+                # don't bank budget, the next text must not burst out at once.
                 lane.budget = 0.0
                 if (now - head.last_progress > STALL_S) and len(lane.segments) > 1:
                     # Final never came (lost upstream): unblock the lane.
@@ -259,15 +320,16 @@ class BannerPacer:
     def _advance(self, seg: _Segment, lane: _Lane) -> bool:
         """Move sent_offset forward whole words within the lane budget."""
         text = seg.target_text
+        limit = seg.drip_end()
         moved = False
-        while seg.sent_offset < len(text):
+        while seg.sent_offset < limit:
             end = seg.sent_offset
             while end < len(text) and text[end] == " ":
                 end += 1
             while end < len(text) and text[end] != " ":
                 end += 1
             cost = end - seg.sent_offset
-            if cost <= 0 or cost > lane.budget:
+            if cost <= 0 or cost > lane.budget or end > limit:
                 break
             lane.budget -= cost
             seg.sent_offset = end
@@ -315,9 +377,10 @@ class BannerPacer:
         s = self._stats
         logger.info(
             "[pacer] last 60s: drips=%d finals=%d stale=%d divergent=%d "
-            "flush_hold=%d flush_backlog=%d stalled=%d max_hold=%.1fs max_backlog=%dc",
+            "realigned=%d burned=%d flush_hold=%d flush_backlog=%d stalled=%d "
+            "max_hold=%.1fs max_backlog=%dc",
             s.drips, s.finals, s.stale_partials, s.divergent_finals,
-            s.flushed_hold, s.flushed_backlog, s.dropped_stalled,
-            s.max_hold_s, s.max_backlog,
+            s.realigned, s.burned_words, s.flushed_hold, s.flushed_backlog,
+            s.dropped_stalled, s.max_hold_s, s.max_backlog,
         )
         s.reset()

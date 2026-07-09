@@ -78,7 +78,7 @@ describe('VadWatchdog (injected detector)', function () {
             now = await feed(w, 5000, now);
             w.noteEvent(now, 3); // crumb: "on "
         }
-        assert.strictEqual(fires.length, 1);
+        assert.ok(fires.length >= 1, 'expected at least one fire');
         assert.ok(fires[0].cps < 1.0, `cps=${fires[0].cps}`);
     });
 
@@ -95,7 +95,7 @@ describe('VadWatchdog (injected detector)', function () {
         assert.strictEqual(fires.length, 0);
     });
 
-    it('respects the cooldown between fires', async function () {
+    it('adaptive cooldown: quick re-fire, then escalation', async function () {
         const fires = [];
         const w = new VadWatchdog({
             logger: quietLogger,
@@ -104,8 +104,12 @@ describe('VadWatchdog (injected detector)', function () {
         });
         await new Promise(setImmediate);
         w.reset(1000);
-        await feed(w, 40000, 1000); // enough audio for 2+ windows
-        assert.strictEqual(fires.length, 1); // cooldown 60s holds the second
+        await feed(w, 60000, 1000); // sustained dead speech
+        // Re-fires quickly (10s min cooldown vs 60s before), then backs off.
+        assert.ok(fires.length >= 2, `expected re-fires, got ${fires.length}`);
+        assert.strictEqual(fires[0].fireStreak, 1);
+        assert.strictEqual(fires[1].fireStreak, 2);
+        assert.ok(fires[1].cooldownMs > fires[0].cooldownMs, 'cooldown must escalate');
     });
 
     it('speechOnset needs recent sustained speech', async function () {

@@ -21,7 +21,8 @@
 //   ASR_VAD_SPEECH_PROB     Silero speech threshold   (default 0.5)
 //   ASR_VAD_ONSET_MS        speech in the last 1 s to
 //                           declare an onset          (default 400)
-//   ASR_VAD_COOLDOWN_MS     min delay between fires   (default 60000)
+//   ASR_VAD_COOLDOWN_MIN_MS first re-fire delay       (default 10000)
+//   ASR_VAD_COOLDOWN_MAX_MS  cap after escalation      (default 120000)
 
 const path = require('path');
 
@@ -35,7 +36,13 @@ const MIN_SPEECH_MS = parseInt(process.env.ASR_VAD_MIN_SPEECH_MS || '4000', 10);
 const SPEECH_PROB = parseFloat(process.env.ASR_VAD_SPEECH_PROB || '0.5');
 const MIN_CPS = parseFloat(process.env.ASR_VAD_MIN_CPS || '1.0');
 const ONSET_MS = parseInt(process.env.ASR_VAD_ONSET_MS || '400', 10);
-const COOLDOWN_MS = parseInt(process.env.ASR_VAD_COOLDOWN_MS || '60000', 10);
+// Adaptive cooldown: a fresh session that ruts again right away deserves a
+// quick second shot (the 8s post-reset warmup is the real anti-flap floor);
+// only ESCALATE when fires chain (doubling, capped), so pathological audio
+// converges to one re-session per COOLDOWN_MAX instead of endless churn.
+const COOLDOWN_MIN_MS = parseInt(process.env.ASR_VAD_COOLDOWN_MIN_MS || '10000', 10);
+const COOLDOWN_MAX_MS = parseInt(process.env.ASR_VAD_COOLDOWN_MAX_MS || '120000', 10);
+const FIRE_CHAIN_WINDOW_MS = 180000; // fires closer than this escalate the cooldown
 
 const SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 512;                    // Silero v5 frame @16 kHz
@@ -98,6 +105,8 @@ class VadWatchdog {
         this._lastSpeechTime = 0;
         this._events = [];            // [ts, chars] of emitted deltas
         this._lastFire = 0;
+        this._fireStreak = 0;
+        this._cooldownMs = COOLDOWN_MIN_MS;
         this._audioMs = 0;
 
         if (this.mode !== 'off') {
@@ -188,7 +197,7 @@ class VadWatchdog {
 
     _check(now) {
         if (this._audioMs < this.windowMs) return null;
-        if (this._lastFire && now - this._lastFire < COOLDOWN_MS) return null;
+        if (this._lastFire && now - this._lastFire < this._cooldownMs) return null;
         const speechMs = this._speechFrames.length * FRAME_MS;
         if (speechMs < this.minSpeechMs) return null;
         const cutoff = now - this.windowMs;
@@ -201,6 +210,11 @@ class VadWatchdog {
         // penalty-chopped rut trickles ~0.2-0.6. Crumbs are not proof of life.
         const cps = chars / (speechMs / 1000);
         if (cps >= MIN_CPS) return null;
+        this._fireStreak = this._lastFire
+            && now - this._lastFire < FIRE_CHAIN_WINDOW_MS
+            ? this._fireStreak + 1 : 1;
+        this._cooldownMs = Math.min(
+            COOLDOWN_MAX_MS, COOLDOWN_MIN_MS * 2 ** (this._fireStreak - 1));
         this._lastFire = now;
         this._speechFrames = [];
         this._events = [];
@@ -210,6 +224,8 @@ class VadWatchdog {
             windowMs: this.windowMs,
             chars,
             cps: Math.round(cps * 100) / 100,
+            fireStreak: this._fireStreak,
+            cooldownMs: this._cooldownMs,
         };
     }
 }

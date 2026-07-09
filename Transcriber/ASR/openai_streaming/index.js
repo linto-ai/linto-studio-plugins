@@ -441,7 +441,8 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         this.logger.warn(
             `VAD watchdog: ${s}s of speech in the last ${w}s for `
             + `${verdict.chars} chars emitted (${verdict.cps} chars/speech-s): `
-            + `re-session (fresh server session)`);
+            + `re-session (fresh server session) `
+            + `[fire #${verdict.fireStreak}, next cooldown ${verdict.cooldownMs / 1000}s]`);
         this._forceResession();
     }
 

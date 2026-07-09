@@ -434,12 +434,14 @@ class OpenAIStreamingTranscriber extends EventEmitter {
         if (verdict.mode !== 'enforce' || !this._armed) {
             this.logger.warn(
                 `VAD watchdog (${verdict.mode === 'enforce' ? 'not armed' : 'observe'}): `
-                + `${s}s of speech in the last ${w}s with no transcription events`);
+                + `${s}s of speech in the last ${w}s for ${verdict.chars} chars `
+                + `(${verdict.cps} chars/speech-s)`);
             return;
         }
         this.logger.warn(
-            `VAD watchdog: ${s}s of speech in the last ${w}s with no `
-            + `transcription events: re-session (fresh server session)`);
+            `VAD watchdog: ${s}s of speech in the last ${w}s for `
+            + `${verdict.chars} chars emitted (${verdict.cps} chars/speech-s): `
+            + `re-session (fresh server session)`);
         this._forceResession();
     }
 
@@ -490,7 +492,7 @@ class OpenAIStreamingTranscriber extends EventEmitter {
 
         if (deltaText && deltaText.length > 0) {
             this.lastDeltaTime = Date.now();
-            this._vadWatchdog?.noteEvent(this.lastDeltaTime);
+            this._vadWatchdog?.noteEvent(this.lastDeltaTime, deltaText.length);
 
             if (!this.startTime) {
                 this.startTime = Date.now();

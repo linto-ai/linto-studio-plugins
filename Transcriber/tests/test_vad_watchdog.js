@@ -30,7 +30,7 @@ async function feed(w, ms, startNow) {
 
 describe('VadWatchdog (injected detector)', function () {
 
-    it('fires on sustained speech with no transcription events', async function () {
+    it('fires on sustained speech with zero text', async function () {
         const fires = [];
         const w = new VadWatchdog({
             logger: quietLogger,
@@ -45,7 +45,26 @@ describe('VadWatchdog (injected detector)', function () {
         assert.strictEqual(fires[0].mode, 'enforce');
     });
 
-    it('does not fire while transcription events keep arriving', async function () {
+    it('does not fire while healthy text keeps arriving', async function () {
+        const fires = [];
+        const w = new VadWatchdog({
+            logger: quietLogger,
+            onFire: v => fires.push(v),
+            detector: fakeDetector(0.95),
+        });
+        await new Promise(setImmediate);
+        w.reset(1000);
+        let now = 1000;
+        for (let i = 0; i < 8; i++) {
+            now = await feed(w, 2500, now);
+            w.noteEvent(now, 40); // ~16 chars/s of speech: healthy rate
+        }
+        assert.strictEqual(fires.length, 0);
+    });
+
+    it('fires through penalty-chopped crumbs (2026-07-09 night regression)', async function () {
+        // A chopped rut trickles a 1-word crumb every ~17s over real speech:
+        // 3 chars per crumb must NOT count as proof of life.
         const fires = [];
         const w = new VadWatchdog({
             logger: quietLogger,
@@ -57,9 +76,10 @@ describe('VadWatchdog (injected detector)', function () {
         let now = 1000;
         for (let i = 0; i < 4; i++) {
             now = await feed(w, 5000, now);
-            w.noteEvent(now);
+            w.noteEvent(now, 3); // crumb: "on "
         }
-        assert.strictEqual(fires.length, 0);
+        assert.strictEqual(fires.length, 1);
+        assert.ok(fires[0].cps < 1.0, `cps=${fires[0].cps}`);
     });
 
     it('never fires on silence', async function () {

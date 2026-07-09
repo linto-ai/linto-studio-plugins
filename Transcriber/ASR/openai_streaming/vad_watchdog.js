@@ -1,6 +1,10 @@
 // Speech-aware session net for vLLM realtime, two jobs:
-// - watchdog: sustained speech with zero transcription events = dead session
-//   (rut, wedge, lost server event) -> fire, the caller re-sessions.
+// - watchdog: sustained speech with (almost) no text produced = dead or
+//   degenerate session (rut, wedge, lost server event) -> fire, the caller
+//   re-sessions. Evidence is weighted by CONTENT: chars emitted per second
+//   of detected speech, so the 1-word crumbs a penalty-chopped rut trickles
+//   out every ~17 s do not count as proof of life (they defeated a plain
+//   no-event timeout: see the 2026-07-09 night run).
 // - speech gate: after an explicit server session end, the caller defers the
 //   new session until speech resumes (speechOnset), so music/silence never
 //   causes session churn.
@@ -12,6 +16,8 @@
 //   ASR_VAD_WATCHDOG        enforce | observe | off   (default enforce)
 //   ASR_VAD_WINDOW_MS       rolling window            (default 15000)
 //   ASR_VAD_MIN_SPEECH_MS   speech needed in window   (default 8000)
+//   ASR_VAD_MIN_CPS         min chars emitted per second of speech
+//                           in the window (default 1.0)
 //   ASR_VAD_SPEECH_PROB     Silero speech threshold   (default 0.5)
 //   ASR_VAD_ONSET_MS        speech in the last 1 s to
 //                           declare an onset          (default 400)
@@ -23,6 +29,7 @@ const MODE = (process.env.ASR_VAD_WATCHDOG || 'enforce').toLowerCase();
 const WINDOW_MS = parseInt(process.env.ASR_VAD_WINDOW_MS || '15000', 10);
 const MIN_SPEECH_MS = parseInt(process.env.ASR_VAD_MIN_SPEECH_MS || '8000', 10);
 const SPEECH_PROB = parseFloat(process.env.ASR_VAD_SPEECH_PROB || '0.5');
+const MIN_CPS = parseFloat(process.env.ASR_VAD_MIN_CPS || '1.0');
 const ONSET_MS = parseInt(process.env.ASR_VAD_ONSET_MS || '400', 10);
 const COOLDOWN_MS = parseInt(process.env.ASR_VAD_COOLDOWN_MS || '60000', 10);
 
@@ -74,7 +81,7 @@ class VadWatchdog {
         this._pumping = false;
         this._speechFrames = [];      // timestamps of speech-scored frames
         this._lastSpeechTime = 0;
-        this._lastEventTime = Date.now();
+        this._events = [];            // [ts, chars] of emitted deltas
         this._lastFire = 0;
         this._audioMs = 0;
 
@@ -89,15 +96,15 @@ class VadWatchdog {
         }
     }
 
-    /** Transcription evidence (a delta arrived): the session is alive. */
-    noteEvent(now) {
-        this._lastEventTime = now;
+    /** Transcription evidence, weighted by how much text it carries. */
+    noteEvent(now, chars) {
+        this._events.push([now, chars || 0]);
     }
 
     /** New connection: restart the accounting, keep the acoustic state. */
     reset(now) {
         this._speechFrames = [];
-        this._lastEventTime = now || Date.now();
+        this._events = [];
         this._audioMs = 0;
     }
 
@@ -167,16 +174,27 @@ class VadWatchdog {
     _check(now) {
         if (this._audioMs < this.windowMs) return null;
         if (this._lastFire && now - this._lastFire < COOLDOWN_MS) return null;
-        if (now - this._lastEventTime < this.windowMs) return null;
         const speechMs = this._speechFrames.length * FRAME_MS;
         if (speechMs < this.minSpeechMs) return null;
+        const cutoff = now - this.windowMs;
+        while (this._events.length && this._events[0][0] < cutoff) {
+            this._events.shift();
+        }
+        let chars = 0;
+        for (const [, c] of this._events) chars += c;
+        // Healthy speech transcribes at ~10+ chars per speech-second; a
+        // penalty-chopped rut trickles ~0.2-0.6. Crumbs are not proof of life.
+        const cps = chars / (speechMs / 1000);
+        if (cps >= MIN_CPS) return null;
         this._lastFire = now;
         this._speechFrames = [];
+        this._events = [];
         return {
             mode: this.mode,
             speechMs: Math.round(speechMs),
             windowMs: this.windowMs,
-            sinceEventMs: now - this._lastEventTime,
+            chars,
+            cps: Math.round(cps * 100) / 100,
         };
     }
 }

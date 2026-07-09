@@ -35,6 +35,7 @@
     "live-srt-lib": "file:../lib",
     "microsoft-cognitiveservices-speech-sdk": "1.46.0",
     "node-media-server": "^2.6.6",
+    "onnxruntime-node": "^1.27.0",
     "uuid": "13.0.0",
     "ws": "^8.13.0"
   },

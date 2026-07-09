@@ -27,6 +27,7 @@ require('./tests/test_handshake.js');
 require('./tests/test_silence_keepalive.js');
 require('./tests/test_lang_detect.js');
 require('./tests/test_server_session_end.js');
+require('./tests/test_vad_watchdog.js');
 
 
 describe('CircularBuffer', () => {

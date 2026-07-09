@@ -133,4 +133,28 @@ describe('SileroDetector (real model smoke test)', function () {
         for (let i = 0; i < 5; i++) p = await d.prob(silence);
         assert.ok(p < 0.3, `expected low speech prob on silence, got ${p}`);
     });
+
+    it('scores real speech high (guards the v5 context contract)', async function () {
+        // 3s of French speech, 16k mono S16LE. A model input mismatch (e.g.
+        // missing the 64-sample v5 context) floors every prob to ~0 and this
+        // is the test that catches it.
+        this.timeout(20000);
+        const fs = require('fs');
+        const path = require('path');
+        const d = new SileroDetector();
+        await d.init();
+        const pcm = fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'speech_3s_16k.raw'));
+        const frames = Math.floor(pcm.length / (FRAME_SAMPLES * 2));
+        let speech = 0;
+        for (let f = 0; f < frames; f++) {
+            const fr = new Float32Array(FRAME_SAMPLES);
+            for (let i = 0; i < FRAME_SAMPLES; i++) {
+                fr[i] = pcm.readInt16LE((f * FRAME_SAMPLES + i) * 2) / 32768;
+            }
+            if (await d.prob(fr) >= 0.5) speech++;
+        }
+        assert.ok(speech / frames > 0.4,
+            `expected >40% speech frames, got ${(100 * speech / frames).toFixed(1)}%`);
+    });
 });

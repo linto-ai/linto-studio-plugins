@@ -45,6 +45,11 @@ const MODEL_PATH = path.join(__dirname, 'models', 'silero_vad.onnx');
 // is wrong; drop oldest instead of growing without bound.
 const MAX_QUEUE_FRAMES = Math.ceil(5000 / FRAME_MS);
 
+// Silero v5 expects 64 samples of context from the previous frame ahead of
+// the 512 new samples (input [1, 576]); without it the probabilities are
+// garbage (~0 on plain speech).
+const CONTEXT_SAMPLES = 64;
+
 class SileroDetector {
     async init() {
         const ort = require('onnxruntime-node');
@@ -53,14 +58,20 @@ class SileroDetector {
         this._state = new ort.Tensor(
             'float32', new Float32Array(2 * 1 * 128), [2, 1, 128]);
         this._sr = new ort.Tensor('int64', BigInt64Array.from([16000n]), [1]);
+        this._context = new Float32Array(CONTEXT_SAMPLES);
     }
 
     /** Float32Array[512] -> speech probability [0,1]. Serial calls only. */
     async prob(frame) {
-        const input = new this._ort.Tensor('float32', frame, [1, FRAME_SAMPLES]);
+        const data = new Float32Array(CONTEXT_SAMPLES + FRAME_SAMPLES);
+        data.set(this._context, 0);
+        data.set(frame, CONTEXT_SAMPLES);
+        const input = new this._ort.Tensor(
+            'float32', data, [1, CONTEXT_SAMPLES + FRAME_SAMPLES]);
         const out = await this._session.run(
             { input, state: this._state, sr: this._sr });
         this._state = out.stateN;
+        this._context = frame.slice(FRAME_SAMPLES - CONTEXT_SAMPLES);
         return out.output.data[0];
     }
 }

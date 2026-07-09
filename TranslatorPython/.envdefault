@@ -23,6 +23,7 @@ BROKER_PORT=1883
 TRANSLATE_PARTIALS=true # false = eco mode: only finals are translated
 SOFT_CHUNK_CHARS=220 # Freeze budget for unpunctuated continuous speech
 TAIL_LIVE_MS=0 # 0 = translate only at punctuation; >0 = live tail updates, min interval (ms)
+BANNER_CPS=0 # 0 = off; >0 = subtitle banner mode: drip partials at this reading speed (chars/s, 16 fits a 2-line banner), hold finals until caught up. Combine with TAIL_LIVE_MS>0 for lower latency (tail dripped once confirmed, costs GPU)
 MAX_CONCURRENT_TRANSLATIONS=8 # Global cap on in-flight provider requests
 STATE_TTL_SECONDS=600 # Purge state of keys inactive longer than this
 

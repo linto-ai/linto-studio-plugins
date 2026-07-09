@@ -39,6 +39,11 @@ TRANSLATE_PARTIALS: bool = os.environ.get("TRANSLATE_PARTIALS", "true").lower() 
 )
 SOFT_CHUNK_CHARS: int = int(os.environ.get("SOFT_CHUNK_CHARS", "220"))
 TAIL_LIVE_MS: int = int(os.environ.get("TAIL_LIVE_MS", "0"))
+# Subtitle banner pacing: 0 = off (publish as today); > 0 = drip partials at
+# this reading speed (chars/second, 16 fits a 2-line banner) and hold each
+# final until the drip catches up. With TAIL_LIVE_MS > 0 the live tail
+# is dripped too (agreement-gated), trading GPU for lower display latency.
+BANNER_CPS: float = float(os.environ.get("BANNER_CPS", "0"))
 MAX_CONCURRENT_TRANSLATIONS: int = int(os.environ.get("MAX_CONCURRENT_TRANSLATIONS", "8"))
 STATE_TTL_SECONDS: float = float(os.environ.get("STATE_TTL_SECONDS", "600"))
 

@@ -31,6 +31,8 @@ def main() -> None:
     # Instantiate provider
     provider = load_provider(config.TRANSLATION_PROVIDER)
 
+    tail_live_ms = config.TAIL_LIVE_MS
+
     # Create pipeline
     pipeline = Pipeline(
         provider=provider,
@@ -40,7 +42,7 @@ def main() -> None:
         stability_threshold=config.STABILITY_THRESHOLD,
         max_consecutive_holds=config.MAX_CONSECUTIVE_HOLDS,
         translate_partials=config.TRANSLATE_PARTIALS,
-        tail_live_ms=config.TAIL_LIVE_MS,
+        tail_live_ms=tail_live_ms,
         soft_chunk_chars=config.SOFT_CHUNK_CHARS,
         max_concurrent=config.MAX_CONCURRENT_TRANSLATIONS,
         state_ttl_s=config.STATE_TTL_SECONDS,
@@ -55,8 +57,23 @@ def main() -> None:
         pipeline=pipeline,
     )
 
-    # Wire publish function
-    pipeline.publish_fn = handler.publish_translation
+    # Wire publish function, through the banner pacer when enabled
+    pacer = None
+    if config.BANNER_CPS > 0:
+        from translator.pacer import BannerPacer
+
+        pacer = BannerPacer(
+            handler.publish_translation,
+            cps=config.BANNER_CPS,
+            tail_mode=tail_live_ms > 0,
+        )
+        pipeline.publish_fn = pacer.publish
+        logger.info(
+            "Banner pacing enabled: %.1f chars/s%s", config.BANNER_CPS,
+            " with live tail (agreement-gated)" if tail_live_ms > 0 else "",
+        )
+    else:
+        pipeline.publish_fn = handler.publish_translation
 
     # Run with signal handling
     loop = asyncio.new_event_loop()
@@ -68,6 +85,8 @@ def main() -> None:
             loop.add_signal_handler(sig, lambda: asyncio.ensure_future(handler.shutdown()))
 
         await handler.run()
+        if pacer is not None:
+            await pacer.stop()
 
     try:
         loop.run_until_complete(run_with_shutdown())

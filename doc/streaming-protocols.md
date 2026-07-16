@@ -20,9 +20,12 @@ Pipeline: `Audio Source → [SRT|RTMP|WebSocket] → GStreamer Worker → PCM S1
 |---|---|---|---|
 | Disconnect signal from peer | none — packets just stop | TCP FIN/RST → `ws.on('close'/'error')` | TCP FIN/RST → NMS `donePublish` event |
 | Server-side inactivity timeout | **5 s** (`channelTimeoutSeconds` in `Transcriber/components/StreamingServer/srt/SRTServer.js`) | **none** — only OS TCP keepalive (hours) | **60 s** (`ping_timeout` in `Transcriber/components/StreamingServer/rtmp/RTMPServer.js`, NMS pings every 30 s) |
+| Server-side payload-stall timeout | **15 s** (`payloadTimeoutSeconds`, env `STREAMING_SRT_PAYLOAD_TIMEOUT_SECONDS`) | n/a | n/a |
 | Reconnect | sender re-opens an SRT connection → new `session-start` → fresh ASR (segmentId carried via `lastSegmentIds`) | client must explicitly reconnect | publisher must explicitly republish |
 
 UDP cannot deliver a transport-level disconnect signal, so SRT relies on a per-channel inactivity sentinel. TCP delivers FIN/RST natively, so WS and RTMP do not need one — they react to the OS-level close events. RTMP additionally bounds zombie detection to ~60 s through the RTMP-level ping protocol.
+
+SRT needs a second sentinel that the TCP protocols do not: a socket can stay connected and keep waking the read loop while delivering **zero payload** indefinitely (libsrt's TSBPD delivery clock displaced far into the future — see `SRT-WEDGE-RCA.md` in the workspace). Liveness is therefore tracked on two clocks: `lastEvent` (any socket wakeup) drives the 5 s sentinel, `lastPayload` (bytes actually read, via `readChunks`' `onRead` callback) drives the 15 s one. Event-fresh + payload-stale cannot mean "sender gone" — that trips the 5 s predicate first — so it is by construction the wedge signature. Both route to the same teardown, which lets the next caller land on a fresh socket.
 
 ## Implications for pause / resume
 
@@ -30,7 +33,7 @@ UDP cannot deliver a transport-level disconnect signal, so SRT relies on a per-c
 
 | Scenario | SRT | WS / RTMP |
 |---|---|---|
-| Pause + sender keeps streaming silently (or streams silence) | packets keep arriving, `lastPacket` stays fresh, no timeout, ASR resumes on the same provider on `PUT /resume` | TCP socket stays open, ASR stays paused on the same provider, `PUT /resume` is immediate |
+| Pause + sender keeps streaming silently (or streams silence) | packets keep arriving, `lastEvent` and `lastPayload` stay fresh (silence still produces bytes), no timeout, ASR resumes on the same provider on `PUT /resume` | TCP socket stays open, ASR stays paused on the same provider, `PUT /resume` is immediate |
 | Pause + sender stops streaming (audio source closed) | after **5 s**, `checkTimedOutChannel` tears the channel down → `session-stop` → ASR disposed; `PUT /resume` finds no ASR → next stream open creates a fresh ASR (segmentId carried over via `lastSegmentIds`) | as long as TCP socket is open, ASR stays alive (just paused); `PUT /resume` is immediate |
 | Pause + sender drops the connection (FIN, RST, process killed) | same as "sender stops streaming" | TCP close detected by server → channel torn down → ASR disposed; `PUT /resume` finds no ASR → restart cycle |
 

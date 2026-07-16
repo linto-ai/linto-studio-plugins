@@ -49,6 +49,7 @@ STREAMING_HOST=0.0.0.0 # Listening address for transcriber. 0.0.0.0 for all inte
 STREAMING_PROTOCOLS=SRT,RTMP,WS # comma separated list : SRT, RTMP, WS
 STREAMING_SRT_MODE=listener # listerner, caller, rendezvous
 STREAMING_SRT_UDP_PORT=8889 # UDP port for SRT listener
+STREAMING_SRT_PAYLOAD_TIMEOUT_SECONDS=15 # Tear down an SRT channel whose socket keeps signalling but delivers no payload for this long (wedged socket). Must stay above the 5s inactivity sentinel
 STREAMING_RTMP_TCP_PORT=1935 # TCP port for RTMP listener
 STREAMING_WS_TCP_PORT=8080 # TCP port for Websocket listener
 # As app constructs streaming endpoint URLs, it needs to know the proxy host and port to build the correct URL

@@ -8,7 +8,14 @@ const {
     STREAMING_PASSPHRASE,
     STREAMING_HOST,
     STREAMING_SRT_UDP_PORT,
+    STREAMING_SRT_PAYLOAD_TIMEOUT_SECONDS,
 } = process.env;
+
+// node-srt's readChunks() takes onRead as its 3rd positional argument, so passing
+// it means restating the first two. These mirror the binding's own defaults
+// (linto-node-srt/src/async-reader-writer.js) — keep them in sync on upgrade.
+const SRT_READ_MIN_BYTES = 1316;
+const SRT_READ_BUF_SIZE = 16 * 1024;
 
 class MultiplexedSRTServer extends EventEmitter {
     constructor(app) {
@@ -20,6 +27,11 @@ class MultiplexedSRTServer extends EventEmitter {
         this.runningChannels = {}
         this.pendingChannels = new Set();
         this.asyncSrtHelper = new AsyncSRT(); // Shared instance for socket option reads (validateStream)
+        // Our own connection listeners, so cleanup can remove exactly ours and leave
+        // node-srt's internal 'closing' handler in place — that handler is the only
+        // thing that evicts the fd from the server's _connectionMap (srt-server.js).
+        this.connectionHandlers = new WeakMap();
+        this.cleanedConnections = new WeakSet();
         // SRT runs over UDP. Unlike WS/RTMP (TCP), there is no FIN/RST when a
         // sender stops streaming, so we have to detect inactivity ourselves:
         // if no SRT packet has been observed for `channelTimeoutSeconds`, we
@@ -29,9 +41,15 @@ class MultiplexedSRTServer extends EventEmitter {
         //   - too long  → resources held for a sender that will never return
         // See doc/streaming-protocols.md for the pause/resume impact.
         this.channelTimeoutSeconds = 5;
+        // Second, independent predicate: a socket can keep waking us up while
+        // delivering zero payload (see checkTimedOutChannel). Must stay well above
+        // channelTimeoutSeconds so the ordinary sender-gone path fires first and the
+        // logs attribute correctly. SRTO_RCVLATENCY is never set, so libsrt's live
+        // default of 120 ms governs any legitimate TSBPD hold — 15 s is a wide margin.
+        this.payloadTimeoutSeconds = parseInt(STREAMING_SRT_PAYLOAD_TIMEOUT_SECONDS, 10) || 15;
         this.isRunning = false;
 
-        setInterval(() => {
+        this.checkInterval = setInterval(() => {
             this.checkTimedOutChannel();
         }, 1000);
     }
@@ -57,23 +75,42 @@ class MultiplexedSRTServer extends EventEmitter {
         }
     }
 
-    // Per-channel sentinel: if no SRT packet has been observed in the last
-    // `channelTimeoutSeconds`, dispose the channel. WS and RTMP do NOT have
-    // an equivalent because TCP delivers FIN/RST on disconnect and the
-    // server reacts via the close/error events. For pause/resume this means:
-    //   - SRT pause + sender keeps streaming → packets keep arriving,
-    //     lastPacket stays fresh, no timeout, ASR restart on resume is
-    //     immediate (same provider).
-    //   - SRT pause + sender stops streaming → after channelTimeoutSeconds
-    //     the connection is torn down and the ASR is disposed. A subsequent
-    //     PUT /resume finds no ASR. Streaming has to start over (a new
-    //     SRT connect emits session-start and a fresh ASR is created with
-    //     the segmentId carried over via lastSegmentIds).
+    // Per-channel sentinel, two independent predicates.
+    //
+    // 1. `lastEvent` — no socket event at all for `channelTimeoutSeconds`. SRT runs
+    //    over UDP, so unlike WS/RTMP (TCP) there is no FIN/RST when a sender stops;
+    //    silence is the only signal that it is gone. WS and RTMP have no equivalent
+    //    because the server reacts to their close/error events. For pause/resume:
+    //      - SRT pause + sender keeps streaming → packets keep arriving,
+    //        lastEvent stays fresh, no timeout, ASR restart on resume is
+    //        immediate (same provider).
+    //      - SRT pause + sender stops streaming → after channelTimeoutSeconds
+    //        the connection is torn down and the ASR is disposed. A subsequent
+    //        PUT /resume finds no ASR. Streaming has to start over (a new
+    //        SRT connect emits session-start and a fresh ASR is created with
+    //        the segmentId carried over via lastSegmentIds).
+    //
+    // 2. `lastPayload` — events keep firing but no payload byte is delivered. This
+    //    is the wedge signature: libsrt's TSBPD clock can be displaced far into the
+    //    future, after which it accepts packets but delivers none, forever, on that
+    //    one socket. Event-fresh + payload-stale cannot mean "sender gone" (that
+    //    trips predicate 1 first), so by construction it means the socket is wedged.
+    //    Counting SRT payload bytes — not transcription — is what makes this safe:
+    //    a silent room still runs an encoder emitting a continuous packet stream.
+    //    Both predicates route to the same teardown, which is the recovery validated
+    //    in production (a new caller then gets a fresh socket).
     checkTimedOutChannel() {
         const now = Date.now();
         for (const value of Object.values(this.runningChannels)) {
-            if (now - value.lastPacket > this.channelTimeoutSeconds * 1000) {
-                logger.warn('Channel timeout, closing !', {sessionId: value.fd.session.id, channelId: value.fd.channel.id});
+            const logMeta = {sessionId: value.fd.session.id, channelId: value.fd.channel.id};
+            if (now - value.lastEvent > this.channelTimeoutSeconds * 1000) {
+                logger.warn('Channel timeout, closing !', logMeta);
+                this.cleanupConnection(value.connection, value.fd, value.worker);
+                continue;
+            }
+            if (now - value.lastPayload > this.payloadTimeoutSeconds * 1000) {
+                const stalledFor = Math.round((now - value.lastPayload) / 1000);
+                logger.warn(`Channel stalled: socket still signalling but no SRT payload for ${stalledFor}s, closing !`, logMeta);
                 this.cleanupConnection(value.connection, value.fd, value.worker);
             }
         }
@@ -201,7 +238,8 @@ class MultiplexedSRTServer extends EventEmitter {
 
       this.runningSessions[session.id].push({ connection, fd, worker });
 
-      this.runningChannels[fd.channel.id] = { connection, fd, worker, lastPacket: Date.now()};
+      const now = Date.now();
+      this.runningChannels[fd.channel.id] = { connection, fd, worker, lastEvent: now, lastPayload: now };
     }
 
     stopRunningSession(session) {
@@ -253,38 +291,55 @@ class MultiplexedSRTServer extends EventEmitter {
     handleConnectionEvents(connection, fd, worker, readerWriter) {
         const logMeta = this.getLogMeta(fd);
 
-        connection.on("data", async () => {
-            if (worker && worker.connected) {
-                this.onClientData(readerWriter, fd, worker, connection);
-            }
-            if (this.runningChannels[fd.channel.id]) {
-                this.runningChannels[fd.channel.id].lastPacket = Date.now();
-            }
-        });
+        // Named so cleanupConnection can remove exactly these and leave node-srt's
+        // own listeners alone.
+        const handlers = {
+            data: async () => {
+                // A wakeup only proves libsrt signalled the fd, not that audio arrived —
+                // lastPayload is bumped from onClientData, on bytes actually read.
+                if (this.runningChannels[fd.channel.id]) {
+                    this.runningChannels[fd.channel.id].lastEvent = Date.now();
+                }
+                if (worker && worker.connected) {
+                    this.onClientData(readerWriter, fd, worker, connection);
+                }
+            },
+            closing: async () => {
+                logger.info(`Connection: ${connection.fd} --> closing`, logMeta);
+                connection.close()
+            },
+            closed: async () => {
+                logger.info(`Connection: ${connection.fd} --> closed`, logMeta);
+                if (worker && worker.connected) {
+                    worker.send({ type: 'terminate' });
+                }
+                this.cleanupConnection(connection, fd, worker);
+            },
+            error: (err) => {
+                logger.error(`Connection: ${connection.fd} --> error:`, logMeta, err);
+                this.cleanupConnection(connection, fd, worker);
+            },
+        };
 
-        connection.on("closing", async () => {
-            logger.info(`Connection: ${connection.fd} --> closing`, logMeta);
-            connection.close()
-        });
-
-        connection.on("closed", async () => {
-            logger.info(`Connection: ${connection.fd} --> closed`, logMeta);
-            if (worker && worker.connected) {
-                worker.send({ type: 'terminate' });
-            }
-            this.cleanupConnection(connection, fd, worker);
-        });
-
-        connection.on('error', (err) => {
-            logger.error(`Connection: ${connection.fd} --> error:`, logMeta, err);
-            this.cleanupConnection(connection, fd, worker);
-        });
+        for (const [event, handler] of Object.entries(handlers)) {
+            connection.on(event, handler);
+        }
+        this.connectionHandlers.set(connection, handlers);
     }
 
     // Handle incoming SRT packets
     async onClientData(readerWriter, fd, worker, connection) {
         try {
-            const chunks = await readerWriter.readChunks();
+            // readChunks only resolves once it has accumulated SRT_READ_MIN_BYTES, so a
+            // starved socket never returns from here. onRead fires per chunk inside its
+            // loop, which is why the payload clock is driven from the callback.
+            const onRead = (readBuf) => {
+                const channel = this.runningChannels[fd.channel.id];
+                if (channel && readBuf.byteLength > 0) {
+                    channel.lastPayload = Date.now();
+                }
+            };
+            const chunks = await readerWriter.readChunks(SRT_READ_MIN_BYTES, SRT_READ_BUF_SIZE, onRead);
             const buffer = Buffer.concat(chunks);
             worker.send({ type: 'buffer', chunks: buffer });
         } catch (error) {
@@ -298,20 +353,40 @@ class MultiplexedSRTServer extends EventEmitter {
     }
 
     cleanupConnection(connection, fd, worker) {
-        // Tell the streaming server controller to forward the session stop message to the broker
-        this.emit('session-stop', fd.session, fd.channel.id)
-        logger.info(`Connection: ${connection.fd} --> cleaning up.`, this.getLogMeta(fd));
+        // Reachable from the sentinel, the worker, and our own closed/error handlers,
+        // sometimes for the same connection. The teardown below must happen once, but
+        // the bookkeeping at the end must run on every call — stopRunningSession drains
+        // runningSessions by calling us in a loop and would spin forever otherwise.
+        const alreadyCleaned = connection ? this.cleanedConnections.has(connection) : false;
         if (connection) {
-            connection.removeAllListeners();
-            connection.close();
-            connection = null;
+            this.cleanedConnections.add(connection);
         }
-        if (worker) {
-            worker.removeAllListeners();
-            worker.kill();
-            const workerIndex = this.workers.indexOf(worker);
-            if (workerIndex > -1) {
-                this.workers.splice(workerIndex, 1);
+
+        if (!alreadyCleaned) {
+            // Tell the streaming server controller to forward the session stop message to the broker
+            this.emit('session-stop', fd.session, fd.channel.id)
+            logger.info(`Connection: ${connection.fd} --> cleaning up.`, this.getLogMeta(fd));
+            if (connection) {
+                // Remove only our own listeners: removeAllListeners() would also strip
+                // node-srt's internal 'closing' handler, which is what deletes the fd from
+                // the server's _connectionMap. Nothing else ever evicts it, so stripping it
+                // leaks the entry for the process lifetime.
+                const handlers = this.connectionHandlers.get(connection);
+                if (handlers) {
+                    for (const [event, handler] of Object.entries(handlers)) {
+                        connection.removeListener(event, handler);
+                    }
+                    this.connectionHandlers.delete(connection);
+                }
+                connection.close();
+            }
+            if (worker) {
+                worker.removeAllListeners();
+                worker.kill();
+                const workerIndex = this.workers.indexOf(worker);
+                if (workerIndex > -1) {
+                    this.workers.splice(workerIndex, 1);
+                }
             }
         }
 

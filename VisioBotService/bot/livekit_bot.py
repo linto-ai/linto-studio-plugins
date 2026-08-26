@@ -121,6 +121,9 @@ class LiveKitBot:
                     # transcription segments (no audio/video is ever published).
                     can_publish_data=True,
                     hidden=True,
+                    # The SFU only relays transcription packets from AGENT-kind
+                    # participants (Meet mints its production token the same way).
+                    agent=True,
                 )
             )
             .to_jwt()

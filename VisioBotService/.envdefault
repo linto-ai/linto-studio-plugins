@@ -5,3 +5,6 @@ BOT_CAPABILITIES=visio-native
 VISIOBOT_HEALTHCHECK_HTTP=8081
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
+# Republish the Transcriber captions into the LiveKit room as native transcription
+# segments (the Visio/Meet overlay renders them). Needs can_publish_data on the token.
+VISIOBOT_PUBLISH_NATIVE_SUBS=true

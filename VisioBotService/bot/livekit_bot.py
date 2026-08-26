@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.api import AccessToken, VideoGrants
 
 from bot.audio_mixer import AudioMixer, rms_s16le
+from bot.captions import caption_to_segment, resolve_speaker
 from bot.transcriber_stream import TranscriberStream
 
 # Tag 255 is the Transcriber's RESERVED overflow/mixed sentinel: per-stream
@@ -63,6 +64,15 @@ class LiveKitBot:
         self._participants: dict[str, str] = {}  # identity -> name
         self._pump_tasks: set[asyncio.Task] = set()
         self._pumped: set = set()  # track sids already being pumped
+        self._track_sids: dict[str, str] = {}  # identity -> audio track sid
+
+        # Republish the Transcriber's captions INTO the room as native LiveKit
+        # transcription segments (see bot/captions.py). Requires the join token to
+        # carry can_publish_data (Meet mints it so; the dev env-mint below does too).
+        self.publish_captions = os.environ.get(
+            "VISIOBOT_PUBLISH_NATIVE_SUBS", "true"
+        ).strip().lower() in ("1", "true")
+        self._captions_published = 0
 
         # perStream tagging + VAD gate (no numpy). Tags are a recycled pool over
         # 0..254 (OVERFLOW_TAG=255 is reserved): `_free_tags` is a min-heap of
@@ -107,6 +117,9 @@ class LiveKitBot:
                     room=self.room_name,
                     can_subscribe=True,
                     can_publish=False,
+                    # Data-plane only: needed to republish captions as
+                    # transcription segments (no audio/video is ever published).
+                    can_publish_data=True,
                     hidden=True,
                 )
             )
@@ -237,6 +250,7 @@ class LiveKitBot:
     def _on_participant_disconnected(self, participant) -> None:
         ident = participant.identity
         name = self._participants.pop(ident, None)
+        self._track_sids.pop(ident, None)
         # Drop the mixer state too so a departed participant can't stay the
         # "current speaker" (no-op in perStream, where the mixer is idle).
         self.mixer.remove_participant(ident)
@@ -282,11 +296,61 @@ class LiveKitBot:
         self._participants[ident] = name
         self.transcriber.send_participant("join", ident, name, self._tag_for(ident))
 
+    # ---- captions -> LiveKit transcription segments ------------------------
+    async def publish_caption(self, payload: dict, kind: str, is_translation: bool) -> None:
+        """Republish one Transcriber caption into the room as a transcription
+        segment attributed to the speaking participant (see bot/captions.py).
+
+        Best-effort: a mapping miss or an SDK error is logged and dropped — the
+        Transcriber/Studio pipeline is unaffected, only the in-room overlay is.
+        """
+        if not self.publish_captions:
+            return
+        mapped = caption_to_segment(payload, kind, is_translation)
+        if mapped is None:
+            return
+        segment_id, text, start_ms, end_ms, language, final = mapped
+        local = getattr(self.room, "local_participant", None)
+        if local is None:
+            return
+        identity = resolve_speaker(payload, self._participants, local.identity)
+        track_sid = self._track_sids.get(identity, "")
+        try:
+            await local.publish_transcription(
+                rtc.Transcription(
+                    participant_identity=identity,
+                    track_sid=track_sid,
+                    segments=[
+                        rtc.TranscriptionSegment(
+                            id=segment_id,
+                            text=text,
+                            start_time=start_ms,
+                            end_time=end_ms,
+                            language=language,
+                            final=final,
+                        )
+                    ],
+                )
+            )
+            self._captions_published += 1
+            if self._captions_published == 1:
+                print(
+                    f"LiveKitBot: first caption republished into room={self.room_name} "
+                    f"(speaker={identity})",
+                    flush=True,
+                )
+        except Exception as e:  # noqa: BLE001 — never let a caption kill the bot
+            print(f"LiveKitBot: publish_transcription failed: {e}", flush=True)
+
     def _start_pump(self, track, identity: str) -> None:
         sid = getattr(track, "sid", None) or id(track)
         if sid in self._pumped:
             return
         self._pumped.add(sid)
+        # Remember the participant's audio track so republished captions can be
+        # attributed to the exact track (LiveKit `Transcription.track_sid`).
+        if isinstance(sid, str):
+            self._track_sids[identity] = sid
         task = asyncio.create_task(self._pump(track, identity))
         self._pump_tasks.add(task)
         task.add_done_callback(self._pump_tasks.discard)

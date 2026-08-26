@@ -21,6 +21,7 @@ import uuid
 
 import paho.mqtt.client as mqtt
 
+from bot.captions import topic_kind
 from bot.livekit_bot import LiveKitBot
 
 HEARTBEAT_S = 15
@@ -196,6 +197,20 @@ class BrokerClient:
         if self.loop is None:
             return
 
+        # Transcriber captions for a session/channel this replica serves: hand
+        # them to the bot so it republishes them into the LiveKit room.
+        if parts[0] == "transcriber":
+            caption = topic_kind(msg.topic)
+            if caption is None:
+                return
+            session_id, channel_id, kind, is_translation = caption
+            bot = self.bots.get(f"{session_id}_{channel_id}")
+            if bot is not None:
+                asyncio.run_coroutine_threadsafe(
+                    bot.publish_caption(data, kind, is_translation), self.loop
+                )
+            return
+
         if action == "startbot":
             asyncio.run_coroutine_threadsafe(self.start_bot(data), self.loop)
         elif action == "stopbot":
@@ -249,6 +264,10 @@ class BrokerClient:
             if not ok:
                 raise RuntimeError("LiveKit/transcriber connect failed")
             self.bots[key] = bot
+            # Follow this channel's live captions so the bot can republish them
+            # into the room (transcriber/out/<sid>/<cid>/{partial,final}[/translations]).
+            if bot.publish_captions and self.client is not None:
+                self.client.subscribe(self._caption_topic(session_id, channel_id), qos=0)
             self._publish_status(True)
             print(f"visio-bot-service: started bot {key} (botId {bot_id})", flush=True)
         except Exception as e:  # noqa: BLE001
@@ -260,12 +279,21 @@ class BrokerClient:
                 except Exception:  # noqa: BLE001
                     pass
 
+    @staticmethod
+    def _caption_topic(session_id, channel_id) -> str:
+        return f"transcriber/out/{session_id}/{channel_id}/#"
+
     async def stop_bot(self, session_id, channel_id) -> None:
         key = f"{session_id}_{channel_id}"
         bot = self.bots.pop(key, None)
         if bot is None:
             return
         print(f"visio-bot-service: stopping bot {key}", flush=True)
+        if self.client is not None:
+            try:
+                self.client.unsubscribe(self._caption_topic(session_id, channel_id))
+            except Exception:  # noqa: BLE001
+                pass
         try:
             await bot.dispose()
         except Exception as e:  # noqa: BLE001

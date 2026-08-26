@@ -70,9 +70,17 @@ class _FakeClient:
             pass
         self.published.append((topic, payload))
 
+    def subscribe(self, topic, qos=0):
+        pass
+
+    def unsubscribe(self, topic):
+        pass
+
 
 class _RecordingBot:
     """Stand-in for LiveKitBot: records ctor kwargs, start() succeeds."""
+
+    publish_captions = True
 
     instances = []
 

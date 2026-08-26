@@ -208,6 +208,10 @@ class ASR extends eventEmitter {
     // to the id. This short-circuit runs before any tracker logic.
     if (this.participantId) {
       transcription.locutor = this.participantName || this.participantId;
+      // Also expose the STABLE participant id (LiveKit identity for the native
+      // visio bot) so a downstream consumer can attribute the caption to a
+      // participant without a display-name lookup (names can collide).
+      transcription.participantId = this.participantId;
       return;
     }
     if (this.diarizationMode !== 'native' || !this.speakerTracker) return;
@@ -221,6 +225,9 @@ class ASR extends eventEmitter {
     const speaker = this.speakerTracker.getSpeakerForSegment(transcription.segmentId);
     if (speaker) {
       transcription.locutor = speaker.name || speaker.id;
+      // Mixed mode: the SpeakerTracker's `id` is the bot-fed participant id
+      // (LiveKit identity for the native visio bot).
+      if (speaker.id) transcription.participantId = speaker.id;
     }
   }
 

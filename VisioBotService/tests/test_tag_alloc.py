@@ -75,6 +75,7 @@ def _make_bot(per_stream=False):
     bot._free_tags = []
     bot._next_tag = 0
     bot._participants = {}
+    bot._track_sids = {}
     bot.transcriber = _RecordingTranscriber(per_stream=per_stream)
     bot.mixer = _NoopMixer()
     return bot

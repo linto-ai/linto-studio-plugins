@@ -170,6 +170,18 @@ class StreamingServer extends Component {
     const existing = this.ASRs.get(`${ck}#${tag}`);
     if (existing) return existing;
 
+    const ctx = this.channels.get(ck);
+    if (!ctx) {
+      logger.warn(`Per-stream: no channel context for ${ck}, dropping frame (tag ${tag})`);
+      return null;
+    }
+    // Fast path for capped tags: a tag once collapsed onto the shared overflow
+    // ASR stays there, so route it in O(1) instead of re-scanning every frame
+    // (the scan below is the hot-path cost that only bites in large meetings).
+    if (ctx.overflowTags && ctx.overflowTags.has(tag)) {
+      return this.ASRs.get(`${ck}#${OVERFLOW_TAG}`) || null;
+    }
+
     // Apply the per-channel cap: count this channel's existing sub-ASR.
     const cap = this.maxAsrPerChannel;
     const subCount = [...this.ASRs.keys()].filter(k => k.startsWith(`${ck}#`)).length;
@@ -177,13 +189,12 @@ class StreamingServer extends Component {
     if (subCount >= cap && tag !== OVERFLOW_TAG) {
       effTag = OVERFLOW_TAG; // collapse onto the shared overflow ASR
       const overflow = this.ASRs.get(`${ck}#${OVERFLOW_TAG}`);
-      if (overflow) return overflow;
-    }
-
-    const ctx = this.channels.get(ck);
-    if (!ctx) {
-      logger.warn(`Per-stream: no channel context for ${ck}, dropping frame (tag ${tag})`);
-      return null;
+      if (overflow) {
+        (ctx.overflowTags ||= new Set()).add(tag); // memoize → O(1) next frame
+        return overflow;
+      }
+      // First overflow tag: remember it so subsequent frames skip the scan too.
+      (ctx.overflowTags ||= new Set()).add(tag);
     }
     const { session, channel } = ctx;
     // #10: capture the channel's shared meeting-time origin once, from the first
@@ -226,7 +237,12 @@ class StreamingServer extends Component {
   // stream marker (that is reserved for channel stop, #9). After the map delete
   // the freed tag no longer counts toward the cap. No-op if no such ASR exists.
   async _disposePerStreamParticipant(sessionId, channelId, tag) {
-    const key = `${sessionId}_${channelId}#${tag}`;
+    const ck = `${sessionId}_${channelId}`;
+    // A tag can be recycled by the bot to a later joiner, so forget any overflow
+    // routing memoized for it (else the new participant would be pinned to
+    // overflow even with free slots).
+    this.channels.get(ck)?.overflowTags?.delete(tag);
+    const key = `${ck}#${tag}`;
     const asr = this.ASRs.get(key);
     if (!asr) return false;
     this.ASRs.delete(key);

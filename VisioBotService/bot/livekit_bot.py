@@ -253,7 +253,11 @@ class LiveKitBot:
     def _on_participant_disconnected(self, participant) -> None:
         ident = participant.identity
         name = self._participants.pop(ident, None)
-        self._track_sids.pop(ident, None)
+        # Forget this participant's audio track sid on BOTH maps so `_pumped`
+        # does not grow unbounded over a long call with high participant churn.
+        sid = self._track_sids.pop(ident, None)
+        if sid is not None:
+            self._pumped.discard(sid)
         # Drop the mixer state too so a departed participant can't stay the
         # "current speaker" (no-op in perStream, where the mixer is idle).
         self.mixer.remove_participant(ident)
@@ -268,12 +272,17 @@ class LiveKitBot:
         if name is not None:
             self.transcriber.send_participant("leave", ident, name, tag)
 
-    def _on_participant_name_changed(self, participant, *args) -> None:
+    def _on_participant_name_changed(self, *args) -> None:
         # BONUS: the LiveKit display name can change mid-call (rename). Refresh
-        # the memorised name and the participants list so subsequent captions
-        # (and the re-emitted speaker transition) use it. The handler signature
-        # varies across livekit-rtc versions, hence *args; the new name is read
-        # from the participant object, which is always passed.
+        # the memorised name so subsequent captions use it.
+        #
+        # livekit-rtc emits this VALUE-FIRST — `(old_name, participant)` — like
+        # participant_attributes_changed, so the participant is NOT the first
+        # positional arg. Pick whichever arg exposes `.identity` instead of
+        # assuming a position (robust across SDK versions).
+        participant = next(
+            (a for a in args if getattr(a, "identity", None) is not None), None
+        )
         ident = getattr(participant, "identity", None)
         if ident is None:
             return

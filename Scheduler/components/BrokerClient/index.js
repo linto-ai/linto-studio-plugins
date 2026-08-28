@@ -302,7 +302,11 @@ class BrokerClient extends Component {
       // Optional ordered fallback per provider, e.g.
       // BOT_PROVIDER_FALLBACK_VISIO="visio-native,visio" → prefer the native agent,
       // fall back to the web bot. Defaults to the requested provider alone.
-      const fallbacks = (process.env[`BOT_PROVIDER_FALLBACK_${botData.botType.toUpperCase()}`] || botData.botType)
+      // Guard a missing provider: `null.toUpperCase()` would throw and be
+      // swallowed by startBot's catch, hiding the real cause behind a generic
+      // "Cannot read properties of null". Keep the explicit no-provider path.
+      const provider = botData.botType || '';
+      const fallbacks = (process.env[`BOT_PROVIDER_FALLBACK_${provider.toUpperCase()}`] || provider)
         .split(',').map(s => s.trim()).filter(Boolean);
       // A truthy-but-empty env (e.g. "," or " , ") parses to [] here; the
       // `|| botData.botType` default above does NOT apply (the string was

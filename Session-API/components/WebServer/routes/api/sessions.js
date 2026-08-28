@@ -148,7 +148,14 @@ async function getSessionResult(sessionId, withCaptions=false) {
         }
     }
 
-    return session;
+    // Serialize + scrub HERE so EVERY read path (detail, create, update, pause,
+    // resume, start, stop, delete-captions…) returns a token-free plain object.
+    // The Meet-minted native join token is a sub-key of the JSON `meta` column
+    // and must never reach a client (scrubbing on only the two GETs left it
+    // leaking on the ~11 mutation responses). Tolerate a plain object (test
+    // fixtures) as well as a Sequelize instance.
+    const plain = typeof session.toJSON === 'function' ? session.toJSON() : session;
+    return scrubNativeTokens(plain);
 }
 
 // Strip the native join token from a serialized session before it leaves a read path.
@@ -192,7 +199,8 @@ module.exports = (webserver) => {
                 if (!session) {
                     return res.status(404).json({ error: 'Session not found' });
                 }
-                res.json(scrubNativeTokens(session.toJSON()));
+                // getSessionResult already returns a scrubbed plain object.
+                res.json(session);
             } catch (err) {
                 next(err);
             }

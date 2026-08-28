@@ -203,15 +203,17 @@ class ASR extends eventEmitter {
   // ordinary (non-bot) streams where speakerTracker is null.
   _applyNativeSpeaker(transcription) {
     // Per-stream: this ASR decodes exactly one participant's stream, so the
-    // speaker IS that participant — assign the identity directly and skip the
-    // SpeakerTracker guessing path entirely. Prefer the display name, fall back
-    // to the id. This short-circuit runs before any tracker logic.
-    if (this.participantId) {
+    // speaker IS that participant — assign it directly and skip the
+    // SpeakerTracker guessing path entirely. We may know the participant by id
+    // and/or by name (a rename can create a name-only entry), so gate on EITHER:
+    // a named-but-idless participant must still be attributed, not fall through
+    // to the provider's guessing. This short-circuit runs before any tracker.
+    if (this.participantId || this.participantName) {
       transcription.locutor = this.participantName || this.participantId;
       // Also expose the STABLE participant id (LiveKit identity for the native
-      // visio bot) so a downstream consumer can attribute the caption to a
-      // participant without a display-name lookup (names can collide).
-      transcription.participantId = this.participantId;
+      // visio bot) when known, so a downstream consumer can attribute the
+      // caption without a display-name lookup (names can collide).
+      if (this.participantId) transcription.participantId = this.participantId;
       return;
     }
     if (this.diarizationMode !== 'native' || !this.speakerTracker) return;

@@ -628,26 +628,4 @@ describe('StreamingServer per-stream demux', () => {
     assert.strictEqual(blankFinals.length, 1, 'exactly ONE blank marker for the whole channel');
     assert.strictEqual(inst.ASRs.size, 0, '0 orphans');
   });
-
-  // #10 — sub-ASR created at different times share ONE meeting-time origin (the
-  // channel's first tMs), so their caption timestamps are on a comparable base.
-  it('#10 sibling sub-ASR share the channel meeting-time origin (first tMs)', async () => {
-    const inst = makeServer();
-    const session = makeSession(), channel = makeChannel();
-    markPerStream(inst, 'sess_chan', session, channel);
-    const wsServer = fakeWsServer([{ id: 'u0', name: 'Alice', tag: 0 }, { id: 'u1', name: 'Bob', tag: 1 }]);
-
-    // First frame of the channel carries the bot clock origin 5000ms.
-    const a = inst._getOrCreatePerStreamAsr(wsServer, 'sess', 'chan', 0, 5000);
-    await settle(a);
-    assert.strictEqual(inst.channels.get('sess_chan').timeOrigin, 5000, 'origin captured once');
-    assert.strictEqual(a.timeOrigin, 5000);
-
-    // A sibling created MUCH later (tMs=12000) inherits the SAME origin, not its
-    // own creation instant -> both map the same meeting instant to one base.
-    const b = inst._getOrCreatePerStreamAsr(wsServer, 'sess', 'chan', 1, 12000);
-    await settle(b);
-    assert.strictEqual(b.timeOrigin, 5000, 'sibling shares the channel origin, not its own tMs');
-    assert.strictEqual(a.timeOrigin, b.timeOrigin, 'one shared time base across siblings');
-  });
 });

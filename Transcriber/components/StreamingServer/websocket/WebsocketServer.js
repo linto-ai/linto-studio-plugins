@@ -350,10 +350,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
           if (fd.perStream) {
               // Per-stream mode: audio arrives as tagged binary frames
               // (0x01 | tag | reserved | meetingTimeMs | PCM). Demux to a
-              // 5-arg 'data' carrying the participant tag + bot clock.
+              // 4-arg 'data' carrying the participant tag.
               const parsed = this._parseTaggedFrame(message);
               if (!parsed) return; // short/invalid frame -> drop
-              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag, parsed.tMs);
+              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag);
               return;
           }
           this.emit('data', message, fd.session.id, fd.channel.id); // legacy 3 args, unchanged
@@ -368,6 +368,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
   //   off4  u32 meetingTimeMs (bot-relative clock)
   //   off8  N   PCM s16le mono 16k
   // Returns {tag, tMs, pcm} or null when the frame is not a valid tagged frame.
+  // `tMs` is decoded to honour the wire format but is NOT consumed: caption
+  // timestamps are rebased downstream from `astart` + the provider offsets
+  // (Session-API groups a channel's captions off its earliest astart), so the
+  // bot clock stays a reserved protocol field rather than a second time base.
   _parseTaggedFrame(buf) {
       if (!Buffer.isBuffer(buf) || buf.length < 8 || buf[0] !== 0x01) return null;
       return { tag: buf[1], tMs: buf.readUInt32LE(4), pcm: buf.subarray(8) };

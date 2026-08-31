@@ -114,7 +114,7 @@ class StreamingServer extends Component {
         }
       });
 
-      server.on('data', (audio, sessionId, channelId, tag, tMs) => {
+      server.on('data', (audio, sessionId, channelId, tag) => {
         try {
           const buffer = Buffer.from(audio);
           if (tag === undefined) {
@@ -128,9 +128,8 @@ class StreamingServer extends Component {
             return;
           }
           // Per-stream: route the tagged frame to its participant's ASR,
-          // lazily creating it on the first frame of each tag. The bot clock
-          // tMs seeds the channel's shared time origin (see #10 in the method).
-          const asr = this._getOrCreatePerStreamAsr(server, sessionId, channelId, tag, tMs);
+          // lazily creating it on the first frame of each tag.
+          const asr = this._getOrCreatePerStreamAsr(server, sessionId, channelId, tag);
           if (asr) asr.transcribe(buffer);
         } catch (error) {
           logger.error(`Error processing data for session ${sessionId}, channel ${channelId}: ${error}`);
@@ -165,7 +164,7 @@ class StreamingServer extends Component {
   // - Key: `${ck}#${tag}`. The shared per-channel allocator gives monotonic,
   //   collision-free segmentIds across all the channel's sub-ASR.
   // Returns the ASR, or null if the channel context is unknown (defensive).
-  _getOrCreatePerStreamAsr(server, sessionId, channelId, tag, tMs) {
+  _getOrCreatePerStreamAsr(server, sessionId, channelId, tag) {
     const ck = `${sessionId}_${channelId}`;
     const existing = this.ASRs.get(`${ck}#${tag}`);
     if (existing) return existing;
@@ -197,11 +196,6 @@ class StreamingServer extends Component {
       (ctx.overflowTags ||= new Set()).add(tag);
     }
     const { session, channel } = ctx;
-    // #10: capture the channel's shared meeting-time origin once, from the first
-    // bot clock value seen on the channel. Every sub-ASR — whatever wall-clock
-    // moment it is lazily created at — inherits this single origin so their
-    // caption timestamps share one comparable base.
-    if (ctx.timeOrigin === undefined && tMs !== undefined) ctx.timeOrigin = tMs;
     // Only reached for tagged frames, which only happen after session-start
     // already proved getStreamParticipants exists (and ctx is non-null above).
     const participants = server.getStreamParticipants(sessionId, channelId);
@@ -219,7 +213,6 @@ class StreamingServer extends Component {
       segmentAllocator: ctx.allocator,
       participantId,
       participantName,
-      timeOrigin: ctx.timeOrigin,
     }, `${ck}#${effTag}`, sessionId, channelId);
     // #8: a participant speaking for the first time DURING a pause must not leak
     // captions — pause the freshly-created ASR immediately (same mechanism as

@@ -1,10 +1,36 @@
-VISIOBOT_COMPONENTS=BrokerClient,Healthcheck
+# Reference values for the visio-bot-service (native LiveKit transcription bot).
+# NOTE: unlike the Node modules, this Python service does NOT auto-load this file —
+# every value below is also the DEFAULT hardcoded in the code. The file documents
+# the knobs and is what a deployment (compose env / Helm values) should mirror.
+VISIOBOT_COMPONENTS=BrokerClient,Healthcheck # components to run, in this order
 BROKER_HOST=mosquitto
 BROKER_PORT=1883
-BOT_CAPABILITIES=visio-native
-VISIOBOT_HEALTHCHECK_HTTP=8081
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=secret
+BOT_CAPABILITIES=visio-native # advertised capability the Scheduler routes on
+VISIOBOT_HEALTHCHECK_HTTP=8081 # HTTP port of the liveness endpoint
+
+##### LiveKit credentials #####
+# LIVEKIT_TOKEN_FROM_PAYLOAD=true # present the join token minted by Meet (carried in
+# session.meta.native) instead of self-signing. Fail-closed: no token in the payload
+# => no join, never an env-mint. PROD SHOULD SET THIS: the replica then carries no
+# LiveKit signing secret and serves any tenant.
+LIVEKIT_API_KEY=devkey # dev-only self-mint fallback (unused when TOKEN_FROM_PAYLOAD)
+LIVEKIT_API_SECRET=secret # idem — the service refuses to start on these placeholders
+# unless DEVELOPMENT=true or LIVEKIT_TOKEN_FROM_PAYLOAD=true
+
+##### Transcription #####
+# Per-stream diarization: subscribe to each participant's audio track separately and
+# stream one TAGGED PCM flow per participant, so the Transcriber runs one ASR per
+# participant and every caption carries that participant's real LiveKit display name.
+# Frames are energy-VAD gated, so a silent participant costs no ASR audio.
+# false => legacy MIXED path: all participants mixed into one flow, one ASR, and the
+# speaker is guessed from the mixer's energy VAD (approximate on overlapping speech).
+# ⚠ REQUIRES the Transcriber serving this bot to run with
+#   TRANSCRIBER_PERSTREAM_DIARIZATION=true (and a MAX_CONCURRENT_ASR_PER_CHANNEL cap
+#   sized for the expected meeting). The mode is NEGOTIATED in the Transcriber's ack
+#   and the bot honours it: if the Transcriber says no, the bot logs a WARNING and
+#   falls back to mixed.
+BOT_PERSTREAM=true
+BOT_VAD_ENERGY_THRESHOLD=300 # RMS above which a 20 ms frame counts as speech
 # Republish the Transcriber captions into the LiveKit room as native transcription
 # segments (the Visio/Meet overlay renders them). Needs can_publish_data on the token.
 VISIOBOT_PUBLISH_NATIVE_SUBS=true

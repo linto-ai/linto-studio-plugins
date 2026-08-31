@@ -52,12 +52,6 @@ class ASR extends eventEmitter {
     // _applyNativeSpeaker short-circuits to participantName. null for legacy.
     this.participantId = options.participantId || null;
     this.participantName = options.participantName || null;
-    // Per-stream shared meeting-time origin: the channel's first bot clock value
-    // (tMs), captured once on the channel context and passed to every lazily-
-    // created sub-ASR so captions from participants whose ASR was created at
-    // different wall-clock moments share one time base (comparable, ordered).
-    // null for legacy (no bot clock) — unchanged.
-    this.timeOrigin = options.timeOrigin !== undefined ? options.timeOrigin : null;
     // Shared per-channel segmentId allocator (perStream): all the sub-ASR of a
     // channel draw monotonic, collision-free ids from {next}. When null (legacy),
     // segmentId advances per-instance exactly as before (bit-exact).

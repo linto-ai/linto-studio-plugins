@@ -9,6 +9,7 @@ SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, t
 SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
 BOTSERVICE_COMPONENTS=BrokerClient,Healthcheck
+VISIOBOT_COMPONENTS=BrokerClient,Healthcheck
 
 # BotService (dedicated meeting-bot service)
 MAX_CONCURRENT_BOTS=10
@@ -22,6 +23,18 @@ BOTSERVICE_HEALTHCHECK_HTTP=8080
 # TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init ack before failing the handshake
 # BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling: above it advertise capabilities=[] and refuse bots (0 = disabled)
 # BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up
+
+# VisioBotService (native LiveKit bot for Visio/Meet)
+VISIOBOT_HEALTHCHECK_HTTP=8081
+# BOT_CAPABILITIES=visio-native # capability the Scheduler routes visio bots on
+# LIVEKIT_TOKEN_FROM_PAYLOAD=true # use the join token minted by Meet (prod); the
+# replica then holds no LiveKit signing secret
+BOT_PERSTREAM=true # one tagged PCM flow per participant => 1 ASR/participant and a
+# real speaker name; needs TRANSCRIBER_PERSTREAM_DIARIZATION=true (negotiated in the
+# Transcriber ack). false = legacy mixed path (speaker guessed by energy VAD)
+BOT_VAD_ENERGY_THRESHOLD=300
+VISIOBOT_PUBLISH_NATIVE_SUBS=true # republish captions into the room as native
+# LiveKit transcription segments (needs can_publish_data on the join token)
 # BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
 
 # Audio streaming configuration
@@ -62,6 +75,13 @@ DB_NAME=mydb
 
 ##### ASR #####
 TRANSCRIBER_BOT_NAME=bot
+# Per-stream diarization (serves the VisioBotService native bot): one ASR per
+# participant instead of one per mixed channel. The Transcriber grants the mode in
+# its init ack only when this is true; off => legacy mixed path, bit-exact.
+TRANSCRIBER_PERSTREAM_DIARIZATION=false
+MAX_CONCURRENT_ASR_PER_CHANNEL=6 # participants with their own ASR; the surplus
+# collapses onto one shared overflow ASR
+TRANSCRIBER_OVERFLOW_SPEAKER_NAME=Participants # speaker label of that overflow ASR
 TRANSCRIBER_RESET_MESSAGE="Channel reset."
 # Max time the Transcriber waits for the ASR provider to flush its pending
 # finals at stream stop, before emitting the end-of-stream marker (ms)

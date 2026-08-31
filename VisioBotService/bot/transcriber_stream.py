@@ -3,21 +3,22 @@
 Bridges one bot's mixed audio to one LinTO Transcriber over the existing WS
 ingest protocol:
 
-  - on connect, send the `init` frame (encoding/sampleRate/diarizationMode +
-    participants list), then HOLD audio until the Transcriber replies
-    `{type:'ack'}` (ACK-gating). Buffered frames are flushed on the ack.
+  - on connect, send the `init` frame (encoding/sampleRate/diarizationMode),
+    then wait for the Transcriber's `{type:'ack'}`, which also carries the
+    NEGOTIATED perStream mode. connect() only returns once the ack is in, and
+    LiveKitBot.start() joins the room strictly after that — so no audio can be
+    produced before the ack and none is buffered here (the JS bot's pre-ack
+    ring buffer has no equivalent need in this ordering).
   - audio frames are binary PCM s16le; control messages (participant join/leave)
-    are JSON and are NOT ack-gated.
+    are JSON.
   - all sends go through a SINGLE writer coroutine reading from one asyncio.Queue
     (preserves order; never one task per frame).
 """
 import asyncio
-import collections
 import json
 
 import websockets
 
-MAX_BUFFER = 500
 ACK_TIMEOUT_S = 10
 
 
@@ -25,14 +26,11 @@ class TranscriberStream:
     def __init__(
         self,
         url: str,
-        participants_provider=None,
         diarization_mode: str = "asr",
-        max_buffer: int = MAX_BUFFER,
         ack_timeout: float = ACK_TIMEOUT_S,
         per_stream: bool = False,
     ) -> None:
         self.url = url
-        self.participants_provider = participants_provider
         self.diarization_mode = diarization_mode
         self.ack_timeout = ack_timeout
 
@@ -47,10 +45,8 @@ class TranscriberStream:
         self.ready = False
         self._closed = False
 
-        # One queue, one writer. Pre-ack audio is buffered (bounded, drop-oldest)
-        # in a deque until the ack flushes it into the queue.
+        # One queue, one writer: order is preserved without a task per frame.
         self.q: asyncio.Queue = asyncio.Queue()
-        self.buffer: collections.deque = collections.deque(maxlen=max_buffer)
 
         self._recv_task: asyncio.Task | None = None
         self._writer_task: asyncio.Task | None = None
@@ -70,9 +66,11 @@ class TranscriberStream:
             ) from e
 
     async def _send_init(self) -> None:
-        participants = (
-            self.participants_provider() if self.participants_provider else []
-        )
+        # The room is joined only AFTER this handshake (LiveKitBot.start()), so the
+        # initial roster is always empty: every participant — including those
+        # already in the room — is announced by a `participant/join` control
+        # message from the post-connect sweep. The Transcriber accepts an empty
+        # initial list and keys its per-stream map off those messages.
         await self.ws.send(
             json.dumps(
                 {
@@ -81,7 +79,7 @@ class TranscriberStream:
                     "sampleRate": 16000,
                     "diarizationMode": self.diarization_mode,
                     "perStream": self.requested_per_stream,
-                    "participants": participants,
+                    "participants": [],
                 }
             )
         )
@@ -99,11 +97,24 @@ class TranscriberStream:
                     if not self.ready:
                         # Honour the negotiated ACK (D9): the effective mode is
                         # whatever the Transcriber grants, NOT what we requested.
-                        # Resolve it BEFORE flushing buffered frames so the very
-                        # first frame is already routed correctly.
                         self.per_stream = bool(obj.get("perStream"))
                         self.ready = True
-                        self._flush()
+                        if self.requested_per_stream and not self.per_stream:
+                            # Loud on purpose: this is the ONE way per-stream
+                            # diarization silently degrades to the mixed path
+                            # (energy-VAD speaker guessing instead of one ASR per
+                            # participant). It means the Transcriber serving this
+                            # bot does not have TRANSCRIBER_PERSTREAM_DIARIZATION
+                            # =true — a deployment mistake, not a runtime event.
+                            print(
+                                "TranscriberStream: WARNING — requested perStream "
+                                "diarization but the Transcriber acked perStream="
+                                "false; falling back to MIXED audio (approximate "
+                                "speaker attribution). Set "
+                                "TRANSCRIBER_PERSTREAM_DIARIZATION=true on the "
+                                "Transcriber to enable it.",
+                                flush=True,
+                            )
                     self._ack_event.set()
         except Exception:  # noqa: BLE001
             pass
@@ -120,19 +131,15 @@ class TranscriberStream:
         except Exception:  # noqa: BLE001
             pass
 
-    def _flush(self) -> None:
-        while self.buffer:
-            self.q.put_nowait(self.buffer.popleft())
-
     def enqueue(self, frame_bytes: bytes) -> None:
-        """Queue one binary PCM frame. Pre-ack frames buffer (drop-oldest)."""
+        """Queue one binary PCM frame on the single-writer queue.
+
+        Callers only exist after the ack (the mixer is started and the track
+        pumps are wired after connect() returns), so there is no pre-ack audio
+        to hold back."""
         if self._closed:
             return
-        if self.ready:
-            self.q.put_nowait(frame_bytes)
-        else:
-            # deque(maxlen) drops the oldest automatically when full.
-            self.buffer.append(frame_bytes)
+        self.q.put_nowait(frame_bytes)
 
     def enqueue_tagged(self, tag: int, t_ms: int, pcm: bytes) -> None:
         """Queue one per-stream tagged audio frame (PHASE 3).
@@ -145,7 +152,7 @@ class TranscriberStream:
           bytes 4-7   meetingTimeMs u32 little-endian (bot-relative clock)
           bytes 8..   PCM s16le mono 16 kHz (the exact bytes of ev.frame.data)
 
-        Reuses the existing single-writer queue + ACK-gating via enqueue().
+        Reuses the existing single-writer queue via enqueue().
         """
         header = bytes([0x01, tag & 0xFF, 0, 0]) + (t_ms & 0xFFFFFFFF).to_bytes(
             4, "little"
@@ -154,8 +161,8 @@ class TranscriberStream:
 
     def send_speaker_change(self, position: int, speaker: dict | None) -> None:
         """Forward a native-diarization speaker transition. Mirrors the WEB bot's
-        `speakerChanged` control message and, like send_participant, is NOT
-        ack-gated — it rides the same single-writer queue so order is preserved.
+        `speakerChanged` control message; like send_participant it rides the same
+        single-writer queue, so order is preserved.
 
         `speaker` is {"id":…, "name":…} for a new dominant speaker, or None for a
         silence transition. The Transcriber's SpeakerTracker keys captions off
@@ -176,10 +183,10 @@ class TranscriberStream:
             pass
 
     def send_participant(self, action: str, pid: str, name: str, tag: int | None = None) -> None:
-        """Forward a participant control message (join/leave/rename). Not
-        ack-gated: the writer ships it as soon as the socket is up, independent
-        of `ready`. Control is infrequent, so routing it through the same queue
-        keeps a single writer and preserves order without a task-per-message.
+        """Forward a participant control message (join/leave/rename). The writer
+        ships it as soon as the socket is up. Control is infrequent, so routing it
+        through the same queue keeps a single writer and preserves order without a
+        task-per-message.
 
         The `tag` (per-stream u8) is forwarded for EVERY action when provided,
         so a mid-call 'rename' lets the Transcriber re-key the live sub-ASR's

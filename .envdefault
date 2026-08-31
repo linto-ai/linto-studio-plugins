@@ -18,6 +18,7 @@ SCHEDULER_COMPONENTS=BrokerClient # Comma separated list of components to run, t
 SESSION_API_COMPONENTS=WebServer,BrokerClient
 DELIVERY_COMPONENTS=BrokerClient,WebServer,IoHandler
 BOTSERVICE_COMPONENTS=BrokerClient,Healthcheck # Comma separated list of components to run, they load in this order
+VISIOBOT_COMPONENTS=BrokerClient,Healthcheck # Comma separated list of components to run, they load in this order
 
 # ── BotService (dedicated meeting-bot service) ───────────────────────────────
 MAX_CONCURRENT_BOTS=10 # max simultaneous browser bots per BotService replica
@@ -35,6 +36,31 @@ STREAMING_WS_BOT_HOST=transcriber
 # BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling: above it the replica advertises capabilities=[] and refuses bots (0 = disabled)
 # BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up (fatal)
 # BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
+
+# ── VisioBotService (native LiveKit bot for Visio/Meet) ──────────────────────
+# Broker-piloted bot that joins a LiveKit room hidden, streams every participant's
+# audio to a Transcriber and republishes the captions back into the room. Its
+# Python service does NOT read this file (see VisioBotService/.envdefault, which
+# mirrors the code defaults) — the values below are what a deployment must set.
+VISIOBOT_HEALTHCHECK_HTTP=8081 # HTTP port for the liveness endpoint
+# BOT_CAPABILITIES=visio-native # capability the Scheduler routes visio bots on
+# LIVEKIT_TOKEN_FROM_PAYLOAD=true # present the room join token minted by Meet
+# (session.meta.native) instead of self-signing. Fail-closed: no token => no join.
+# PROD SHOULD SET THIS — the replica then holds no LiveKit signing secret.
+# LIVEKIT_API_KEY / LIVEKIT_API_SECRET # dev-only self-mint fallback; the service
+# refuses to start on the devkey/secret placeholders unless DEVELOPMENT=true or
+# LIVEKIT_TOKEN_FROM_PAYLOAD=true.
+BOT_PERSTREAM=true # per-stream diarization: stream ONE TAGGED PCM flow per
+# participant (VAD-gated) instead of one mixed flow, so the Transcriber runs one ASR
+# per participant and captions carry the participant's real display name. false =
+# legacy mixed path (one ASR, speaker guessed from the mixer's energy VAD).
+# ⚠ Needs TRANSCRIBER_PERSTREAM_DIARIZATION=true on the Transcriber serving the bot:
+# the mode is negotiated in the Transcriber's ack and the bot honours it (it logs a
+# WARNING and falls back to mixed when denied).
+BOT_VAD_ENERGY_THRESHOLD=300 # RMS above which a 20 ms frame counts as speech
+VISIOBOT_PUBLISH_NATIVE_SUBS=true # republish captions into the room as native
+# LiveKit transcription segments (rendered by the Visio/Meet subtitle overlay).
+# Requires can_publish_data on the join token.
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection
@@ -73,6 +99,19 @@ DB_NAME=postgres
 
 ##### ASR #####
 TRANSCRIBER_BOT_NAME=bot
+# Per-stream diarization (serves the VisioBotService native bot): accept tagged
+# per-participant audio flows and run ONE ASR per participant, so a caption's
+# speaker is the participant identity rather than an ASR-provider guess. The
+# Transcriber only grants the mode when this is true — it advertises the decision
+# in its init ack, and a bot that asked for it falls back to the mixed path
+# otherwise. Off ⇒ the legacy mixed path is bit-exact.
+TRANSCRIBER_PERSTREAM_DIARIZATION=false
+# Ceiling on concurrent ASR per channel in per-stream mode (i.e. how many
+# participants get their own ASR). Beyond it, the surplus participants collapse onto
+# ONE shared overflow ASR — captions stay, exact per-speaker separation does not.
+MAX_CONCURRENT_ASR_PER_CHANNEL=6
+# Speaker label carried by captions from that shared overflow ASR.
+TRANSCRIBER_OVERFLOW_SPEAKER_NAME=Participants
 TRANSCRIBER_RESET_MESSAGE="Channel reset."
 # Max time the Transcriber waits for the ASR provider to flush its pending
 # finals at stream stop, before emitting the end-of-stream marker (ms)

@@ -51,14 +51,26 @@ class LiveKitBot:
         self.api_key = os.environ.get("LIVEKIT_API_KEY", "devkey")
         self.api_secret = os.environ.get("LIVEKIT_API_SECRET", "secret")
 
-        # perStream (PHASE 3): opt-in via BOT_PERSTREAM. The init frame advertises
-        # diarizationMode "native" in BOTH paths now — the mixed path derives the
-        # "who is speaking" signal from the mixer's energy VAD (real display name),
-        # exactly like the WEB bot, instead of leaving it to the ASR provider's
-        # internal "Guest-N" diarization. perStream additionally sets perStream:true
-        # and tags frames; the EFFECTIVE mode is still decided by the Transcriber
-        # ACK (honoured inside transcriber.connect()).
-        self.requested_per_stream = os.environ.get("BOT_PERSTREAM") in ("1", "true")
+        # perStream: the DEFAULT mode of this service. VisioBotService exists only
+        # for the Visio/Meet native bot, where one ASR per participant is what makes
+        # a caption carry the participant's real name instead of an energy-VAD
+        # guess; that is the mode this service is validated in, so it must not
+        # depend on remembering an env var. Set BOT_PERSTREAM=false to force the
+        # legacy mixed path (one mixed flow, one ASR, VAD-derived speaker).
+        #
+        # The init frame advertises diarizationMode "native" in BOTH paths — the
+        # mixed path derives the "who is speaking" signal from the mixer's energy
+        # VAD (real display name), exactly like the WEB bot, instead of leaving it
+        # to the ASR provider's internal "Guest-N" diarization. perStream
+        # additionally sets perStream:true and tags frames.
+        #
+        # The EFFECTIVE mode is still decided by the Transcriber ACK (honoured
+        # inside transcriber.connect()): it only grants perStream when IT runs with
+        # TRANSCRIBER_PERSTREAM_DIARIZATION=true. A denial is a deployment mistake,
+        # so TranscriberStream warns loudly instead of degrading in silence.
+        self.requested_per_stream = os.environ.get(
+            "BOT_PERSTREAM", "true"
+        ).strip().lower() in ("1", "true")
         mode = "native"
 
         self._participants: dict[str, str] = {}  # identity -> name
@@ -88,7 +100,6 @@ class LiveKitBot:
         self.room = rtc.Room()
         self.transcriber = TranscriberStream(
             websocket_url,
-            self._participants_list,
             diarization_mode=mode,
             per_stream=self.requested_per_stream,
         )
@@ -128,14 +139,6 @@ class LiveKitBot:
             )
             .to_jwt()
         )
-
-    def _participants_list(self):
-        # `name` carries the LiveKit DISPLAY NAME (set in _register_participant),
-        # NOT the identity/UUID — it becomes the caption locutor in perStream (D8).
-        return [
-            {"id": ident, "name": name, "tag": self._tag_for(ident)}
-            for ident, name in self._participants.items()
-        ]
 
     # ---- perStream tagging / VAD ------------------------------------------
     def _tag_for(self, identity: str) -> int:

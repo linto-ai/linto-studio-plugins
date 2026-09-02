@@ -138,6 +138,51 @@ describe('WebsocketServer per-stream framing', () => {
       const ack = ws.sent.find(m => m.type === 'ack');
       assert.ok(ack && ack.perStream === false);
     });
+
+    // K10 — the grant used to ignore the TRANSPORT. The tagged demux exists only
+    // on the initPcm callback, so a non-pcm client ACKed perStream:true got a
+    // participant map (sending StreamingServer down its per-stream session-start
+    // branch, which creates NO ASR) while its transcoding worker emitted untagged
+    // legacy frames: "No ASR found" at frame rate and zero captions for the whole
+    // session. The handshake must fail CLOSED, like the keepAudio gate beside it.
+    it('ACKs perStream:false for a NON-pcm encoding (the demux only exists on the pcm path)', () => {
+      process.env.TRANSCRIBER_PERSTREAM_DIARIZATION = 'true';
+      // initWorker forks a real GStreamer worker; the grant, not the transport,
+      // is under test here.
+      const origInitWorker = server.initWorker;
+      server.initWorker = () => () => {};
+      try {
+        const ws = fakeWs();
+        const fd = { session: { id: 's4' }, channel: { id: 'c4' } };
+        const msg = Buffer.from(JSON.stringify({
+          type: 'init', encoding: 'opus', sampleRate: 48000,
+          perStream: true, participants: [{ id: 'u1', name: 'Alice', tag: 0 }],
+        }));
+        const cb = server.handleInitMessage(ws, msg, fd);
+        assert.ok(typeof cb === 'function', 'the stream is accepted, just demoted');
+        assert.strictEqual(fd.perStream, false);
+        assert.strictEqual(fd.mixedRecording, false);
+        const ack = ws.sent.find(m => m.type === 'ack');
+        assert.ok(ack && ack.perStream === false, 'the bot is told to keep mixing');
+        assert.strictEqual(server.getStreamParticipants('s4', 'c4'), null,
+          'no participant map, so session-start takes the legacy branch and creates an ASR');
+      } finally {
+        server.initWorker = origInitWorker;
+      }
+    });
+
+    it('still ACKs perStream:true on the pcm path with the same request', () => {
+      process.env.TRANSCRIBER_PERSTREAM_DIARIZATION = 'true';
+      const ws = fakeWs();
+      const fd = { session: { id: 's5' }, channel: { id: 'c5' } };
+      const msg = Buffer.from(JSON.stringify({
+        type: 'init', encoding: 'pcm', sampleRate: 16000,
+        perStream: true, participants: [{ id: 'u1', name: 'Alice', tag: 0 }],
+      }));
+      server.handleInitMessage(ws, msg, fd);
+      assert.strictEqual(fd.perStream, true);
+      assert.ok(server.getStreamParticipants('s5', 'c5'));
+    });
   });
 
   describe('late-joiner control routing (D3b)', () => {
@@ -420,16 +465,64 @@ describe('StreamingServer per-stream demux', () => {
     assert.strictEqual(inst.emitted.length, 0);
   });
 
+  // A minimal ASR stand-in for the teardown assertions: the real one costs
+  // ASR_STOP_FLUSH_TIMEOUT_MS + ASR_STOP_SETTLE_MS per flush.
+  function fakeAsr(name) {
+    return {
+      name, segmentId: 1, flushed: false, detached: false, disposed: false, marked: false,
+      async flushFinals() { this.flushed = true; },
+      streamStopped() { this.marked = true; },
+      removeAllListeners() { this.detached = true; },
+      dispose() { this.disposed = true; },
+    };
+  }
+
+  // The '#' boundary must be enforced by _stopAsr ITSELF, not merely by a filter
+  // a test rewrites: a naive startsWith("sess_chan") would also match the
+  // ADJACENT channel "sess_chan1" and tear its live ASR down.
   it("the '#' key scheme never collides with a legacy channel key prefix", async () => {
     const inst = makeServer();
-    // Legacy ASR under "sess_chan1"; per-stream sub-ASR under "sess_chan#..".
-    // A naive startsWith("sess_chan") would falsely match "sess_chan1"; the '#'
-    // boundary prevents it.
-    inst.ASRs.set('sess_chan1', {});
-    inst.ASRs.set('sess_chan#0', {});
-    const ck = 'sess_chan';
-    const subKeys = [...inst.ASRs.keys()].filter(k => k === ck || k.startsWith(`${ck}#`));
-    assert.deepStrictEqual(subKeys, ['sess_chan#0']);
+    const session = makeSession();
+    // Channel "chan" is per-stream (sub-ASR under "sess_chan#0"); channel
+    // "chan1" is a legacy neighbour whose single ASR sits under "sess_chan1".
+    markPerStream(inst, 'sess_chan', session, makeChannel());
+    const sub = fakeAsr('perstream');
+    const neighbour = fakeAsr('legacy-neighbour');
+    inst.ASRs.set('sess_chan#0', sub);
+    inst.ASRs.set('sess_chan1', neighbour);
+
+    assert.strictEqual(await inst._stopAsr(session, 'chan'), true);
+
+    assert.strictEqual(inst.ASRs.has('sess_chan#0'), false, 'the per-stream sub-ASR was torn down');
+    assert.strictEqual(sub.disposed, true);
+    assert.strictEqual(inst.ASRs.get('sess_chan1'), neighbour, "the neighbour channel's ASR is untouched");
+    assert.strictEqual(neighbour.flushed, false);
+    assert.strictEqual(neighbour.marked, false, 'no end-of-stream marker on the neighbour');
+    assert.strictEqual(neighbour.disposed, false);
+    assert.strictEqual(inst.emitted.filter(e => e[0] === 'session-stop').length, 1);
+  });
+
+  it("stopping the adjacent legacy channel leaves the per-stream sub-ASR alone", async () => {
+    const inst = makeServer();
+    const session = makeSession();
+    markPerStream(inst, 'sess_chan', session, makeChannel());
+    const sub = fakeAsr('perstream');
+    const neighbour = fakeAsr('legacy-neighbour');
+    inst.ASRs.set('sess_chan#0', sub);
+    inst.ASRs.set('sess_chan1', neighbour);
+
+    // "chan1" has no channel context -> the legacy single-ASR branch.
+    assert.strictEqual(await inst._stopAsr(session, 'chan1'), true);
+
+    assert.strictEqual(inst.ASRs.has('sess_chan1'), false);
+    assert.strictEqual(neighbour.flushed, true);
+    assert.strictEqual(neighbour.marked, true, 'legacy still emits its own end-of-stream marker');
+    assert.strictEqual(neighbour.disposed, true);
+    assert.strictEqual(inst.lastSegmentIds.get('sess_chan1'), 2, 'legacy preserves its own cursor');
+    assert.strictEqual(inst.ASRs.get('sess_chan#0'), sub, 'the per-stream channel is untouched');
+    assert.strictEqual(sub.flushed, false);
+    assert.strictEqual(sub.disposed, false);
+    assert.ok(inst.channels.has('sess_chan'), 'and keeps its per-stream context');
   });
 
   // #2 — a non-numeric MAX_CONCURRENT_ASR_PER_CHANNEL must default to 6 (parseInt

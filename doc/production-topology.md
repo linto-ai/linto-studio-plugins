@@ -37,9 +37,17 @@ When the LB reroutes a reconnect to a different instance:
 
 Important: nothing in ASR provider state, partial transcriptions in flight, or process memory survives this switch. All the state needed for continuity must already be on MQTT (retained topics like `transcriber/out/{sessionId}/{channelId}/lastSegmentIds`) or the database. **A Transcriber's process memory must be treated as ephemeral.**
 
+### Per-stream ingest keeps the same contract
+
+The per-stream bot ingest (one ASR per participant, negotiated in the WS `init`/`ack` — see [streaming-protocols.md](./streaming-protocols.md)) adds a fair amount of in-memory state on the Transcriber: the tag → participant map, the N sub-ASR, and the audio-clock → meeting-clock map rebuilt from each frame's `meetingTimeMs`. **None of it is exempt from the rule above.** It is all rebuilt from the wire on a reconnect: the bot replays the participant list in the `init` frame of the new socket, re-runs the negotiation and honours the new grant, and every sub-ASR is recreated lazily on the first frame carrying its tag. Segment-id continuity still comes from the retained `lastSegmentIds`, exactly as in the mixed path.
+
+Recording behaves identically to the legacy path as well. In per-stream mode the archive is written from the bot's **mixed** flow (frame magic `0x02`), but it lands in the very same per-channel `<sessionId>-<channelId>.pcm` and goes through the same `ASR.saveAudio()`. So a reconnect onto another instance simply produces a second `.pcm` for the channel on the shared `AUDIO_STORAGE_PATH` volume, and the existing "output file already exists" branch of `saveAudio()` (transcode → `concatAudioFiles` → unlink → rename) merges it into the channel's single `.wav`/`.mp3` — the same merge that has always covered an SRT reconnect. Nothing new is required of the topology, and no per-participant audio is ever written to disk.
+
 ## Race window: simultaneous claims
 
 If two Transcribers ever receive a stream for the same `(sessionId, channelIndex)` at the same moment — for example, because the LB briefly hesitates on a reconnect, or because a misbehaving sender opens two parallel streams — both will pass local validation and both will emit `session-start`. The Scheduler resolves this via last-write-wins on `channel.transcriberId`. Deactivation messages from the loser are ignored (`Scheduler/components/BrokerClient/index.js#updateSession` guards against stale `transcriberId`s).
+
+Within a *single* instance the same collision is resolved locally instead: the WS server replaces the existing connection for the channel and only the owning socket may tear the channel state down (see "Connection replacement" in [streaming-protocols.md](./streaming-protocols.md)), so the loser's late close cannot wipe the winner's state or publish a spurious `session-stop`.
 
 The window is short (sub-second) and produces at most a few duplicated MQTT partials on the loser before it sees its own deactivation. It is **not currently exercised by the test suite** — see the failover scenario in `tests/integration/scenarios/`.
 

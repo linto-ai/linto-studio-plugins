@@ -31,6 +31,10 @@ require('./tests/test_server_session_end.js');
 require('./tests/test_vad_watchdog.js');
 require('./tests/test_perstream_golden.js');
 require('./tests/test_perstream_demux.js');
+require('./tests/test_perstream_hardening.js');
+require('./tests/test_perstream_mixed_frames.js');
+require('./tests/test_perstream_recording.js');
+require('./tests/test_perstream_timeline.js');
 
 
 describe('CircularBuffer', () => {

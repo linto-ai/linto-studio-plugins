@@ -11,6 +11,12 @@ const {
     STREAMING_WS_ENDPOINT
 } = process.env;
 
+// Tagged binary frame magics (byte 0). Neither can collide with a JSON control
+// frame, which always starts with 0x7B ('{'). See _parseTaggedFrame /
+// _parseMixedFrame for the shared 8-byte header layout.
+const MAGIC_TAGGED = 0x01;  // per-participant PCM (byte 1 = participant tag)
+const MAGIC_MIXED = 0x02;   // mixed recording PCM (byte 1 always 0, ignored)
+
 // WebSocket runs over TCP. Unlike SRT (UDP) there is no inactivity sentinel:
 // the connection lifetime is governed by the TCP socket alone. ws.on('close')
 // fires when the peer sends FIN or the OS detects an RST; ws.on('error') for
@@ -276,16 +282,42 @@ class MultiplexedWebsocketServer extends EventEmitter {
         // the ACK, so off-by-either-side falls back to the legacy mixed path
         // bit-exact. In perStream mode we do NOT build the legacy SpeakerTracker:
         // the speaker IS the participant identity carried by the tagged frames.
+        // K2 fail-closed: a channel that must be archived (keepAudio) can only go
+        // per-stream when the bot also ships the MIXED recording flow (magic
+        // 0x02) — N sub-ASR cannot each own the single per-channel .pcm. An older
+        // bot that cannot mix is DEMOTED to the legacy mixed path (correct
+        // archive, degraded speaker attribution) rather than handed a corrupted
+        // one. The WARN below is deliberately loud: without it the demotion is
+        // diagnosed as "per-stream broke".
+        // K10 fail-closed on the TRANSPORT too: the tagged demux (0x01 frames ->
+        // the 5-arg 'data', 0x02 -> 'record-data') exists ONLY on the initPcm
+        // callback below. A non-pcm init goes through initWorker, whose GStreamer
+        // worker emits the legacy 3-arg 'data' — so granting per-stream there
+        // ACKed `perStream:true`, made getStreamParticipants() non-null and sent
+        // the StreamingServer down its per-stream session-start branch (which
+        // creates NO ASR), while every transcoded frame arrived untagged and hit
+        // "No ASR found": zero captions for the whole session. Demote instead,
+        // exactly like the keepAudio gate below.
         const perStreamReq = initMessage.perStream === true;
         const perStreamEnabled = process.env.TRANSCRIBER_PERSTREAM_DIARIZATION === 'true';
-        fd.perStream = perStreamReq && perStreamEnabled;
+        const pcmIngest = initMessage.encoding === 'pcm';
+        const needsRecording = !!fd.channel.keepAudio;   // exactly ASR.init()'s own gate
+        const botCanMix = initMessage.mixedRecording === true;
+        fd.perStream = perStreamReq && perStreamEnabled && pcmIngest && (!needsRecording || botCanMix);
+        fd.mixedRecording = fd.perStream && needsRecording;
+        if (perStreamReq && perStreamEnabled && !pcmIngest) {
+            logger.warn(`Per-stream diarization DEMOTED to the legacy mixed path for session ${fd.session.id}, channel ${fd.channel.id}: per-stream framing requires encoding='pcm' (got '${initMessage.encoding}'), the transcoding worker path cannot carry tagged frames.`);
+        }
+        if (perStreamReq && perStreamEnabled && pcmIngest && needsRecording && !botCanMix) {
+            logger.warn(`Per-stream diarization DEMOTED to the legacy mixed path for session ${fd.session.id}, channel ${fd.channel.id}: the channel keeps its audio (keepAudio) but the bot does not advertise mixedRecording. Upgrade the bot to restore per-participant speaker attribution.`);
+        }
         if (fd.perStream) {
             const m = new Map();
             for (const p of (initMessage.participants || [])) {
                 if (p.tag !== undefined) m.set(p.tag, p);
             }
             this.streamParticipants.set(trackerKey, m);
-            logger.info(`Per-stream diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${m.size} initial participants: ${[...m.values()].map(p => `${p.tag}=${p.name || p.id}`).join(', ')})`);
+            logger.info(`Per-stream diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${m.size} initial participants: ${[...m.values()].map(p => `${p.tag}=${p.name || p.id}`).join(', ')}, mixedRecording=${fd.mixedRecording})`);
         } else if (fd.diarizationMode === 'native') {
             const tracker = new SpeakerTracker();
             for (const participant of (initMessage.participants || [])) {
@@ -314,11 +346,18 @@ class MultiplexedWebsocketServer extends EventEmitter {
             return null;
         }
 
-        // Negotiated ACK: the bot reads `perStream` to decide whether to tag its
-        // frames. fd.perStream is false unless BOTH the bot requested it AND the
-        // env flag is on, so a default-off deployment ACKs perStream:false and the
-        // bot keeps mixing (legacy bit-exact).
-        ws.send(JSON.stringify({ type: 'ack', message: 'Init done', perStream: fd.perStream }));
+        // Negotiated ACK: the bot honours the GRANT, never its own request. It
+        // reads `perStream` to decide whether to tag its frames and
+        // `mixedRecording` to decide whether to ALSO ship the 0x02 mixed flow.
+        // fd.perStream is false unless BOTH the bot requested it AND the env flag
+        // is on (AND the archive can be produced), so a default-off deployment
+        // ACKs perStream:false and the bot keeps mixing (legacy bit-exact).
+        ws.send(JSON.stringify({
+            type: 'ack',
+            message: 'Init done',
+            perStream: fd.perStream,
+            mixedRecording: fd.mixedRecording,
+        }));
 
         return callback;
     } else {
@@ -350,10 +389,19 @@ class MultiplexedWebsocketServer extends EventEmitter {
           if (fd.perStream) {
               // Per-stream mode: audio arrives as tagged binary frames
               // (0x01 | tag | reserved | meetingTimeMs | PCM). Demux to a
-              // 4-arg 'data' carrying the participant tag.
+              // 5-arg 'data' carrying the participant tag and the meeting clock.
+              // The bot's MIXED recording flow (0x02) is a separate stream that
+              // must never reach the tag/cap/lazy-create logic: it goes to
+              // 'record-data' and is only ever written to the channel archive.
+              if (Buffer.isBuffer(message) && message[0] === MAGIC_MIXED) {
+                  const mixed = this._parseMixedFrame(message);
+                  if (!mixed) return; // short/invalid frame -> drop
+                  this.emit('record-data', mixed.pcm, fd.session.id, fd.channel.id);
+                  return;
+              }
               const parsed = this._parseTaggedFrame(message);
               if (!parsed) return; // short/invalid frame -> drop
-              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag);
+              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag, parsed.tMs);
               return;
           }
           this.emit('data', message, fd.session.id, fd.channel.id); // legacy 3 args, unchanged
@@ -368,13 +416,21 @@ class MultiplexedWebsocketServer extends EventEmitter {
   //   off4  u32 meetingTimeMs (bot-relative clock)
   //   off8  N   PCM s16le mono 16k
   // Returns {tag, tMs, pcm} or null when the frame is not a valid tagged frame.
-  // `tMs` is decoded to honour the wire format but is NOT consumed: caption
-  // timestamps are rebased downstream from `astart` + the provider offsets
-  // (Session-API groups a channel's captions off its earliest astart), so the
-  // bot clock stays a reserved protocol field rather than a second time base.
+  // `tMs` IS consumed (C2): the bot VAD-gates a participant's stream, so what a
+  // sub-ASR hears is speech bursts spliced end to end and every provider offset
+  // is relative to that spliced clock. The ASR builds a piecewise audio->meeting
+  // map out of these per-frame stamps and rebases start/end at publication.
   _parseTaggedFrame(buf) {
-      if (!Buffer.isBuffer(buf) || buf.length < 8 || buf[0] !== 0x01) return null;
+      if (!Buffer.isBuffer(buf) || buf.length < 8 || buf[0] !== MAGIC_TAGGED) return null;
       return { tag: buf[1], tMs: buf.readUInt32LE(4), pcm: buf.subarray(8) };
+  }
+
+  // Parse a mixed-recording frame (K2). Same 8-byte header as the tagged frame
+  // with MAGIC = 0x02 and byte 1 always 0 (no participant: this IS the mix), so
+  // a single decoder shape covers both. Returns {tMs, pcm} or null.
+  _parseMixedFrame(buf) {
+      if (!Buffer.isBuffer(buf) || buf.length < 8 || buf[0] !== MAGIC_MIXED) return null;
+      return { tMs: buf.readUInt32LE(4), pcm: buf.subarray(8) };
   }
 
   // Returns true if the message was consumed as a native-diarization control
@@ -419,16 +475,31 @@ class MultiplexedWebsocketServer extends EventEmitter {
                       // into overflow. StreamingServer tears it down.
                       this.emit('participant-leave', fd.session.id, fd.channel.id, tag);
                   } else if (data.action === 'rename') {
-                      // Mid-call rename (#7): update the stored name (used for any
-                      // not-yet-created ASR) and signal StreamingServer to update
-                      // the live sub-ASR's name so its next captions carry it.
+                      // Mid-call rename (#7): update the stored identity (used for
+                      // any not-yet-created ASR) and signal StreamingServer to
+                      // update the live sub-ASR so its next captions carry it.
                       const name = (p.name !== undefined) ? p.name : data.name;
+                      const id = (p.id !== undefined) ? p.id : data.id;
                       const existing = m.get(tag);
-                      if (existing) existing.name = name;
-                      else m.set(tag, { ...p, tag, name });
-                      this.emit('participant-rename', fd.session.id, fd.channel.id, tag, name);
+                      if (existing) {
+                          existing.name = name;
+                          if (id !== undefined) existing.id = id;
+                      } else {
+                          m.set(tag, { ...p, tag, name, ...(id !== undefined ? { id } : {}) });
+                      }
+                      this.emit('participant-rename', fd.session.id, fd.channel.id, tag, name, id);
                   } else {
-                      m.set(tag, (p.tag !== undefined) ? p : { ...data });
+                      const joined = (p.tag !== undefined) ? p : { ...data };
+                      m.set(tag, joined);
+                      // K6: a `join` can land AFTER the participant's first tagged
+                      // frame already lazily created their sub-ASR — which was then
+                      // built with an EMPTY participant (id and name null), leaving
+                      // every one of their captions unattributed for the whole call.
+                      // Updating the map alone never re-keys that live ASR, so emit
+                      // the same identity-update signal as a rename (a no-op when
+                      // no sub-ASR exists yet: the map above already carries the
+                      // identity for lazy creation).
+                      this.emit('participant-rename', fd.session.id, fd.channel.id, tag, joined.name, joined.id);
                   }
               }
               return true;
@@ -529,11 +600,60 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
   }
 
+  // S1: cleanup is keyed on the CONNECTION, not only on the channel id. A
+  // replaced connection (see "Will replace existing connection" in
+  // validateStream) is closed synchronously by onConnection, but its OWN
+  // ws.on('close') fires later — by then the successor has already re-registered
+  // the channel. Running the channel-keyed cleanup for that stale connection
+  // would emit a spurious 'session-stop' (tearing the SUCCESSOR's ASR down) and
+  // delete the successor's runningChannels / speakerTracker / participant-map
+  // entries, leaving a live socket whose frames find no state at all. So only
+  // the connection that currently OWNS the channel may touch channel-keyed
+  // state. Every connection still removes its own runningSessions entry, matched
+  // BY IDENTITY — which also keeps stopRunningSession's while-loop finite when
+  // two entries share a channel id.
   cleanupWebsocket(ws, fd, worker) {
-      // Tell the streaming server controller to forward the session stop message to the broker
-      if (fd) {
+      // Captured before the `ws = null` below, which would otherwise erase the
+      // identity we compare against.
+      const conn = ws;
+      const owner = fd ? this.runningChannels[fd.channel.id] : null;
+      const superseded = !!(owner && conn && owner.ws !== conn);
+      if (superseded) {
+        logger.warn(`Connection for channel ${fd.channel.id} was replaced; skipping channel-keyed cleanup (the successor owns it now)`);
+      }
+
+      // K10: teardown is IDEMPOTENT PER CONNECTION. `fd` is minted once per
+      // connection in onConnection and is never shared with a successor, so it
+      // is the only teardown identity there is — 'session-stop' is a CHANNEL
+      // event, and _stopAsr, which receives just (session, channelId), cannot
+      // tell a duplicate stop from a legitimate successor stop.
+      // One connection reaches this function several times:
+      //   - an abnormal socket close fires 'error' AND 'close', both wired to
+      //     cleanupWebsocket (initPcm/initWorker);
+      //   - the transcoding path adds the worker's own 'error'/'exit';
+      //   - a REPLACED connection is cleaned by onConnection and again by its
+      //     own late 'close'.
+      // `superseded` cannot catch any of those: it is read from runningChannels,
+      // which the FIRST pass already deleted, so the second pass saw no owner,
+      // concluded it was not superseded and emitted a SECOND 'session-stop' —
+      // this time against the SUCCESSOR's state. On a per-stream channel that
+      // second stop lands inside the first one's multi-second flush window and
+      // is destructive: it deletes the successor's channel context (every later
+      // tagged frame then hits "no channel context"), or tears the successor's
+      // legacy ASR down, and it steals the outgoing stop's end-of-stream marker,
+      // deactivate and segment-id cursor.
+      // The latch is set on EVERY pass that owns an fd, superseded or not: once
+      // a connection has been cleaned up it is dead, and it must never publish a
+      // stop for a channel somebody else may already own.
+      // Armed BEFORE the emit, never after: a listener that throws synchronously
+      // would otherwise unwind past the assignment and leave the connection free
+      // to emit a second stop on its next cleanup pass — the exact duplicate
+      // this latch exists to prevent.
+      if (fd && !superseded && !fd.stopEmitted) {
+        fd.stopEmitted = true;
         this.emit('session-stop', fd.session, fd.channel.id)
       }
+      if (fd) fd.stopEmitted = true;
 
       logger.info(`Connection: ${ws} --> cleaning up.`);
       if (ws) {
@@ -552,15 +672,23 @@ class MultiplexedWebsocketServer extends EventEmitter {
       }
 
       if (fd && this.runningSessions[fd.session.id]) {
-          this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd.channel.id !== fd.channel.id);
+          // Identity-keyed (S1): drop THIS connection's entry only. With the
+          // normal one-connection-per-channel case this is exactly the former
+          // channel-id filter; during a replace it leaves the successor's entry
+          // alone. `conn` is falsy only for callers that pass no socket, which
+          // then fall back to the original channel-id match.
+          const isSelf = conn
+            ? (item => item.ws === conn)
+            : (item => item.fd.channel.id === fd.channel.id);
+          this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => !isSelf(item));
           if (this.runningSessions[fd.session.id].length === 0) {
               delete this.runningSessions[fd.session.id];
           }
       }
-      if (fd && this.runningChannels[fd.channel.id]) {
+      if (fd && !superseded && this.runningChannels[fd.channel.id]) {
           delete this.runningChannels[fd.channel.id];
       }
-      if (fd) {
+      if (fd && !superseded) {
           // Drop the map reference (a reconnect gets a fresh tracker) but do NOT
           // clear() it synchronously: session-stop triggers an async ASR flush
           // (flushFinals) whose trailing finals still read this tracker to stamp

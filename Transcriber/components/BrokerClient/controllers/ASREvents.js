@@ -27,6 +27,15 @@ function publishDiscreteTranslations(client, transcription, sessionId, channelId
             final: action === 'final',
             mode: 'discrete'
         };
+        // Carry the STABLE participant id of the source caption (per-stream and
+        // native diarization both stamp it). The canonical final publishes the
+        // whole transcription, so it keeps the id; this payload is built field by
+        // field and used to drop it, which attributed a translated line to a
+        // different participant than its source. Only added when known, so the
+        // legacy (no diarization) payload shape is unchanged.
+        if (transcription.participantId !== undefined && transcription.participantId !== null) {
+            translationPayload.participantId = transcription.participantId;
+        }
         client.publish(`transcriber/out/${sessionId}/${channelId}/${action}/translations`, translationPayload);
     }
 }

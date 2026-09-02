@@ -295,10 +295,74 @@ class BrokerClient extends Component {
     return `${proto}://${host}:${port}/${endpoint}/${sessionId},${channelIndex}`;
   }
 
+  // Read the ordered provider fallback for `provider` from the environment.
+  // K7: an env var name cannot contain '-' in a POSIX shell, a .env file or a
+  // Helm `env:` list, so the raw `BOT_PROVIDER_FALLBACK_VISIO-NATIVE` a provider
+  // named "visio-native" would need is unsettable — leaving the fallback dead and
+  // the bot undispatched ("No BotService available") when the native replica is
+  // offline. '-' is therefore normalised to '_' for the lookup. The raw (dashed)
+  // name is still read as a second choice so a deployment that managed to export
+  // it (docker `environment:` accepts it) keeps working.
+  botProviderFallbackEnv(provider) {
+    const upper = String(provider || '').toUpperCase();
+    return process.env[`BOT_PROVIDER_FALLBACK_${upper.replace(/-/g, '_')}`]
+      || process.env[`BOT_PROVIDER_FALLBACK_${upper}`];
+  }
+
+  // Drop every in-memory marker held for a bot id. Called wherever the Bot row
+  // stops existing (stopBot, a dispatch onto a vanished row, the reap of a dead
+  // replica's bots) so `nativeBots` / `reroutedBots` stay bounded — they are only
+  // ever meaningful while the row lives.
+  forgetBot(botId) {
+    this.reroutedBots.delete(botId); // clear the one-retry re-route guard
+    this.nativeBots.delete(botId);   // clear the native-dispatch marker
+  }
+
+  // Strip the Meet-minted native join token(s) from the session carried in a
+  // startbot payload. Same shape as the Session-API read-path scrub: only
+  // meta.native[<cap>].token and the meta.linto_native.token alias are removed,
+  // every other meta key (room, state, livekitUrl…) is preserved. Returns a plain
+  // copy; the Sequelize instance is left untouched. Tolerates a plain object
+  // (tests) as well as a model instance.
+  //
+  // CONTRACT: returns a PLAIN object — NOT a Sequelize instance. The caller may
+  // only read it / serialize it into the MQTT payload; `.update()`, `.save()`,
+  // `.reload()`… are not available on the result.
+  // @param   {object} session  Sequelize Session instance or plain object
+  // @returns {object} scrubbed plain copy (the falsy input is returned as-is)
+  scrubDispatchTokens(session) {
+    if (!session) return session;
+    const plain = typeof session.toJSON === 'function' ? session.toJSON() : { ...session };
+    const meta = plain.meta;
+    if (!meta || typeof meta !== 'object') return plain;
+    const stripToken = (desc) => {
+      if (!desc || typeof desc !== 'object' || !('token' in desc)) return desc;
+      const { token, ...rest } = desc;
+      return rest;
+    };
+    const scrubbed = { ...meta };
+    if (meta.native && typeof meta.native === 'object') {
+      // Shape-preserving, like the Session-API read-path scrub: `meta` is a
+      // free-form JSON column, so `native` may be an ARRAY. Object.entries /
+      // fromEntries would rewrite it into an object with numeric string keys and
+      // change the payload the BotService receives; mapping it as an array keeps
+      // the shape while still stripping every nested token.
+      scrubbed.native = Array.isArray(meta.native)
+        ? meta.native.map(stripToken)
+        : Object.fromEntries(Object.entries(meta.native).map(([cap, desc]) => [cap, stripToken(desc)]));
+    }
+    if (meta.linto_native) scrubbed.linto_native = stripToken(meta.linto_native);
+    plain.meta = scrubbed;
+    return plain;
+  }
+
   async startBot(botId, { forceDemote = false } = {}) {
     try {
       const botData = await this.getStartBotData(botId);
-      if (!botData) return;
+      // The bot row (or its channel/session) is gone: no dispatch will ever
+      // happen for this id, so drop its in-memory markers instead of leaking
+      // them until a stopBot that will never come.
+      if (!botData) { this.forgetBot(botId); return; }
       // Optional ordered fallback per provider, e.g.
       // BOT_PROVIDER_FALLBACK_VISIO="visio-native,visio" → prefer the native agent,
       // fall back to the web bot. Defaults to the requested provider alone.
@@ -306,7 +370,7 @@ class BrokerClient extends Component {
       // swallowed by startBot's catch, hiding the real cause behind a generic
       // "Cannot read properties of null". Keep the explicit no-provider path.
       const provider = botData.botType || '';
-      const fallbacks = (process.env[`BOT_PROVIDER_FALLBACK_${provider.toUpperCase()}`] || provider)
+      const fallbacks = (this.botProviderFallbackEnv(provider) || provider)
         .split(',').map(s => s.trim()).filter(Boolean);
       // A truthy-but-empty env (e.g. "," or " , ") parses to [] here; the
       // `|| botData.botType` default above does NOT apply (the string was
@@ -323,8 +387,16 @@ class BrokerClient extends Component {
       // deterministically route to the web bot BEFORE any dispatch. `forceDemote`
       // (set by the native 'join-failed' re-route below) strips the native signal
       // unconditionally for that one retry.
+      // K7c: the list can only ever ADD capabilities to the gate, never remove the
+      // built-in "-native" one — see `isGated` below.
       const gated = (process.env.SESSION_GATED_CAPABILITIES || 'visio-native')
         .split(',').map(s => s.trim()).filter(Boolean);
+      // FAIL CLOSED: any "-native" capability is gated whatever the list says. An
+      // operator setting SESSION_GATED_CAPABILITIES to gate some OTHER capability
+      // (or to the empty string) must not silently disable the token check — with
+      // BOT_PROVIDER_FALLBACK_VISIO="visio-native,visio" that would send every
+      // tokenless `visio` bot to the native replica first.
+      const isGated = (c) => /-native$/.test(c) || gated.includes(c);
       const meta = (botData.session && botData.session.meta) || {};
       const declared = new Set(Object.keys(meta.native || {}));
       if (meta.linto_native) declared.add('visio-native');
@@ -333,13 +405,26 @@ class BrokerClient extends Component {
         return !!(d && d.token);
       };
       const effective = fallbacks
-        .map(p => (gated.includes(p) && (forceDemote || !(declared.has(p) && hasToken(p))))
-          ? p.replace(/-native$/, '') // demote to the web sibling
-          : p)
+        .map(p => {
+          // K7b: `forceDemote` is the join-failed FAIL-SAFE, so it must not depend
+          // on the gate list being right — a SESSION_GATED_CAPABILITIES that no
+          // longer lists this capability would otherwise turn the re-route into a
+          // re-dispatch onto the very native replica that just failed. On a forced
+          // demotion ANY "-native" capability is demoted unconditionally; on the
+          // ordinary path a gated capability still survives when the session both
+          // declares it and carries a token.
+          const demote = forceDemote
+            ? /-native$/.test(p)
+            : (isGated(p) && !(declared.has(p) && hasToken(p)));
+          return demote ? p.replace(/-native$/, '') : p; // demote to the web sibling
+        })
         .filter((p, i, a) => a.indexOf(p) === i); // dedupe
       const match = this.selectBotServiceMatch(effective);
       if (!match) {
         logger.error(`No BotService available with capability '${effective.join(',')}' to start bot ${botId}.`);
+        // Markers are deliberately kept: the Bot row still exists, so its stopBot
+        // (or an unregisterBotService reap) will clear them — and dropping
+        // reroutedBots here would re-arm the one-shot native->web re-route.
         return;
       }
       const botservice = match.botservice;
@@ -353,12 +438,32 @@ class BrokerClient extends Component {
       // capability. recordBotError() consults this — never the reason string or
       // the session meta — to decide if a 'join-failed' warrants a native->web
       // re-route. A web dispatch (primary or a demoted re-route) clears the flag.
-      if (match.capability.endsWith('-native')) this.nativeBots.add(botId);
+      const isNativeDispatch = match.capability.endsWith('-native');
+      if (isNativeDispatch) this.nativeBots.add(botId);
       else this.nativeBots.delete(botId);
+      // Least privilege: only a NATIVE dispatch needs the Meet-minted join token.
+      // A web (Chromium) bot drives the meeting through its URL and has no use for
+      // it, so strip it from the payload rather than broadcasting a per-room
+      // credential to every replica that can serve the web capability. The session
+      // object is replaced by a scrubbed plain copy — the underlying Sequelize
+      // instance is never mutated (the payload is JSON-serialized either way, so
+      // the web path stays byte-identical apart from the removed token).
+      if (!isNativeDispatch) botData.session = this.scrubDispatchTokens(botData.session);
       this.botOwnership.set(`${botData.session.id}_${botData.channel.id}`, botservice.uniqueId);
       // Persist ownership so a stopbot can still be routed (and orphans reaped)
-      // after a Scheduler restart, when the in-memory map is gone.
-      await Model.Bot.update({ botservice: botservice.uniqueId }, { where: { id: botId } });
+      // after a Scheduler restart, when the in-memory map is gone. The affected
+      // count is the proof the row still exists: DELETE /bots (or a replica reap)
+      // can destroy it during the awaits above, and dispatching then starts a bot
+      // nothing can ever stop (no row -> no stopBot -> an orphan in the meeting).
+      // Only an explicit 0 means "row gone": any other shape (a driver that does
+      // not return [count], a stub) keeps the legacy dispatch.
+      const ownershipWrite = await Model.Bot.update({ botservice: botservice.uniqueId }, { where: { id: botId } });
+      if (Array.isArray(ownershipWrite) && ownershipWrite[0] === 0) {
+        logger.warn(`Bot ${botId} vanished while being scheduled (row deleted); not dispatching to ${botservice.uniqueId}`);
+        this.botOwnership.delete(`${botData.session.id}_${botData.channel.id}`);
+        this.forgetBot(botId);
+        return;
+      }
       this.client.publish(`botservice/in/${botservice.uniqueId}/startbot`, botData, 2, false, true);
       // Routing a bot is a lifecycle milestone, so log at info level.
       logger.info(`Bot ${botId} scheduled on BotService ${botservice.uniqueId} (${botData.botType}) for session ${botData.session.id}, channel ${botData.channel.id}`);
@@ -405,8 +510,7 @@ class BrokerClient extends Component {
       if (!bot) { logger.error(`Bot ${botId} not found`); return; }
       const channel = bot.channel;
 
-      this.reroutedBots.delete(bot.id); // clear the one-retry re-route guard
-      this.nativeBots.delete(bot.id);   // clear the native-dispatch marker
+      this.forgetBot(bot.id);
       await Model.Bot.destroy({ where: { id: bot.id } });
 
       if (!channel) {
@@ -542,7 +646,20 @@ class BrokerClient extends Component {
     }
     // The replica is gone: its bots died with it. Reap their now-orphaned rows so
     // they don't linger (the channels deactivate via the Transcriber WS close).
+    // List the ids FIRST: reaping the rows removes the only thing that would ever
+    // trigger a stopBot for them, so without this their nativeBots/reroutedBots
+    // markers would live for the lifetime of the process.
     try {
+      let orphans = [];
+      try {
+        orphans = await Model.Bot.findAll({
+          where: { botservice: botservice.uniqueId },
+          attributes: ['id'],
+        }) || [];
+      } catch (error) {
+        logger.error(`Error listing bots of ${botservice.uniqueId} before reap: ${error.message}`);
+      }
+      for (const orphan of orphans) this.forgetBot(orphan.id);
       const reaped = await Model.Bot.destroy({ where: { botservice: botservice.uniqueId } });
       if (reaped) logger.debug(`BotService ${botservice.uniqueId} DOWN — reaped ${reaped} orphaned bot row(s)`);
       else logger.debug(`BotService ${botservice.uniqueId} DOWN`);

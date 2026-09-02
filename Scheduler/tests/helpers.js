@@ -117,6 +117,10 @@ function buildModel(overrides = {}) {
             upsert: noop,
         },
         Bot: {
+            // findAll backs unregisterBotService's "list the ids before reaping
+            // them" step; default to no orphans so a test that doesn't care can
+            // ignore it.
+            findAll: async () => [],
             findByPk: async () => null,
             destroy: noop,
         },

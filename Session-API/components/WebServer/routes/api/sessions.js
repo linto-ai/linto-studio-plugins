@@ -97,6 +97,17 @@ async function setChannelsEndpoints(sessionId, transaction) {
     }
 }
 
+// Load one session (with its channels, optionally with captions) for a READ path.
+//
+// CONTRACT: returns a PLAIN, token-scrubbed object — NOT a Sequelize instance
+// (the scrub has to serialize the row to strip a sub-key of the JSON `meta`
+// column). Read-only: `.update()`, `.save()`, `.reload()`, `.getChannels()`… are
+// NOT available on the result. A caller that needs the instance must do its own
+// Model.Session.findByPk().
+//
+// @param  {string}  sessionId
+// @param  {boolean} withCaptions  also attach closedCaptions / translatedCaptions
+// @returns {Promise<object|null>} scrubbed plain session, or null when not found
 async function getSessionResult(sessionId, withCaptions=false) {
     const session = await Model.Session.findByPk(sessionId, {
         include: {
@@ -158,6 +169,21 @@ async function getSessionResult(sessionId, withCaptions=false) {
     return scrubNativeTokens(plain);
 }
 
+// Apply `fn` to every descriptor of a `meta.native` container while PRESERVING
+// its container shape. `native` is documented as a capability map, but `meta` is
+// a free-form client-writable JSON column: a client can PUT an ARRAY there, and
+// Object.entries/Object.fromEntries would silently rewrite it into an object with
+// numeric string keys — so what the client reads back (or what lands in the DB)
+// would not be what it sent. An array is therefore mapped as an array. It is
+// mapped, not skipped: a token nested in an array-valued `native` must still be
+// scrubbed, never leaked because the container had an unexpected shape.
+function mapNativeDescriptors(native, fn) {
+    if (Array.isArray(native)) return native.map((desc, i) => fn(desc, String(i)));
+    return Object.fromEntries(
+        Object.entries(native).map(([cap, desc]) => [cap, fn(desc, cap)])
+    );
+}
+
 // Strip the native join token from a serialized session before it leaves a read path.
 // meta.native[<cap>].token (generic capability map) and the meta.linto_native.token
 // back-compat alias are per-room join credentials minted by Meet; they must never reach
@@ -176,15 +202,54 @@ function scrubNativeTokens(session) {
     };
     const scrubbed = { ...meta };
     if (meta.native && typeof meta.native === 'object') {
-        scrubbed.native = Object.fromEntries(
-            Object.entries(meta.native).map(([cap, desc]) => [cap, stripToken(desc)])
-        );
+        scrubbed.native = mapNativeDescriptors(meta.native, stripToken);
     }
     if (meta.linto_native) {
         scrubbed.linto_native = stripToken(meta.linto_native);
     }
     session.meta = scrubbed;
     return session;
+}
+
+// C6: re-inject the sub-keys the read paths scrub into a client-supplied `meta`.
+// `meta` is a full-replacement JSON column (Model.Session.update overwrites it),
+// but scrubNativeTokens() makes meta.native[<cap>].token / meta.linto_native.token
+// UNREADABLE. A client that does a read-modify-write — exactly what the Studio
+// frontend does, it polls the session for meta.room / state / livekitUrl — would
+// therefore PUT back a descriptor with the token missing and silently destroy a
+// Meet-minted join credential nothing in this repo can re-mint (the session then
+// degrades to the web bot with no error anywhere).
+//
+// Rule: a secret the client cannot read must never be erasable by omission.
+//   - descriptor kept, no usable token supplied  -> re-inject the stored token
+//   - descriptor kept, a real token supplied     -> the client wins (re-mint path:
+//                                                   Meet writes the token here)
+//   - descriptor (or the whole native map) dropped -> the capability itself is
+//     being removed: nothing is resurrected, and the removal is visible on read.
+// Anything outside those sub-keys keeps the legacy full-replacement semantics.
+function mergeProtectedMeta(incoming, stored) {
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return incoming;
+    if (!stored || typeof stored !== 'object') return incoming;
+    // A token is only "supplied" when it is a non-empty string; null / '' means
+    // "I have no value for this" (typically a scrubbed read-back), not "erase it".
+    const keepToken = (desc, storedDesc) => {
+        if (!desc || typeof desc !== 'object' || Array.isArray(desc)) return desc;
+        const storedToken = storedDesc && typeof storedDesc === 'object' ? storedDesc.token : undefined;
+        if (typeof desc.token === 'string' && desc.token.length > 0) return desc; // explicit (re-)mint
+        if (typeof storedToken !== 'string' || storedToken.length === 0) return desc; // nothing to preserve
+        return { ...desc, token: storedToken };
+    };
+    const merged = { ...incoming };
+    if (incoming.native && typeof incoming.native === 'object') {
+        const storedNative = (stored.native && typeof stored.native === 'object') ? stored.native : {};
+        // Shape-preserving (see mapNativeDescriptors): an array-valued `native`
+        // is stored as the array the client sent, not rewritten into an object.
+        merged.native = mapNativeDescriptors(incoming.native, (desc, cap) => keepToken(desc, storedNative[cap]));
+    }
+    if (incoming.linto_native) {
+        merged.linto_native = keepToken(incoming.linto_native, stored.linto_native);
+    }
+    return merged;
 }
 
 module.exports = (webserver) => {
@@ -425,6 +490,11 @@ module.exports = (webserver) => {
             const sessionAttributes = Object.fromEntries(
                 Object.entries(req.body).filter(([k]) => ALLOWED_SESSION_FIELDS.includes(k))
             );
+            // C6: `meta` is replaced wholesale, so re-inject the scrubbed (unreadable)
+            // sub-keys from the stored row before writing.
+            if ('meta' in sessionAttributes) {
+                sessionAttributes.meta = mergeProtectedMeta(sessionAttributes.meta, session.meta);
+            }
 
 
             if (!updatedChannels || updatedChannels.length == 0) {
@@ -581,6 +651,11 @@ module.exports = (webserver) => {
             const sessionAttributes = Object.fromEntries(
                 Object.entries(req.body).filter(([k]) => ALLOWED_SESSION_FIELDS.includes(k))
             );
+            // C6: same full-replacement hazard as PUT — a PATCH that carries `meta`
+            // replaces the whole JSON column, so re-inject the scrubbed sub-keys.
+            if ('meta' in sessionAttributes) {
+                sessionAttributes.meta = mergeProtectedMeta(sessionAttributes.meta, session.meta);
+            }
 
             const transaction = await Model.sequelize.transaction();
             try {
@@ -898,6 +973,26 @@ module.exports = (webserver) => {
                 await Model.sequelize.transaction(async (transaction) => {
                     // Get per-channel base timestamps (earliest astart per channel)
                     // Each channel has its own time reference since channels can start at different times
+                    //
+                    // TIMELINE INVARIANT (holds for per-stream diarization too). A caption's
+                    // position on the channel timeline is
+                    //     (astart - MIN(astart) over the channel) + start
+                    // which is only meaningful while `astart` is the origin of the flow that
+                    // produced the caption and `start` is an offset FROM THAT ORIGIN — i.e.
+                    // while astart + start is a real instant.
+                    // Per-stream mode keeps that contract: each participant gets its own
+                    // sub-ASR, so its own astart (provider.startedAt) AND its own offsets.
+                    // The frame header's meetingTimeMs is NOT a second time base — it is
+                    // only used to add back the silence the bot's VAD elided from that
+                    // participant's audio (Transcriber/ASR/index.js `_applyTimeline`, which
+                    // ADDS a gap to start/end and never re-origins them). So a late joiner's
+                    // captions are correctly pushed forward here by their astart delta, and
+                    // the legacy (mixed / SRT / RTMP / WS) path is untouched.
+                    // Should a future change ever publish MEETING-origin offsets while
+                    // keeping a per-participant astart, this rebase would double-count each
+                    // participant's join offset — and so would every other consumer that
+                    // places captions on a timeline. See doc/streaming-protocols.md
+                    // ("Per-stream ingest — caption timeline").
                     const channelBases = await Model.sequelize.query(
                         `SELECT "channelId", MIN(astart) as base FROM captions WHERE "channelId" IN (:channelIds) GROUP BY "channelId"`,
                         { replacements: { channelIds }, type: Model.Sequelize.QueryTypes.SELECT, transaction }

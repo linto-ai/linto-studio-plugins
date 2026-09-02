@@ -86,7 +86,22 @@ async def main() -> None:
 
     # Run until a signal arrives or a long-running task exits on its own.
     stop_task = asyncio.create_task(stop.wait())
-    await asyncio.wait({*tasks, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+    done, _pending = await asyncio.wait(
+        {*tasks, stop_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+
+    # A component task that ended on its OWN carries the reason. A crash inside
+    # BrokerClient.run() used to be swallowed here and the process exited 0, so the
+    # orchestrator saw a clean stop and never restarted the replica — while the
+    # Scheduler kept routing bots at a retained "online" status. Surface it.
+    failure = next(
+        (
+            t.exception()
+            for t in done
+            if t is not stop_task and not t.cancelled() and t.exception() is not None
+        ),
+        None,
+    )
 
     try:
         if broker is not None:
@@ -96,6 +111,10 @@ async def main() -> None:
             t.cancel()
         # return_exceptions so a task that already failed does not mask shutdown.
         await asyncio.gather(*tasks, stop_task, return_exceptions=True)
+
+    if failure is not None:
+        print(f"visio-bot-service: component crashed: {failure!r}", flush=True)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -76,8 +76,21 @@ def _make_bot(per_stream=False):
     bot._next_tag = 0
     bot._participants = {}
     bot._track_sids = {}
+    # C10/C11 + late-attribution state the disconnect handler maintains.
+    bot._left = {}
+    bot._pumped = set()
+    bot._pump_tasks = set()
+    bot._pump_by_identity = {}
+    bot._vad_state = {}
+    bot._departed = {}
+    bot._departed_sids = {}
     bot.transcriber = _RecordingTranscriber(per_stream=per_stream)
     bot.mixer = _NoopMixer()
+    # The producer routes on the LATCHED mixer role, never on the link-state
+    # `transcriber.per_stream` — so mirror what _align_mixer() would have set for
+    # this grant ("mixed" for the legacy path, idle for per-stream with no
+    # mixedRecording grant).
+    bot._mixer_role = None if per_stream else "mixed"
     return bot
 
 

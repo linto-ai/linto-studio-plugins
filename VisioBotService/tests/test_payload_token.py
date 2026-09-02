@@ -95,10 +95,14 @@ class _RecordingBot:
         pass
 
 
-def _make_broker(token_from_payload):
+def _make_broker(token_from_payload, allowed_hosts=(), allow_private=False):
     bc = BrokerClient.__new__(BrokerClient)
     bc.token_from_payload = token_from_payload
     bc.bots = {}
+    bc._starting = {}
+    bc._caption_subs = {}
+    bc.livekit_allowed_hosts = frozenset(allowed_hosts)
+    bc.livekit_allow_private = allow_private
     bc.client = _FakeClient()
     bc.unique_id = "visio-bot-service-test"
     bc.capabilities = ["visio-native"]

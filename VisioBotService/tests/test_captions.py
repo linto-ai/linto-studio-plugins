@@ -18,7 +18,18 @@ _SVC = os.path.dirname(_HERE)  # VisioBotService/
 if _SVC not in sys.path:
     sys.path.insert(0, _SVC)
 
-from bot.captions import caption_to_segment, resolve_speaker, topic_kind  # noqa: E402
+from bot.captions import (  # noqa: E402
+    SegmentClock,
+    caption_to_segment,
+    resolve_speaker,
+    topic_kind,
+)
+
+
+def _epoch(iso: str) -> int:
+    """ISO-8601 -> epoch ms (the shape LiveKitBot._t0_epoch_ms carries)."""
+    from datetime import datetime
+    return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() * 1000)
 
 
 def test_topic_kind():
@@ -79,6 +90,148 @@ def test_resolve_speaker_prefers_participant_id_then_name_then_bot():
     assert resolve_speaker({"locutor": "id-bob"}, participants, "bot") == "id-bob"
     assert resolve_speaker({"locutor": "Guest-3"}, participants, "bot") == "bot"
     assert resolve_speaker({}, participants, "bot") == "bot"
+
+
+# ---- per-CHANNEL namespacing ------------------------------------------------
+def test_segment_ids_are_namespaced_per_channel():
+    """Two channels of one session share a LiveKit room and both restart their
+    segmentIds at 1 — without the channel key they upsert each other's lines."""
+    payload = {"segmentId": 12, "text": "bonjour", "start": 1.0, "end": 2.0, "lang": "fr"}
+    a = caption_to_segment(payload, "final", False, channel_key="sess-1,0")
+    b = caption_to_segment(payload, "final", False, channel_key="sess-1,1")
+    assert a[0] == "linto:sess-1,0:12"
+    assert b[0] == "linto:sess-1,1:12"
+    assert a[0] != b[0]
+    # Translations stay namespaced by target language on top of the channel.
+    tr = dict(payload, targetLang="en")
+    assert caption_to_segment(tr, "final", True, channel_key="sess-1,0")[0] == (
+        "linto:sess-1,0:12:en"
+    )
+    # No channel key -> the plain id (a caller with no channel context).
+    assert caption_to_segment(payload, "final", False)[0] == "linto:12"
+
+
+# ---- one timeline across ASR connections ------------------------------------
+def test_segment_clock_puts_every_asr_connection_on_one_timeline():
+    clock = SegmentClock()
+    first = {"segmentId": 1, "text": "a", "start": 1.0, "end": 2.0,
+             "astart": "2026-01-01T10:00:00.000Z"}
+    # A second ASR connection, started 30 s later, restarts `start` at 0.
+    second = {"segmentId": 1, "text": "b", "start": 0.0, "end": 1.0,
+              "astart": "2026-01-01T10:00:30.000Z"}
+    a = caption_to_segment(first, "final", False, clock=clock)
+    b = caption_to_segment(second, "final", False, clock=clock)
+    assert (a[2], a[3]) == (1000, 2000)
+    # Without the clock this would be 0 — a jump BACKWARDS in the overlay.
+    assert (b[2], b[3]) == (30000, 31000)
+    assert b[2] > a[2]
+
+
+def test_segment_clock_never_produces_a_negative_offset():
+    clock = SegmentClock()
+    clock.offset_ms({"astart": "2026-01-01T10:00:30.000Z"})  # anchor
+    earlier = {"segmentId": 2, "text": "x", "start": 1.0, "end": 1.5,
+               "astart": "2026-01-01T10:00:00.000Z"}
+    seg = caption_to_segment(earlier, "final", False, clock=clock)
+    assert (seg[2], seg[3]) == (1000, 1500), seg
+
+
+def test_meeting_relative_captions_bypass_the_clock():
+    """`meeting_relative=True` is for a producer that already publishes
+    MEETING-ORIGIN offsets, where adding `astart` would double-count.
+
+    The Transcriber is NOT such a producer in EITHER mode: its per-sub-ASR
+    timeline map is seeded at that sub-ASR's own first frame and only adds back
+    the VAD-elided silence, so offsets stay anchored on each connection's own
+    `astart`. Both bot paths therefore pass False (see the per-stream test in
+    test_caption_publish.py); this only pins the flag's own semantics."""
+    clock = SegmentClock()
+    clock.offset_ms({"astart": "2026-01-01T10:00:00.000Z"})
+    payload = {"segmentId": 3, "text": "y", "start": 12.0, "end": 13.0,
+               "astart": "2026-01-01T10:05:00.000Z"}
+    seg = caption_to_segment(payload, "final", False, clock=clock, meeting_relative=True)
+    assert (seg[2], seg[3]) == (12000, 13000)
+
+
+def test_segment_clock_anchors_on_the_supplied_origin_not_the_first_caption():
+    """The FIRST caption seen is not reliably the earliest ASR connection.
+
+    In per-stream a sub-ASR is created on the first VAD-PASSING frame (a cough is
+    enough) but a caption only exists once the provider recognises TEXT, so a
+    participant present from the start who speaks late can arrive second. Seeded
+    with the bot's own join instant (LiveKitBot._t0_epoch_ms, provably no later
+    than any `astart`), the clock keeps the two apart instead of clamping the
+    earlier connection onto 0."""
+    join = _epoch("2026-01-01T10:00:00.000Z")
+    clock = SegmentClock(anchor_ms=join)
+    # Bob only speaks 10 min in, but he is the first caption the bot ever sees.
+    bob = {"segmentId": 1, "text": "b", "start": 0.0, "end": 1.0,
+           "astart": "2026-01-01T10:10:00.000Z"}
+    # Alice's sub-ASR opened at the join; she is captioned 25 min in.
+    alice = {"segmentId": 2, "text": "a", "start": 1500.0, "end": 1501.0,
+             "astart": "2026-01-01T10:00:00.000Z"}
+    b = caption_to_segment(bob, "final", False, clock=clock)
+    a = caption_to_segment(alice, "final", False, clock=clock)
+    assert (b[2], b[3]) == (600000, 601000), b
+    assert (a[2], a[3]) == (1500000, 1501000), a
+    # Real separation is 900 s; a first-caption anchor rendered it as 1500 s.
+    assert a[2] - b[2] == 900000
+
+
+def test_segment_clock_lowers_its_anchor_for_an_earlier_astart():
+    """Host-clock skew between the bot and the Transcriber must degrade into a
+    constant shift, not collapse every offset onto the 0 clamp: an `astart`
+    before the seeded anchor lowers the anchor instead of being clamped away."""
+    clock = SegmentClock(anchor_ms=_epoch("2026-01-01T12:00:00.000Z"))  # skewed late
+    first = {"segmentId": 1, "text": "a", "start": 0.0, "end": 1.0,
+             "astart": "2026-01-01T10:00:00.000Z"}
+    second = {"segmentId": 2, "text": "b", "start": 0.0, "end": 1.0,
+              "astart": "2026-01-01T10:00:30.000Z"}
+    a = caption_to_segment(first, "final", False, clock=clock)
+    b = caption_to_segment(second, "final", False, clock=clock)
+    assert (a[2], b[2]) == (0, 30000), (a, b)
+
+
+def test_segment_clock_ignores_a_non_numeric_anchor():
+    """A bogus anchor falls back to the first-`astart` seeding, never to a crash
+    or to a bool coerced into 1 ms."""
+    for bad in (None, True, "2026-01-01T10:00:00.000Z", object()):
+        clock = SegmentClock(anchor_ms=bad)
+        payload = {"segmentId": 1, "text": "a", "start": 2.0, "end": 3.0,
+                   "astart": "2026-01-01T10:00:00.000Z"}
+        seg = caption_to_segment(payload, "final", False, clock=clock)
+        assert (seg[2], seg[3]) == (2000, 3000), bad
+
+
+def test_segment_clock_passes_through_an_unusable_astart():
+    clock = SegmentClock()
+    for astart in (None, "", "not-a-date", {}):
+        seg = caption_to_segment(
+            {"segmentId": 4, "text": "z", "start": 2.0, "end": 3.0, "astart": astart},
+            "final", False, clock=clock,
+        )
+        assert (seg[2], seg[3]) == (2000, 3000), astart
+
+
+# ---- late (post-departure) attribution --------------------------------------
+def test_resolve_speaker_falls_back_to_a_recently_departed_participant():
+    """A final routinely lands after its speaker hung up, and the bot joins
+    HIDDEN — attributing it to the bot hides those last words from the overlay."""
+    participants = {"id-bob": "Bob"}
+    departed = {"id-alice": "Alice"}
+    assert resolve_speaker(
+        {"participantId": "id-alice"}, participants, "bot", departed=departed
+    ) == "id-alice"
+    assert resolve_speaker(
+        {"locutor": "Alice"}, participants, "bot", departed=departed
+    ) == "id-alice"
+    # A live participant still wins, and an unknown speaker still falls back.
+    assert resolve_speaker(
+        {"locutor": "Bob"}, participants, "bot", departed=departed
+    ) == "id-bob"
+    assert resolve_speaker(
+        {"locutor": "Guest-9"}, participants, "bot", departed=departed
+    ) == "bot"
 
 
 # ---- BrokerClient routing (stubbed runtime) ---------------------------------

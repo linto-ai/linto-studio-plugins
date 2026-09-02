@@ -4,8 +4,10 @@
      opt-OUT via BOT_PERSTREAM=false.
   2. The Transcriber's ack decides the EFFECTIVE mode, and a denied request logs a
      loud warning instead of degrading to the mixed path silently.
-  3. The init frame carries an empty participant roster (the room is joined after
-     the handshake; the roster arrives as `participant/join` control messages).
+  3. The FIRST init frame carries an empty participant roster (the room is joined
+     after the handshake; the roster arrives as `participant/join` control
+     messages) — but a RECONNECT's init re-announces the CURRENT roster, which is
+     what the Transcriber rebuilds its tag -> participant map from.
   4. Audio is queued straight onto the single-writer queue — there is no pre-ack
      buffer, because no audio can exist before the ack.
 
@@ -163,6 +165,61 @@ def test_init_frame_has_empty_roster():
     print("OK the init frame advertises the mode with an empty roster")
 
 
+def test_init_roster_comes_from_the_participants_provider():
+    """The init handshake is RE-RUN on every reconnect and the Transcriber rebuilds
+    its tag -> participant map from scratch out of the roster it carries, so a
+    hard-coded empty list silently unattributes every sub-ASR created afterwards.
+    The owner supplies the CURRENT roster instead."""
+    stream = TranscriberStream("ws://t", diarization_mode="native", per_stream=True)
+    roster = [{"id": "id-a", "name": "Alice", "tag": 0}]
+    stream.participants_provider = lambda: roster
+    ws = FakeWs()
+    stream.ws = ws
+    asyncio.run(stream._send_init())
+    assert json.loads(ws.sent[0])["participants"] == roster
+
+    # A provider that raises must never break the handshake: it degrades to the
+    # pre-existing empty roster.
+    def _boom():
+        raise RuntimeError("roster unavailable")
+
+    stream.participants_provider = _boom
+    ws2 = FakeWs()
+    stream.ws = ws2
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        asyncio.run(stream._send_init())
+    assert json.loads(ws2.sent[0])["participants"] == []
+    assert "participants_provider raised" in buf.getvalue()
+    print("OK the init roster is read from the provider, fail-soft")
+
+
+def test_the_bot_roster_carries_the_tags_actually_in_use():
+    """LiveKitBot._current_roster is what the reconnect re-announces: the live
+    participants with the tags their frames already carry, and it must be a pure
+    READ (building an init frame may never allocate a tag)."""
+    bot = _bot(BOT_PERSTREAM="true")
+    assert bot._current_roster() == [], "no room joined yet: the first init is empty"
+
+    bot._participants["id-a"] = "Alice"
+    bot._participants["id-b"] = "Bob"
+    bot._tag_for("id-a")
+    bot._tag_for("id-b")
+    assert bot._current_roster() == [
+        {"id": "id-a", "name": "Alice", "tag": 0},
+        {"id": "id-b", "name": "Bob", "tag": 1},
+    ], bot._current_roster()
+
+    # An identity with no tag yet is skipped rather than allocated one here.
+    bot._participants["id-c"] = "Carol"
+    assert [p["id"] for p in bot._current_roster()] == ["id-a", "id-b"]
+    assert "id-c" not in bot._tags, "building the roster must not allocate a tag"
+
+    # And the stream reads it through the wiring the bot set up in __init__.
+    assert bot.transcriber.participants_provider == bot._current_roster
+    print("OK the reconnect roster carries the live participants and their tags")
+
+
 def test_audio_is_not_buffered_before_the_ack():
     stream = TranscriberStream("ws://t", per_stream=True)
     assert not hasattr(stream, "buffer"), "the dead pre-ack ring buffer must be gone"
@@ -200,6 +257,8 @@ _TESTS = [
     test_denied_ack_warns_loudly,
     test_mixed_request_does_not_warn,
     test_init_frame_has_empty_roster,
+    test_init_roster_comes_from_the_participants_provider,
+    test_the_bot_roster_carries_the_tags_actually_in_use,
     test_audio_is_not_buffered_before_the_ack,
     test_closed_stream_drops_audio,
 ]

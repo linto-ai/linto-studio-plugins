@@ -16,6 +16,23 @@ VISIOBOT_HEALTHCHECK_HTTP=8081 # HTTP port of the liveness endpoint
 LIVEKIT_API_KEY=devkey # dev-only self-mint fallback (unused when TOKEN_FROM_PAYLOAD)
 LIVEKIT_API_SECRET=secret # idem — the service refuses to start on these placeholders
 # unless DEVELOPMENT=true or LIVEKIT_TOKEN_FROM_PAYLOAD=true
+# SSRF guard on the livekitUrl carried in (client-writable) session meta: the bot
+# dials it from inside the cluster, so loopback / link-local (169.254.169.254) /
+# RFC1918 targets are refused and the startbot fails closed with a bot-error.
+# VISIOBOT_LIVEKIT_ALLOWED_HOSTS= # comma-separated host accept-list. When set it is
+# AUTHORITATIVE: only these hosts are dialable (and a listed one is admitted even if
+# it is private — that is the point of listing it). PROD SHOULD SET THIS.
+# DEVELOPMENT=true also re-admits loopback/private SFUs, for the local stack.
+
+##### Auto-leave (same knobs and rule as the web BotService) #####
+# Once a participant HAS been seen, leave this long after the last one is gone and
+# ask the Scheduler to END the session (scheduler/in/schedule/stopbot with
+# endSession=true) — Studio then finalizes it exactly like a manual stop.
+EMPTY_MEETING_TIMEOUT_SECONDS=60
+# Absolute watchdog: nobody was EVER seen this long after the join (wrong room, empty
+# room). That leave is a FAILURE: a 'join-timeout' bot-error is published and the
+# Scheduler is asked to clean the bot row up WITHOUT ending the session.
+JOIN_TIMEOUT_SECONDS=120
 
 ##### Transcription #####
 # Per-stream diarization: subscribe to each participant's audio track separately and
@@ -31,6 +48,38 @@ LIVEKIT_API_SECRET=secret # idem — the service refuses to start on these place
 #   falls back to mixed.
 BOT_PERSTREAM=true
 BOT_VAD_ENERGY_THRESHOLD=300 # RMS above which a 20 ms frame counts as speech
+# How long a participant stays "active" after their last frame above the threshold.
+# The gated bursts are spliced end to end for the sub-ASR, so this trailing silence
+# is the ONLY thing that tells the provider an utterance is over: it must exceed the
+# provider's end-of-utterance timeout (Microsoft's default is ~500 ms). Too short and
+# successive bursts are concatenated into one run-on segment; too long and silence is
+# billed. Only affects per-stream mode.
+BOT_VAD_HANGOVER_MS=800
+# Per-participant mix buffer depth, in 20 ms frames (~3.2 s at the default). Bounded
+# on purpose: the mix tick period is always slightly over 20 ms, so an unbounded
+# buffer fills faster than it drains and caption latency drifts by seconds per minute
+# of meeting. On overflow the OLDEST audio is dropped (freshest audio wins) and a
+# throttled warning is logged. Mirrors the web bot's AudioMixer `bufferFrames`.
+BOT_MIXER_BUFFER_FRAMES=160
 # Republish the Transcriber captions into the LiveKit room as native transcription
 # segments (the Visio/Meet overlay renders them). Needs can_publish_data on the token.
+# This is a replica-wide KILL-SWITCH: a startbot payload with enableDisplaySub=false
+# still opts that single bot out, but no payload can turn it back on here.
 VISIOBOT_PUBLISH_NATIVE_SUBS=true
+
+##### Transcriber WS resilience #####
+# The Transcriber closes the ingest socket on entirely routine events (a session-list
+# change, a channel replacement, a pod restart, an LB re-route — there is no affinity
+# across reconnects, see doc/production-topology.md). The bot observes the close,
+# re-runs the init handshake on a fresh socket with exponential backoff + jitter, and
+# honours the NEW negotiation grant. Once the retries are exhausted the bot is stopped
+# and botservice/out/<botId>/bot-error is published so the Scheduler can re-route.
+# Mirrors BOTSERVICE_WS_RECONNECT_* on the web BotService.
+VISIOBOT_WS_RECONNECT_RETRIES=3 # 0 disables reconnect (a close is then immediately fatal)
+VISIOBOT_WS_RECONNECT_BASE_MS=1000 # first backoff; doubles per attempt, + full jitter
+# Send-queue depth (frames) held while the socket is down. Bounded on purpose: an
+# unbounded queue with no consumer grows RSS without limit. On overflow the oldest
+# MIXED recording frame is dropped first (a shorter archive beats lost captions), then
+# the oldest audio frame; JSON control frames are never dropped. ~500 frames = 10 s of
+# 20 ms audio, the same budget as the web bot's MAX_AUDIO_BUFFER_CHUNKS.
+VISIOBOT_WS_MAX_QUEUE_FRAMES=500

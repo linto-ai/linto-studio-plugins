@@ -28,3 +28,18 @@ services:
       - ./Scheduler:/usr/src/app/scheduler
       - /usr/src/app/scheduler/node_modules
     command: ["npm run start-live"]
+
+  visiobotservice:
+    healthcheck:
+      disable: true
+    environment:
+      # Same DEVELOPMENT=true convention as the Node services. For this service it
+      # additionally (a) allows the dev self-mint on the devkey/secret placeholders
+      # and (b) re-admits a loopback/private LiveKit URL, which the local stack uses.
+      - DEVELOPMENT=true
+      - BOT_CAPABILITIES=visio-native
+    # Live code, like the Node services. The Python deps live in /usr/local (site-
+    # packages), so mounting the sources over /app does not shadow them. There is no
+    # reloader: restart the service to pick up an edit.
+    volumes:
+      - ./VisioBotService:/app

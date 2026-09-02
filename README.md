@@ -171,6 +171,8 @@ The project structure includes the following modules:
 - `Session-API`: an API to manage transcription sessions, also serves a front-end using Swagger client (Open API spec)
 - `Transcriber`: a transcription service (streaming endpoint & relay to ASR services)
 - `Scheduler`: a scheduling service that bridges the transcribers & subtitle-delivery with session manager, database, and message broker
+- `BotService`: a meeting-bot service that drives a headless Chromium page to join a meeting (Jitsi, BigBlueButton, Teams, Visio) and streams the mixed audio to a Transcriber
+- `VisioBotService`: the native counterpart of the above for LinTO Visio/Meet — a Python service that joins the LiveKit room directly (no Chromium), can stream one audio flow per participant, and republishes the captions into the room. Advertises the `visio-native` capability; the Scheduler falls back to the web bot when no native replica is online or the session carries no native signal (see `BOT_PROVIDER_FALLBACK_*` / `SESSION_GATED_CAPABILITIES` in `.envdefault`)
 - `TranslatorPython`: an external translation microservice that subscribes to transcription partials and finals via MQTT, translates text sentence by sentence using pluggable providers (echo, TranslateGemma), and publishes results back to the broker. See [TranslatorPython/README.md](./TranslatorPython/README.md) for the translation model (prefix freezing) and tuning.
 - The `lib` folder contains generic tooling for the project as a whole and is treated as another Node.js package. It is required from the modules using the package.json local file API. This allows the modules to access the tools provided by the `lib` package and use them in their implementation.
 
@@ -222,6 +224,8 @@ You can compile images in this way for the following components:
 - Session-API
 - Transcriber
 - migration
+- BotService
+- VisioBotService (Python; same "build from the repo root" rule: `docker build -f VisioBotService/Dockerfile .`)
 
 In practice, for local testing, there is no need to manually compile these images because Docker Compose will do it for you.
 
@@ -320,6 +324,16 @@ npm run migrate-keys -- OLD_SECURITY_CRYPT_KEY=<my-key>  OLD_SECURITY_SALT_FILEP
 
 The code being entirely event-driven, it is difficult to test it in a unitary way. For this reason, the unit tests have focused on very specific points. Specifically, the unit tests concern the circular buffer of the transcriber and are located in Transcriber/tests.js.
 
+Each service also has its own suite, driven from the Makefile:
+
+```bash
+make test-unit                    # every service, sequentially
+make test-unit-transcriber        # Mocha — also -sessionapi, -scheduler, -botservice
+make test-unit-visiobotservice    # pytest via uv (the one Python service in the set)
+```
+
+`make test-unit-visiobotservice` prints a SKIP instead of failing when [`uv`](https://docs.astral.sh/uv/) is not installed, so `make test-unit` / `make test-all` still run everywhere. `make test-all` runs the harness self-tests, all of the above, then the containerized integration scenarios.
+
 ### Integration tests
 
 In order to comprehensively test the project, integration tests have been added and are entirely carried out in a bash script named `integration-test.sh` at the root of the project. These tests validate several parts of the code:
@@ -389,6 +403,12 @@ class MyASRTranscriber extends EventEmitter {
 | `system/out/sessions/paused` | Session-API | Studio-API, others | Notification when a session is paused, payload: `{id, organizationId}` |
 | `system/out/sessions/resumed` | Session-API | Studio-API, others | Notification when a session is resumed, payload: `{id, organizationId}` |
 | `translator/out/{translatorName}/status` | Translator | Scheduler | Translator presence (retained + LWT for automatic deregistration) |
+| `botservice/out/{uniqueId}/status` | BotService, VisioBotService | Scheduler | Bot-service presence, load and advertised `capabilities` (retained + LWT). The Scheduler routes a bot to the least-loaded replica advertising the requested capability |
+| `botservice/out/{uniqueId}/bot-error` | BotService, VisioBotService | Scheduler | A bot failed fatally, payload: `{botId, reason}`. A `join-failed` from a *native* dispatch is re-routed once to the web sibling |
+| `botservice/in/{uniqueId}/startbot` \| `stopbot` | Scheduler | BotService, VisioBotService | Targeted bot lifecycle. `startbot` carries the session, the channel and the Transcriber WS ingest URL |
+| `scheduler/in/schedule/stopbot` | BotService, VisioBotService | Scheduler | Autonomous leave: ask the Scheduler to delete the Bot row and deactivate the channel, payload: `{botId, endSession}`. `endSession: true` (empty meeting, everyone left) also ENDS the session like a manual stop; a `join-timeout` leave (nobody ever seen) sends `false` and a distinct `bot-error` |
+| `system/out/bots/error` | Scheduler | Studio-API, others | Re-emission of a fatal bot error, payload: `{botId, reason}` |
+| `system/out/sessions/ended` | Scheduler | Studio-API, others | A session was terminated (auto-end, or a bot leaving an empty meeting), payload: `{id, organizationId}` |
 
 ### MQTT Packet Reference
 
@@ -407,6 +427,7 @@ Both `partial` and `final` messages use the same JSON structure:
     "end": 18.7,
     "lang": "en-US",
     "locutor": "speaker-id",
+    "participantId": "meet-identity-42",
     "externalTranslations": [
         { "targetLang": "en", "translator": "gemma" }
     ]
@@ -422,7 +443,8 @@ Both `partial` and `final` messages use the same JSON structure:
 | `start` | number | Segment start time in seconds relative to the audio stream |
 | `end` | number | Segment end time in seconds relative to the audio stream |
 | `lang` | string | Source language code (BCP 47 format, e.g. `en-US`, `fr-FR`) |
-| `locutor` | string \| null | Speaker identifier from diarization, or `null` if unavailable |
+| `locutor` | string \| null | Speaker identifier from diarization, or `null` if unavailable. For a bot stream it is the participant's real display name (falling back to their id) |
+| `participantId` | string \| undefined | **Additive, optional.** Stable participant identity behind `locutor` (the LiveKit identity for the native visio bot), so a consumer can attribute a caption without a display-name lookup — names can collide, this cannot. Emitted on partials and finals in BOTH bot diarization modes: per-stream (the sub-ASR's own participant) and the default mixed `diarizationMode: "native"` path (the `id` of the speaker the bot-fed SpeakerTracker assigned to the segment). Absent (key not present) for every other stream — SRT, RTMP, non-bot WS, and a bot participant with no known id |
 | `externalTranslations` | array \| undefined | Routing info for external translators. Each entry: `{ targetLang, translator }`. Absent when no external translation is configured. |
 
 **Note on discrete translations (Microsoft):** The `translations` field is kept in the packet for backward compatibility with clients that read it directly. Additionally, the Transcriber re-publishes each discrete translation as an individual message on `.../final/translations` (see `publishDiscreteTranslations` in `ASREvents.js`), so that all translations (discrete + external) converge on the same topic for the Scheduler.
@@ -436,6 +458,36 @@ A special minimal packet is emitted when the audio stream stops:
     "locutor": "TRANSCRIBER_BOT_NAME"
 }
 ```
+
+### WS Ingest: Per-Stream Bot Framing
+
+The WebSocket ingest accepts an **opt-in** binary framing used by the meeting bots, so that instead of one mixed audio flow per channel the Transcriber can receive **one flow per participant** and run one ASR per speaker (real display names instead of an ASR `Guest-N` guess). Anything not negotiated below keeps the byte-for-byte legacy behaviour: SRT, RTMP and non-per-stream WS ingest are untouched.
+
+Frames are little-endian with an 8-byte header. Byte 0 is a magic that cannot collide with a JSON control frame (those start with `0x7B`, `{`):
+
+| Offset | Size | Field | Notes |
+|---|---|---|---|
+| 0 | u8 | **magic** | `0x01` = per-participant tagged PCM · `0x02` = mixed recording PCM |
+| 1 | u8 | tag | participant tag `0..254` (`255` = shared overflow ASR) for `0x01`; **always 0 and ignored** for `0x02` |
+| 2–3 | u16 | reserved | must be 0; keeps the PCM 16-bit aligned |
+| 4–7 | u32 | `meetingTimeMs` | the bot's meeting clock for this frame |
+| 8.. | N | PCM | s16le, 16 kHz, mono |
+
+Negotiation, in both directions — the bot honours the **grant**, never its own request:
+
+```jsonc
+// bot -> transcriber (init)
+{ "type": "init", "encoding": "pcm", "sampleRate": 16000, "diarizationMode": "native",
+  "perStream": true, "mixedRecording": true, "participants": [ { "id": "…", "name": "…", "tag": 0 } ] }
+// transcriber -> bot (ack)
+{ "type": "ack", "message": "Init done", "perStream": true, "mixedRecording": true }
+```
+
+**Additive change to the pre-existing ack.** `perStream` and `mixedRecording` are now present on **every** `ack`, including the plain non-bot, non-per-stream handshake that never sends either field in its `init` — such a client is simply acked `{"type":"ack","message":"Init done","perStream":false,"mixedRecording":false}`. The two fields are an **additive, optional extension**: `type` and `message` are unchanged, no field was removed or renamed, and a client that only tests `type === "ack"` (as every in-tree consumer does) is unaffected. A per-stream-unaware client must ignore unknown ack fields; a `perStream:false` ack means the legacy mixed path, byte-for-byte as before.
+
+`init.mixedRecording` is a **capability advertisement** ("I can also produce a mixed flow"), not a request. The Transcriber grants `perStream` only when the bot asked for it **and** it runs with `TRANSCRIBER_PERSTREAM_DIARIZATION=true` **and** the channel's archive can still be produced — i.e. `keepAudio` is off, or the bot can supply the `0x02` mixed flow. A bot that cannot is **demoted to the legacy mixed path** (correct archive, degraded speaker attribution) with a loud WARN on both sides, never handed a corrupted archive. `ack.mixedRecording` then tells the bot whether to actually ship that second flow; it is written straight to the channel's `.pcm` and never reaches an ASR.
+
+Caption timestamps keep their legacy meaning: `astart` is the origin of the flow that produced the caption and `start`/`end` are offsets from it. `meetingTimeMs` is not a second time base — it is used only to add back the silence the bot's VAD elided from a participant's track. Full details, including the negotiation table and the timeline map, in [doc/streaming-protocols.md](./doc/streaming-protocols.md).
 
 ### Provider Feature Matrix
 
@@ -505,9 +557,10 @@ Translation result packet (one message per target language):
 | `targetLang` | string | Target language (short code) |
 | `start` / `end` | number | Segment times in seconds (copied from source) |
 | `locutor` | string \| null | Speaker identifier (copied from source) |
+| `participantId` | string \| undefined | **Additive, optional.** Copied from the source transcription when it carries one (bot streams, per-stream or mixed native diarization), so a translated line is attributed to the same participant as its source. Absent otherwise — the legacy payload shape is unchanged |
 | `astart` | string | Session start timestamp (copied from source) |
 
-This is the same packet format used by discrete translations (Microsoft). Both converge on the same `.../translations` topic.
+This is the same packet format used by discrete translations (Microsoft). Both converge on the same `.../translations` topic. `publishDiscreteTranslations` builds this payload field by field, so it propagates `participantId` explicitly; an external translator should echo the field it received.
 
 ### Database Schema
 

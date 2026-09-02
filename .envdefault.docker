@@ -23,19 +23,48 @@ BOTSERVICE_HEALTHCHECK_HTTP=8080
 # TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init ack before failing the handshake
 # BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling: above it advertise capabilities=[] and refuse bots (0 = disabled)
 # BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up
+# BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
+# ⚠ BOT_CAPABILITIES is read by BOTH bot services (web BotService and
+# VisioBotService), which share this env_file. It is therefore set PER SERVICE in
+# compose.yml (`environment:`) and must stay unset here — a global value would make
+# one of the two advertise a capability it cannot serve.
+
+# Scheduler bot routing. Suffix = provider upper-cased with '-' -> '_'.
+BOT_PROVIDER_FALLBACK_VISIO=visio-native,visio # prefer the native LiveKit agent,
+# fall back to the web bot when no native replica is online
+# SESSION_GATED_CAPABILITIES=visio-native # capabilities kept only for sessions that
+# declare them (meta.native[<cap>]) AND carry a join token; otherwise demoted to the
+# web sibling before dispatch. Defaults to visio-native. The list can only ADD to the
+# gate: a "-native" capability is always gated whatever this is set to, so a partial
+# override can never disable the built-in token check.
 
 # VisioBotService (native LiveKit bot for Visio/Meet)
 VISIOBOT_HEALTHCHECK_HTTP=8081
-# BOT_CAPABILITIES=visio-native # capability the Scheduler routes visio bots on
+# Auto-leave reads the shared EMPTY_MEETING_TIMEOUT_SECONDS / JOIN_TIMEOUT_SECONDS
+# above (same rule as the web bot: empty meeting => end the session; never
+# populated => 'join-timeout' bot-error).
 # LIVEKIT_TOKEN_FROM_PAYLOAD=true # use the join token minted by Meet (prod); the
 # replica then holds no LiveKit signing secret
+# VISIOBOT_LIVEKIT_ALLOWED_HOSTS= # SSRF accept-list for the livekitUrl from session
+# meta; authoritative when set. Unset => private/loopback SFUs refused unless
+# DEVELOPMENT=true (compose.override.yml sets it for the local stack)
 BOT_PERSTREAM=true # one tagged PCM flow per participant => 1 ASR/participant and a
 # real speaker name; needs TRANSCRIBER_PERSTREAM_DIARIZATION=true (negotiated in the
 # Transcriber ack). false = legacy mixed path (speaker guessed by energy VAD)
-BOT_VAD_ENERGY_THRESHOLD=300
+BOT_VAD_ENERGY_THRESHOLD=300 # RMS above which a 20 ms frame counts as speech
+BOT_VAD_HANGOVER_MS=800 # trailing "active" window after the last frame above the
+# threshold. The VAD-gated bursts are spliced end to end for the sub-ASR, so this
+# silence is the ONLY end-of-utterance signal the provider gets: it MUST exceed the
+# provider's own timeout (~500 ms on Microsoft) or bursts merge into one run-on
+# segment; too long and silence is billed. Per-stream mode only.
+BOT_MIXER_BUFFER_FRAMES=160 # per-participant mix buffer depth in 20 ms frames
+# (~3.2 s), bounded drop-oldest: the mix tick is always slightly over 20 ms, so an
+# unbounded buffer grows without limit and caption latency drifts
 VISIOBOT_PUBLISH_NATIVE_SUBS=true # republish captions into the room as native
 # LiveKit transcription segments (needs can_publish_data on the join token)
-# BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
+VISIOBOT_WS_RECONNECT_RETRIES=3 # reconnect attempts on a Transcriber WS close (0 = fatal)
+VISIOBOT_WS_RECONNECT_BASE_MS=1000 # first backoff; doubles per attempt, + full jitter
+VISIOBOT_WS_MAX_QUEUE_FRAMES=500 # bounded send queue while the socket is down
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

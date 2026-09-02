@@ -107,6 +107,31 @@ services:
         required: false
     environment:
       - DEBUG=botservice:*
+      # BOT_CAPABILITIES is a name SHARED with visiobotservice below, and both read
+      # the same env_file — so it is scoped per service here, never set globally.
+      # Keep in sync with Bot.KNOWN_BOT_TYPES (BotService/bot/index.js).
+      - BOT_CAPABILITIES=jitsi,bigbluebutton,teams,visio
+    depends_on:
+      broker:
+        condition: service_started
+    networks:
+      - internal
+
+  # Native LiveKit transcription bot (Python). Same broker contract as botservice
+  # above — it registers on botservice/out/<uniqueId>/status and is routed by the
+  # Scheduler on its own capability — but it joins the SFU directly instead of
+  # driving a Chromium page.
+  visiobotservice:
+    build:
+      context: .
+      dockerfile: VisioBotService/Dockerfile
+    env_file:
+      - .envdefault.docker
+      - path: .env
+        required: false
+    environment:
+      # The native capability, scoped to this service (see botservice above).
+      - BOT_CAPABILITIES=visio-native
     depends_on:
       broker:
         condition: service_started

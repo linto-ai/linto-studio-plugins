@@ -26,6 +26,12 @@ BOTSERVICE_HEALTHCHECK_HTTP=8080 # HTTP port for the liveness endpoint (JSON: st
 EMPTY_MEETING_TIMEOUT_SECONDS=60 # auto-leave a meeting this long after the last participant leaves
 BOT_DISPLAY_NAME=LinTO Bot # name the bot shows when joining a meeting
 # BOT_CAPABILITIES=jitsi,bigbluebutton,teams,visio # advertised providers (defaults to all)
+# ⚠ BOT_CAPABILITIES is read by BOTH bot services (this web one and the
+# VisioBotService below), so it MUST be set per service (compose `environment:`,
+# Helm per-deployment env) and NEVER globally in this file: a global
+# "visio-native" would make the web BotService advertise a capability it cannot
+# serve, and a global "…,visio" would make the native replica claim the web one.
+# It is left commented here on purpose — each service defaults to its own set.
 # Internal host a BotService bot uses to reach a Transcriber WS ingest (used by the
 # Scheduler to mint the websocketUrl). Defaults to the 'transcriber' compose service.
 STREAMING_WS_BOT_HOST=transcriber
@@ -37,19 +43,51 @@ STREAMING_WS_BOT_HOST=transcriber
 # BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up (fatal)
 # BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
 
+# ── Scheduler bot routing ────────────────────────────────────────────────────
+# Ordered provider fallback, per requested provider: the Scheduler dispatches to
+# the first capability in the list that has an online, capable BotService replica,
+# and publishes THAT capability as botType. Unset => the requested provider alone.
+# The suffix is the provider name upper-cased with '-' replaced by '_' (an env var
+# name cannot contain '-'): provider "visio" -> BOT_PROVIDER_FALLBACK_VISIO,
+# provider "visio-native" -> BOT_PROVIDER_FALLBACK_VISIO_NATIVE.
+# BOT_PROVIDER_FALLBACK_VISIO=visio-native,visio # prefer the native LiveKit agent,
+# fall back to the web (Chromium) bot when no native replica is online
+# BOT_PROVIDER_FALLBACK_VISIO_NATIVE=visio-native,visio
+# Capabilities that are GATED on a per-session signal: such a capability survives
+# the fallback list only when the session declares it (meta.native[<cap>], or the
+# legacy meta.linto_native alias for visio-native) AND carries a join token.
+# Otherwise it is demoted to its web sibling (the name without the "-native"
+# suffix) BEFORE any dispatch, so a session with no native signal deterministically
+# routes to the web bot. Defaults to "visio-native".
+# This list can only ADD to the gate: any capability whose name ends in "-native" is
+# ALWAYS gated, whatever this variable says. Setting it to another capability (or to
+# an empty string) therefore cannot disable the built-in token check — it would
+# otherwise send every tokenless "visio" bot to the native replica first.
+# SESSION_GATED_CAPABILITIES=visio-native
+
 # ── VisioBotService (native LiveKit bot for Visio/Meet) ──────────────────────
 # Broker-piloted bot that joins a LiveKit room hidden, streams every participant's
 # audio to a Transcriber and republishes the captions back into the room. Its
 # Python service does NOT read this file (see VisioBotService/.envdefault, which
 # mirrors the code defaults) — the values below are what a deployment must set.
 VISIOBOT_HEALTHCHECK_HTTP=8081 # HTTP port for the liveness endpoint
-# BOT_CAPABILITIES=visio-native # capability the Scheduler routes visio bots on
+# Auto-leave: the native bot reads the SAME two knobs as the web BotService above —
+# EMPTY_MEETING_TIMEOUT_SECONDS (leave + END the session that long after the last
+# participant left) and JOIN_TIMEOUT_SECONDS (leave as a 'join-timeout' bot-error
+# when nobody was ever seen after the join). One .env line tunes both bot families.
+# BOT_CAPABILITIES=visio-native # capability the Scheduler routes visio bots on.
+# Defaults to "visio-native" IN THE VISIOBOT PROCESS — set it per service only (see
+# the warning in the BotService section above), never globally in this file.
 # LIVEKIT_TOKEN_FROM_PAYLOAD=true # present the room join token minted by Meet
 # (session.meta.native) instead of self-signing. Fail-closed: no token => no join.
 # PROD SHOULD SET THIS — the replica then holds no LiveKit signing secret.
 # LIVEKIT_API_KEY / LIVEKIT_API_SECRET # dev-only self-mint fallback; the service
 # refuses to start on the devkey/secret placeholders unless DEVELOPMENT=true or
 # LIVEKIT_TOKEN_FROM_PAYLOAD=true.
+# VISIOBOT_LIVEKIT_ALLOWED_HOSTS= # SSRF accept-list for the livekitUrl carried in the
+# (client-writable) session meta: comma-separated hosts. When set it is AUTHORITATIVE
+# (only these hosts are dialable). Unset => loopback / link-local / RFC1918 targets are
+# refused unless DEVELOPMENT=true. PROD SHOULD SET THIS.
 BOT_PERSTREAM=true # per-stream diarization: stream ONE TAGGED PCM flow per
 # participant (VAD-gated) instead of one mixed flow, so the Transcriber runs one ASR
 # per participant and captions carry the participant's real display name. false =
@@ -58,9 +96,27 @@ BOT_PERSTREAM=true # per-stream diarization: stream ONE TAGGED PCM flow per
 # the mode is negotiated in the Transcriber's ack and the bot honours it (it logs a
 # WARNING and falls back to mixed when denied).
 BOT_VAD_ENERGY_THRESHOLD=300 # RMS above which a 20 ms frame counts as speech
+BOT_VAD_HANGOVER_MS=800 # how long a participant stays "active" after their last
+# frame above the threshold. The gated bursts are spliced end to end for the sub-ASR,
+# so this trailing silence is the ONLY thing that tells the provider an utterance is
+# over: it MUST exceed the provider's end-of-utterance timeout (Microsoft's default is
+# ~500 ms) or successive bursts merge into one run-on segment; too long and silence is
+# billed. Per-stream mode only.
+BOT_MIXER_BUFFER_FRAMES=160 # per-participant mix buffer depth, in 20 ms frames
+# (~3.2 s). Bounded on purpose: the mix tick period is always slightly over 20 ms, so
+# an unbounded buffer fills faster than it drains and caption latency drifts by seconds
+# per minute of meeting. On overflow the OLDEST audio is dropped (freshest wins) and a
+# throttled warning is logged. Mirrors the web bot's AudioMixer `bufferFrames`.
 VISIOBOT_PUBLISH_NATIVE_SUBS=true # republish captions into the room as native
 # LiveKit transcription segments (rendered by the Visio/Meet subtitle overlay).
-# Requires can_publish_data on the join token.
+# Requires can_publish_data on the join token. Replica-wide kill-switch: a startbot
+# payload can still opt one bot out, but never back in.
+# Transcriber WS ingest resilience (mirrors BOTSERVICE_WS_RECONNECT_* on the web bot):
+VISIOBOT_WS_RECONNECT_RETRIES=3 # max reconnect attempts after a socket close (0 = fatal)
+VISIOBOT_WS_RECONNECT_BASE_MS=1000 # first backoff; doubles per attempt, + full jitter
+VISIOBOT_WS_MAX_QUEUE_FRAMES=500 # bounded send queue held while the socket is down;
+# on overflow the oldest MIXED recording frame is dropped first, then the oldest audio
+# frame — JSON control frames are never dropped (~500 frames = 10 s of 20 ms audio)
 
 # Audio streaming configuration
 MAX_AUDIO_BUFFER=10 # If ASR is down, keeps MAX_AUDIO_BUFFER seconds of audio to fast forward upon reconnection

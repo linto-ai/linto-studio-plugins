@@ -113,7 +113,18 @@ test-unit-scheduler: test-unit-deps
 test-unit-botservice: test-unit-deps
 	cd BotService && npm test
 
-test-unit: test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-unit-botservice
+# VisioBotService is the one Python service in the unit-test set (pytest via uv,
+# asyncio_mode=auto — see VisioBotService/pyproject.toml). `uv` is not a hard
+# requirement of this repo, so the target reports a loud SKIP instead of breaking
+# `make test-unit` / `make test-all` on a machine that does not have it.
+test-unit-visiobotservice:
+	@if command -v uv >/dev/null 2>&1; then \
+		cd VisioBotService && uv run pytest -q; \
+	else \
+		echo "==> SKIP VisioBotService tests: 'uv' not found (install: https://docs.astral.sh/uv/)"; \
+	fi
+
+test-unit: test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-unit-botservice test-unit-visiobotservice
 
 # ---------------------------------------------------------------------------
 # Full test suite — CI-style. Long but exhaustive.
@@ -140,4 +151,4 @@ test-all:
 .PHONY: run-docker-dev run-dev down-docker-dev run-docker-prod clean-node-modules clean-docker-node-modules check-linto-studio
 .PHONY: install-local $(PACKAGE_DIRS)
 .PHONY: test-integration test-integration-up test-integration-down test-integration-logs test-integration-smoke test-integration-harness
-.PHONY: test-unit-deps test-unit test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-unit-botservice test-all
+.PHONY: test-unit-deps test-unit test-unit-transcriber test-unit-sessionapi test-unit-scheduler test-unit-botservice test-unit-visiobotservice test-all

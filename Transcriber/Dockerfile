@@ -36,6 +36,12 @@ COPY lib/ /usr/src/app/lib
 COPY Transcriber/ /usr/src/app/transcriber
 COPY .envdefault /usr/src/app/
 
+# linto-node-srt builds libsrt from a GitHub clone at install time. GitHub answers
+# the HTTP/2 `git-upload-pack` POST of bookworm's git/libcurl (2.39 / 7.88) with a
+# 401 (2026-09), which npm surfaces as "git dep preparation failed"; HTTP/1.1 is
+# accepted, so pin it for the build.
+RUN git config --global http.version HTTP/1.1
+
 RUN cd /usr/src/app/lib && npm ci
 RUN cd /usr/src/app/transcriber && npm ci
 

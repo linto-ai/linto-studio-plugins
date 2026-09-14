@@ -1,5 +1,5 @@
 const { Model } = require("live-srt-lib")
-const { validateBotUrl } = require("./bots.helpers")
+const { validateBotUrlResolved } = require("./bots.helpers")
 
 module.exports = (webserver) => {
     return [
@@ -57,8 +57,9 @@ module.exports = (webserver) => {
                 }
                 // SSRF guard: the url is later handed to a headless Chromium via
                 // Playwright page.goto(), so reject loopback/private/metadata/non-http
-                // targets before creating the bot.
-                const urlError = validateBotUrl(url);
+                // targets before creating the bot — including DNS names that
+                // resolve to such addresses.
+                const urlError = await validateBotUrlResolved(url);
                 if (urlError) {
                     return res.status(urlError.status).json({ error: urlError.error });
                 }

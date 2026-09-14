@@ -148,10 +148,61 @@ function validateBotUrl(url) {
     return undefined;
 }
 
+function isIpLiteral(host) {
+    return ipv4ToInt(host) !== null || normalizeIPv6(host).includes(':');
+}
+
+function isReservedAddress(address) {
+    return isReservedIPv4(address) || isReservedIPv6(address);
+}
+
+/**
+ * Async variant of validateBotUrl() that additionally resolves a DNS host name
+ * and rejects it when ANY of its addresses is reserved/private/loopback/
+ * link-local. This closes the `http://internal-name/` bypass of the literal-IP
+ * checks (a public name pointing at 10.x, or a cluster-internal service name).
+ *
+ * Resolution failures are NOT treated as a rejection: an unresolvable name
+ * cannot reach anything, the bot's own navigation will fail with a proper
+ * error, and the integration stack has no outbound DNS. Only a successful
+ * resolution to a reserved address blocks the URL.
+ *
+ * Caveat: this is a check-time resolution; a DNS-rebinding host could still
+ * change its answer before the bot's browser resolves it again. Blocking that
+ * needs an egress proxy or network policy, out of this module's scope.
+ *
+ * `lookup` is injectable for tests; defaults to dns.promises.lookup({all:true}).
+ */
+async function validateBotUrlResolved(url, { lookup } = {}) {
+    const staticError = validateBotUrl(url);
+    if (staticError) return staticError;
+
+    const host = new URL(url).hostname;
+    if (isIpLiteral(host)) return undefined; // already classified above
+
+    const doLookup = lookup || ((name) => require('dns').promises.lookup(name, { all: true, verbatim: true }));
+    let addresses;
+    try {
+        addresses = await doLookup(host);
+    } catch (e) {
+        return undefined; // unresolvable: cannot reach anything, let the bot fail on its own
+    }
+    if (!Array.isArray(addresses)) addresses = addresses ? [addresses] : [];
+    for (const entry of addresses) {
+        const address = typeof entry === 'string' ? entry : entry && entry.address;
+        if (address && isReservedAddress(address)) {
+            return { error: 'url host resolves to a reserved/private network address', status: 400 };
+        }
+    }
+    return undefined;
+}
+
 module.exports = {
     ipv4ToInt,
     isReservedIPv4,
     isReservedIPv6,
     isLocalhostName,
+    isIpLiteral,
     validateBotUrl,
+    validateBotUrlResolved,
 };

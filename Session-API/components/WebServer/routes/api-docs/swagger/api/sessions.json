@@ -6,20 +6,40 @@
       ],
       "operationId": "purgeSessions",
       "summary": "Purge terminated sessions or all sessions if force is true",
+      "description": "When the body carries an organizationId, only the sessions of that organization are purged (force included). Without it the purge is global.",
       "parameters": [
         {
           "in": "query",
           "name": "force",
-          "description": "Force deletion of all sessions",
+          "description": "Force deletion of all sessions (within the organization scope when one is given)",
           "required": false,
           "schema": {
             "type": "boolean"
           }
         }
       ],
+      "requestBody": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "organizationId": {
+                  "type": "string",
+                  "description": "Restrict the purge to this organization"
+                }
+              }
+            }
+          }
+        }
+      },
       "responses": {
         "200": {
           "description": "Sessions purged successfully"
+        },
+        "400": {
+          "description": "organizationId is not a string"
         }
       }
     }

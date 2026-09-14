@@ -913,7 +913,22 @@ module.exports = (webserver) => {
         controller: async (req, res, next) => {
             const force = req.query.force === 'true';
             const where = force ? {} : {status: 'terminated'};
-            const msg = force ? 'All sessions purged' : 'Terminated sessions purged'
+
+            // Organization scoping. The Studio proxy injects body.organizationId on
+            // the per-organization route, so a Meeting Manager only ever purges
+            // (or force-purges) the sessions of the organization in the path. The
+            // administration route carries no organization and keeps the global
+            // behaviour. A body-level scope always wins over a global purge: there is
+            // no way to opt out of it once present.
+            const organizationId = req.body && req.body.organizationId;
+            if (organizationId !== undefined && organizationId !== null && organizationId !== '') {
+                if (typeof organizationId !== 'string') {
+                    return res.status(400).json({ error: 'organizationId must be a string' });
+                }
+                where.organizationId = organizationId;
+            }
+            const scope = where.organizationId ? `organization ${where.organizationId}` : 'all organizations';
+            const msg = force ? `All sessions purged (${scope})` : `Terminated sessions purged (${scope})`;
 
             try {
                 await Model.Session.destroy({

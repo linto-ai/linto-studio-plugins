@@ -6,6 +6,18 @@ const { ApiError, validateTranslations, enrichTranslations, hasNoTranscriberProf
 // createdAt, updatedAt) are intentionally excluded so HTTP clients cannot
 // bypass the dedicated lifecycle endpoints (/pause, /resume, /stop, ...).
 const ALLOWED_SESSION_FIELDS = ['name', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'visibility', 'owner', 'organizationId', 'meta'];
+// Client-writable channel columns on PUT /sessions/:id. Everything else on the
+// Channel model is owned by the platform (streamStatus / transcriberId /
+// lastSegmentId are written by the Scheduler, streamEndpoints and languages are
+// derived here, audioFile by the Transcriber, sessionId by the route) and must
+// never be settable from the request body.
+const ALLOWED_CHANNEL_FIELDS = ['name', 'keepAudio', 'diarization', 'compressAudio', 'enableLiveTranscripts', 'transcriberProfileId', 'translations', 'meta'];
+
+function pickAllowedChannelFields(channel) {
+    return Object.fromEntries(
+        Object.entries(channel).filter(([k]) => ALLOWED_CHANNEL_FIELDS.includes(k))
+    );
+}
 
 function getEndpoints(sessionId, channelId) {
     const {
@@ -527,7 +539,7 @@ module.exports = (webserver) => {
                             continue;
                         }
 
-                        const updatedAttrs = updatedChannel;
+                        const updatedAttrs = pickAllowedChannelFields(updatedChannel);
                         const clearingProfile = 'transcriberProfileId' in updatedChannel && hasNoTranscriberProfile(updatedChannel.transcriberProfileId);
 
                         if (updatedChannel.translations) {

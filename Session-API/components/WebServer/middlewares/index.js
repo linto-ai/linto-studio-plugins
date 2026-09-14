@@ -1,12 +1,24 @@
 const { logger: appLogger } = require('live-srt-lib')
 
+// Request bodies are logged at debug level. Provider secrets travel in the
+// transcriber-profile config under several names (key, apiKey, credentials,
+// passphrase, the Amazon privateKey…), so the redaction is a case-insensitive
+// substring match on a list of sensitive markers rather than the historical
+// `k.includes('key')` which let `apiKey`, `credentials` and `password` through
+// in clear text.
+const SENSITIVE_FIELD_RE = /key|secret|password|passphrase|token|credential|authorization/i;
+
+function isSensitiveField(name) {
+    return SENSITIVE_FIELD_RE.test(String(name));
+}
+
 function obfuscateKeyValues(obj) {
     if (Array.isArray(obj)) {
         return obj.map(obfuscateKeyValues);
     } else if (obj && typeof obj === 'object') {
         const newObj = {};
         for (const [k, v] of Object.entries(obj)) {
-            if (k.includes('key')) {
+            if (isSensitiveField(k)) {
                 newObj[k] = '***';
             } else {
                 newObj[k] = obfuscateKeyValues(v);
@@ -46,5 +58,7 @@ function logger(req, res, next) {
 }
 
 module.exports = {
-    logger
+    logger,
+    obfuscateKeyValues,
+    isSensitiveField,
 }

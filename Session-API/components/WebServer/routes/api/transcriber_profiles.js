@@ -65,8 +65,8 @@ module.exports = (webserver) => {
         middleware: [upload.fields([{ name: 'certificate', maxCount: 1 }, { name: 'privateKey', maxCount: 1 }])],
         controller: async (req, res, next) => {
             try {
-                // Debug logging
-                logger.debug(`POST /transcriber_profiles - req.body: ${JSON.stringify(req.body)}`);
+                // Never log the body here: it carries the provider secret in clear
+                // text (config.key / apiKey / credentials) before encryption.
                 logger.debug(`POST /transcriber_profiles - req.files: ${JSON.stringify(Object.keys(req.files || {}))}`);
 
                 // Handle multipart/form-data - config comes as a string
@@ -80,7 +80,7 @@ module.exports = (webserver) => {
 
                 // Ensure req.body has the expected structure for validation
                 if (!req.body.config) {
-                    return res.status(400).json({ error: `Config field is required. Received body: ${JSON.stringify(req.body)}` });
+                    return res.status(400).json({ error: 'Config field is required' });
                 }
 
                 if (req.body.config.type === 'amazon') {

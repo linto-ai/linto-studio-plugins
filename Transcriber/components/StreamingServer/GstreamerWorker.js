@@ -1,5 +1,6 @@
 const gstreamer = require("gstreamer-superficial");
 const logger = require('../../logger')
+const { parseRtmpStreamPath } = require('./rtmp/streamPath');
 
 let pipeline;
 
@@ -54,6 +55,12 @@ function getGenericPipeline() {
 }
 
 function getRTMPPipeline(streamPath) {
+    // Defense in depth: the parent already sends a canonical path, but this string
+    // ends up in gst_parse_launch(), so re-validate on this side of the IPC too.
+    const parsed = parseRtmpStreamPath(streamPath);
+    if (!parsed) {
+        throw new Error(`Refusing malformed RTMP stream path: ${JSON.stringify(streamPath)}`);
+    }
     let transcodePipelineString = `! flvdemux name=demux demux.audio
     ! queue
     ! aacparse
@@ -63,13 +70,12 @@ function getRTMPPipeline(streamPath) {
     ! audio/x-raw,format=S16LE,channels=1
     ! appsink name=sink sync=false drop=false
     `;
-    return `rtmpsrc location=rtmp://127.0.0.1:${process.env.STREAMING_RTMP_TCP_PORT}${streamPath} ${transcodePipelineString}`;
+    return `rtmpsrc location=rtmp://127.0.0.1:${process.env.STREAMING_RTMP_TCP_PORT}${parsed.safePath} ${transcodePipelineString}`;
 }
 
 function initializeWorker(streamPath) {
-    const transcodePipelineString = streamPath ? getRTMPPipeline(streamPath) : getGenericPipeline();
-
     try {
+        const transcodePipelineString = streamPath ? getRTMPPipeline(streamPath) : getGenericPipeline();
         pipeline = new gstreamer.Pipeline(transcodePipelineString); // Initialize pipeline
     } catch (error) {
         process.send({ type: 'error', error: `Pipeline initialization error: ${error.message}` });

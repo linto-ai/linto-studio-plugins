@@ -3,6 +3,7 @@ const EventEmitter = require('eventemitter3');
 const NodeMediaServer = require('node-media-server');
 const logger = require('../../../logger')
 const path = require('path');
+const { parseRtmpStreamPath } = require('./streamPath');
 
 const {
     STREAMING_HOST,
@@ -106,11 +107,16 @@ class MultiplexedRTMPServer extends EventEmitter {
   }
 
   async validateStream(streamPath) {
-    const [sessionId, channelIndexStr] = streamPath.split('/').filter(element => element !== "")
     logger.info(`Connection: ${streamPath} --> Validating streamId ${streamPath}`);
 
-      // Extract sessionId and channelId from streamId
-      const channelIndex = parseInt(channelIndexStr, 10);
+      // Strict shape check first: the raw path is publisher-controlled and is
+      // never forwarded as-is (see streamPath.js).
+      const parsed = parseRtmpStreamPath(streamPath);
+      if (!parsed) {
+          logger.warn(`Connection: ${streamPath} --> malformed stream path, expected /<sessionId>/<channelIndex>. Rejecting.`);
+          return { isValid: false };
+      }
+      const { sessionId, channelIndex, safePath } = parsed;
       const session = this.sessions.find(s => s.id === sessionId);
       // Validate session
       if (!session) {
@@ -153,7 +159,12 @@ class MultiplexedRTMPServer extends EventEmitter {
       }
 
       logger.info(`Connection: ${streamPath} --> session ${sessionId}, channel ${channelId} is valid. Booting worker.`);
-      return { isValid: true, session, channel, needsLocalCleanup };
+      return { isValid: true, session, channel, needsLocalCleanup, safePath };
+  }
+
+  // Isolated so tests can observe what the worker is told without forking.
+  spawnWorker() {
+      return fork(path.join(__dirname, '../GstreamerWorker.js'), []);
   }
 
   async onConnection(nmsSessionId, streamPath) {
@@ -165,7 +176,7 @@ class MultiplexedRTMPServer extends EventEmitter {
           return;
       }
 
-      const { channel, session, needsLocalCleanup } = validation;
+      const { channel, session, needsLocalCleanup, safePath } = validation;
 
       this.pendingChannels.add(channel.id);
       try {
@@ -178,9 +189,10 @@ class MultiplexedRTMPServer extends EventEmitter {
           }
 
           const fd = { channel, session };
-          const worker = fork(path.join(__dirname, '../GstreamerWorker.js'), []);
+          const worker = this.spawnWorker();
           this.workers[nmsSessionId] = [fd, worker];
-          worker.send({ type: 'init', streamPath: streamPath });
+          // Canonical path rebuilt from the validated parts, never the raw one.
+          worker.send({ type: 'init', streamPath: safePath });
           this.handleWorkerEvents(nmsSessionId, fd, worker);
           this.emit('session-start', fd.session, fd.channel);
           this.addRunningSession(session, nmsSessionId, fd, worker);

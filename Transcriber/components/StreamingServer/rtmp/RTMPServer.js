@@ -4,6 +4,7 @@ const NodeMediaServer = require('node-media-server');
 const logger = require('../../../logger')
 const path = require('path');
 const { parseRtmpStreamPath } = require('./streamPath');
+const { findSessionByPrivateId } = require('../streamId');
 
 const {
     STREAMING_HOST,
@@ -113,16 +114,17 @@ class MultiplexedRTMPServer extends EventEmitter {
       // never forwarded as-is (see streamPath.js).
       const parsed = parseRtmpStreamPath(streamPath);
       if (!parsed) {
-          logger.warn(`Connection: ${streamPath} --> malformed stream path, expected /<sessionId>/<channelIndex>. Rejecting.`);
+          logger.warn(`Connection: ${streamPath} --> malformed stream path, expected /<privateId>/<channelIndex>. Rejecting.`);
           return { isValid: false };
       }
-      const { sessionId, channelIndex, safePath } = parsed;
-      const session = this.sessions.find(s => s.id === sessionId);
-      // Validate session
+      const { privateId, channelIndex, safePath } = parsed;
+      // Resolve by the session's PRIVATE id only (see ../streamId.js)
+      const session = findSessionByPrivateId(this.sessions, privateId);
       if (!session) {
-          logger.warn(`Connection: ${streamPath} --> session ${sessionId} not found.`);
+          logger.warn(`Connection: ${streamPath} --> no session with this private id.`);
           return { isValid: false };
       }
+      const sessionId = session.id;
       // Find channel by "id" key (do not rely on position in array that changes upon updates)
       const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
       const channel = sortedChannels[channelIndex];

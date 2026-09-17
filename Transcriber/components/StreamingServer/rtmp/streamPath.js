@@ -7,18 +7,19 @@
 // so a publisher owning a valid session id could append ` ! filesrc … ! filesink …`
 // and instantiate arbitrary GStreamer elements inside the transcriber pod.
 //
-// The only shape we ever accept is `/<sessionId>/<channelIndex>`; anything else
-// is rejected before validation, and the worker is always given the canonical
-// path rebuilt from the parsed parts — never the raw publisher-controlled string.
+// The only shape we ever accept is `/<sessionPrivateId>/<channelIndex>` (see
+// ../streamId.js); anything else is rejected before validation, and the worker
+// is always given the canonical path rebuilt from the parsed parts — never the
+// raw publisher-controlled string.
 const STREAM_PATH_RE = /^\/([A-Za-z0-9-]{1,64})\/(\d{1,4})$/;
 
 function parseRtmpStreamPath(streamPath) {
     if (typeof streamPath !== 'string') return null;
     const match = STREAM_PATH_RE.exec(streamPath);
     if (!match) return null;
-    const sessionId = match[1];
+    const privateId = match[1];
     const channelIndex = parseInt(match[2], 10);
-    return { sessionId, channelIndex, safePath: `/${sessionId}/${channelIndex}` };
+    return { privateId, channelIndex, safePath: `/${privateId}/${channelIndex}` };
 }
 
 module.exports = { parseRtmpStreamPath, STREAM_PATH_RE };

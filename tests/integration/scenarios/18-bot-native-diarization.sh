@@ -36,7 +36,7 @@ fail() { harness::err "FAIL: $*"; exit 1; }
 stream_ws_bot() {
     local session_id="$1" channel_index="${2:-0}" audio="$3" participants="${4:-u1:Alice,u2:Bob}"
     local helper="${HARNESS_LIB_DIR}/ws-stream-bot.js"
-    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/${session_id},${channel_index}"
+    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/$(harness::stream_id "${session_id}" "${channel_index}")"
     harness::log "stream_ws_bot: ${audio} -> ${url}"
     ( ffmpeg -hide_banner -loglevel error -re -i "${audio}" -ar 16000 -ac 1 -f s16le pipe:1 \
         | node "${helper}" "${url}" "${participants}" 1200 ) >/dev/null 2>&1 &

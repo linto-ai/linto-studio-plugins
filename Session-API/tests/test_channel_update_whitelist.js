@@ -59,7 +59,7 @@ describe('PUT /sessions/:id channel column whitelist', () => {
         channelUpdates = [];
         const currentChannel = { id: CHANNEL_ID, sessionId: SESSION_ID, transcriberProfileId: null, name: 'old' };
         const sessionRow = {
-            id: SESSION_ID, status: 'ready', startTime: null, meta: null,
+            id: SESSION_ID, privateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', status: 'ready', startTime: null, meta: null,
             channels: [{ ...currentChannel, setDataValue() {} }],
         };
         mockModel = {

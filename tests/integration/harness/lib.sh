@@ -716,6 +716,38 @@ harness::stop_session() {
 # All streaming helpers run in the background and return the PID on stdout
 # (also stored in _HARNESS_BG_PIDS so harness::down kills them).
 
+# harness::stream_id SESSION_ID CHANNEL_INDEX -> "<privateId>,<channelIndex>"
+#
+# Streams are addressed by the session's PRIVATE id, which the API only exposes
+# inside the channels' streamEndpoints (see
+# Transcriber/components/StreamingServer/streamId.js); the public session id is
+# refused on a stream. Read the id back from the session rather than rebuilding
+# it by hand. Falls back to the bare "sessionId,channelIndex" if the session
+# cannot be read (the stream will then be refused, which is the point).
+harness::stream_id() {
+    local session_id="$1"
+    local channel_index="${2:-0}"
+    local body id
+    body=$(harness::get "/sessions/${session_id}" 2>/dev/null) || body=""
+    id=$(jq -r --argjson i "${channel_index}" '
+        (.channels[$i].streamEndpoints // {}) as $e
+        | ($e.ws // "" | split("/") | last) as $ws
+        | if ($ws | length) > 0 then $ws
+          else (($e.srt // "") | (capture("streamid=(?<id>[^&]+)") | .id) // "") end
+    ' <<< "${body}" 2>/dev/null || true)
+    if [[ -z "${id}" || "${id}" == "null" ]]; then
+        id="${session_id},${channel_index}"
+    fi
+    echo "${id}"
+}
+
+# harness::rtmp_path SESSION_ID CHANNEL_INDEX -> "/<privateId>/<channelIndex>"
+harness::rtmp_path() {
+    local id
+    id=$(harness::stream_id "$1" "${2:-0}")
+    echo "/${id//,//}"
+}
+
 # harness::stream_srt SESSION_ID CHANNEL_INDEX AUDIO_FILE [DURATION]
 harness::stream_srt() {
     local session_id="$1"
@@ -723,7 +755,7 @@ harness::stream_srt() {
     local audio="$3"
     local duration="${4:-0}"   # 0 = play full file
 
-    local uri="srt://${HARNESS_SRT_HOST}:${HARNESS_SRT_PORT}?streamid=${session_id},${channel_index}&passphrase=${HARNESS_STREAMING_PASSPHRASE}"
+    local uri="srt://${HARNESS_SRT_HOST}:${HARNESS_SRT_PORT}?streamid=$(harness::stream_id "${session_id}" "${channel_index}")&passphrase=${HARNESS_STREAMING_PASSPHRASE}"
     harness::log "stream_srt: ${audio} -> ${uri}"
     local cmd=(gst-launch-1.0 -q
         filesrc "location=${audio}"
@@ -759,7 +791,7 @@ harness::stream_srt_loop() {
     local _ignored_audio="${3:-}"
     local duration="${4:-0}"
 
-    local uri="srt://${HARNESS_SRT_HOST}:${HARNESS_SRT_PORT}?streamid=${session_id},${channel_index}&passphrase=${HARNESS_STREAMING_PASSPHRASE}"
+    local uri="srt://${HARNESS_SRT_HOST}:${HARNESS_SRT_PORT}?streamid=$(harness::stream_id "${session_id}" "${channel_index}")&passphrase=${HARNESS_STREAMING_PASSPHRASE}"
     harness::log "stream_srt_loop (audiotestsrc) -> ${uri}"
     local cmd=(gst-launch-1.0 -q
         audiotestsrc "is-live=true" "wave=sine" "freq=440"
@@ -787,7 +819,7 @@ harness::stream_rtmp() {
     local audio="$3"
     local duration="${4:-0}"
 
-    local uri="rtmp://${HARNESS_RTMP_HOST}:${HARNESS_RTMP_PORT}/${session_id}/${channel_index}"
+    local uri="rtmp://${HARNESS_RTMP_HOST}:${HARNESS_RTMP_PORT}$(harness::rtmp_path "${session_id}" "${channel_index}")"
     harness::log "stream_rtmp: ${audio} -> ${uri}"
     ffmpeg -hide_banner -loglevel error -re -i "${audio}" \
         -ar 16000 -ac 1 -c:a aac -f flv "${uri}" >/dev/null 2>&1 &
@@ -815,7 +847,7 @@ harness::stream_rtmp_loop() {
     local _ignored_audio="${3:-}"
     local duration="${4:-0}"
 
-    local uri="rtmp://${HARNESS_RTMP_HOST}:${HARNESS_RTMP_PORT}/${session_id}/${channel_index}"
+    local uri="rtmp://${HARNESS_RTMP_HOST}:${HARNESS_RTMP_PORT}$(harness::rtmp_path "${session_id}" "${channel_index}")"
     harness::log "stream_rtmp_loop (lavfi sine) -> ${uri}"
     # duration=0 in lavfi sine means infinite. AAC + FLV is the canonical
     # RTMP container expected by the transcriber's rtmp ingress.
@@ -841,7 +873,7 @@ harness::stream_ws() {
     local duration="${4:-0}"
 
     local helper="${HARNESS_LIB_DIR}/ws-stream.js"
-    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/${session_id},${channel_index}"
+    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/$(harness::stream_id "${session_id}" "${channel_index}")"
     harness::log "stream_ws: ${audio} -> ${url}"
 
     # Convert/decode anything to s16le mono 16k via ffmpeg, pipe to node which
@@ -874,7 +906,7 @@ harness::stream_ws_loop() {
     local duration="${4:-0}"
 
     local helper="${HARNESS_LIB_DIR}/ws-stream.js"
-    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/${session_id},${channel_index}"
+    local url="ws://${HARNESS_WS_HOST}:${HARNESS_WS_PORT}/${HARNESS_WS_ENDPOINT}/$(harness::stream_id "${session_id}" "${channel_index}")"
     harness::log "stream_ws_loop (lavfi sine) -> ${url}"
 
     # duration=0 in lavfi sine means infinite. ffmpeg outputs raw s16le mono

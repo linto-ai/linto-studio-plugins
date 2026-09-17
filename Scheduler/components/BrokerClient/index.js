@@ -287,12 +287,14 @@ class BrokerClient extends Component {
   // session (sessions are broadcast on system/out/sessions/statuses), so we
   // target the transcriber service by name (load-balanced) rather than a
   // specific replica's hostname.
-  buildTranscriberWsUrl(sessionId, channelIndex) {
+  // `sessionPrivateId` is the session's PRIVATE id: the only id the Transcriber
+  // accepts on a stream (see Transcriber/components/StreamingServer/streamId.js).
+  buildTranscriberWsUrl(sessionPrivateId, channelIndex) {
     const host = process.env.STREAMING_WS_BOT_HOST || 'transcriber';
     const port = process.env.STREAMING_WS_TCP_PORT || '8080';
     const endpoint = process.env.STREAMING_WS_ENDPOINT || 'transcriber-ws';
     const proto = (process.env.STREAMING_WS_SECURE && process.env.STREAMING_WS_SECURE !== 'false') ? 'wss' : 'ws';
-    return `${proto}://${host}:${port}/${endpoint}/${sessionId},${channelIndex}`;
+    return `${proto}://${host}:${port}/${endpoint}/${sessionPrivateId},${channelIndex}`;
   }
 
   // Read the ordered provider fallback for `provider` from the environment.
@@ -490,6 +492,15 @@ class BrokerClient extends Component {
     const channelIndex = channels.findIndex(c => c.id === bot.channelId);
     if (channelIndex < 0) { logger.error(`Channel ${bot.channelId} not in session ${session.id} for bot ${botId}`); return null; }
     const channel = channels[channelIndex];
+    // The Transcriber only accepts the session's PRIVATE id on a stream. The
+    // column is NOT NULL after the migration; if it is somehow missing, say so
+    // loudly and fall back to the public id, which the Transcriber will refuse
+    // (visible in its logs) rather than silently dispatching nothing.
+    let streamSessionId = session.privateId;
+    if (!streamSessionId) {
+      logger.error(`Session ${session.id} has no privateId (migration not applied?): the stream URL for bot ${botId} will be refused by the Transcriber`);
+      streamSessionId = session.id;
+    }
 
     return {
       session,
@@ -499,7 +510,7 @@ class BrokerClient extends Component {
       enableDisplaySub: bot.enableDisplaySub,
       subSource: bot.subSource,
       botId: bot.id,
-      websocketUrl: this.buildTranscriberWsUrl(session.id, channelIndex)
+      websocketUrl: this.buildTranscriberWsUrl(streamSessionId, channelIndex)
     };
   }
 
@@ -926,7 +937,7 @@ class BrokerClient extends Component {
 
   async publishSessions() {
     const sessions = await Model.Session.findAll({
-      attributes: ['id', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'name', 'organizationId', 'visibility'],
+      attributes: ['id', 'privateId', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'name', 'organizationId', 'visibility'],
       where: { status: ['active', 'ready', 'paused'] },
       include: [
         {

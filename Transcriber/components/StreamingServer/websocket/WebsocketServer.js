@@ -3,6 +3,7 @@ const EventEmitter = require('eventemitter3');
 const path = require('path');
 const WebSocket = require('ws');
 const logger = require('../../../logger')
+const { parseStreamId, findSessionByPrivateId } = require('../streamId');
 const SpeakerTracker = require('../SpeakerTracker');
 
 const {
@@ -166,15 +167,19 @@ class MultiplexedWebsocketServer extends EventEmitter {
     const streamId = this.stripStreamPrefix(req.url.substring(1))
     logger.info(`Connection: ${req.url} --> Validating streamId ${streamId}`);
 
-      // Extract sessionId and channelId from streamId
-      const [sessionId, channelIndexStr] = streamId.split(",");
-      const channelIndex = parseInt(channelIndexStr, 10);
-      const session = this.sessions.find(s => s.id === sessionId);
-      // Validate session
-      if (!session) {
-          logger.warn(`Connection: ${req.url} --> session ${sessionId} not found.`);
+      // Extract the session PRIVATE id and channel index from streamId (see ../streamId.js)
+      const parsed = parseStreamId(streamId);
+      if (!parsed) {
+          logger.warn(`Connection: ${req.url} --> malformed streamId ${streamId}, expected <privateId>,<channelIndex>. Rejecting.`);
           return { isValid: false };
       }
+      const { privateId, channelIndex } = parsed;
+      const session = findSessionByPrivateId(this.sessions, privateId);
+      if (!session) {
+          logger.warn(`Connection: ${req.url} --> no session with this private id.`);
+          return { isValid: false };
+      }
+      const sessionId = session.id;
       // Find channel by "id" key (do not rely on position in array that changes upon updates)
       const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
       const channel = sortedChannels[channelIndex];

@@ -8,9 +8,36 @@ The Transcriber accepts audio over three streaming protocols. They have **intent
 
 | Protocol | Transport | Default port | Stream identifier |
 |---|---|---|---|
-| **SRT** | UDP (connection-oriented overlay) | 8889 | `streamid=sessionId,channelIndex` |
-| **RTMP** | TCP (via `node-media-server`) | 1935 | path `/{sessionId}/{channelIndex}` |
-| **WebSocket** | TCP | 8890 | URL `ws://host:8890/{sessionId},{channelIndex}` + `init` JSON message |
+| **SRT** | UDP (connection-oriented overlay) | 8889 | `streamid=sessionPrivateId,channelIndex` |
+| **RTMP** | TCP (via `node-media-server`) | 1935 | path `/{sessionPrivateId}/{channelIndex}` |
+| **WebSocket** | TCP | 8890 | URL `ws://host:8890/{sessionPrivateId},{channelIndex}` + `init` JSON message |
+
+## Private session id on streams
+
+The public session id is the key of every Studio URL, is returned by the public
+session API (even behind an alias) and is listed to every member of the
+organization: anyone watching a live session knows it. It therefore cannot
+authenticate a stream, and it is **never accepted** on one.
+
+- Every session carries a second UUID, `session.privateId`. Session-API mints it at
+  creation and builds every `streamEndpoints` URL from it, as shown above. The API
+  never returns the column itself: senders only get it through `streamEndpoints`,
+  which Studio already hides on public sessions and only shows to Meeting Managers.
+- The Scheduler broadcasts `privateId` with the session in
+  `system/out/sessions/statuses`, and puts it in the `websocketUrl` handed to bots.
+- The three streaming servers parse `<privateId>,<channelIndex>` strictly and resolve
+  the session by `privateId` in the broadcast list
+  (`Transcriber/components/StreamingServer/streamId.js`). Everything else (MQTT
+  topics, events, DB rows, Studio) keeps using the public id.
+- Replacing an already-running connection is still allowed (reconnect without instance
+  affinity, see `production-topology.md`), but only with the private id.
+- The migration backfills `privateId` on existing sessions and rewrites their stored
+  `streamEndpoints`, so there is no legacy acceptance path: an endpoint copied before
+  the migration must be copied again from Studio.
+
+The RTMP path is additionally validated against a strict grammar before it reaches the
+GStreamer pipeline (`rtmp/streamPath.js`); anything else is refused.
+
 
 Pipeline: `Audio Source → [SRT|RTMP|WebSocket] → GStreamer Worker → PCM S16LE 16kHz mono → ASR Provider → MQTT`
 

@@ -79,6 +79,7 @@ let stored;
 function sessionRow() {
     return {
         id: 'sess-1',
+        privateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         name: stored.name,
         status: 'ready',
         startTime: null,

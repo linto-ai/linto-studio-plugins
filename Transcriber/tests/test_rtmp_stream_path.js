@@ -10,11 +10,14 @@ const path = require('path');
 const { parseRtmpStreamPath } = require('../components/StreamingServer/rtmp/streamPath');
 const MultiplexedRTMPServer = require(path.resolve(__dirname, '../components/StreamingServer/rtmp/RTMPServer.js'));
 
+// Streams are addressed by the session's PRIVATE id (see streamId.js); the
+// fixture uses it as the path segment.
 const SESSION_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 
 function fakeSessions() {
     return [{
-        id: SESSION_ID,
+        id: 'public-id-not-used-on-streams',
+        privateId: SESSION_ID,
         autoStart: false,
         autoEnd: false,
         channels: [{ id: 10, streamStatus: 'inactive' }, { id: 11, streamStatus: 'inactive' }],
@@ -25,7 +28,7 @@ describe('RTMP stream path hardening (GStreamer pipeline injection)', () => {
     describe('parseRtmpStreamPath()', () => {
         it('accepts the canonical /<uuid>/<index> shape', () => {
             const parsed = parseRtmpStreamPath(`/${SESSION_ID}/1`);
-            assert.deepStrictEqual(parsed, { sessionId: SESSION_ID, channelIndex: 1, safePath: `/${SESSION_ID}/1` });
+            assert.deepStrictEqual(parsed, { privateId: SESSION_ID, channelIndex: 1, safePath: `/${SESSION_ID}/1` });
         });
 
         it('rejects a path smuggling GStreamer elements after the channel index', () => {

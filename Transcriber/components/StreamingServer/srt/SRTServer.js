@@ -3,6 +3,7 @@ const { SRT, SRTServer, AsyncSRT } = require("linto-node-srt");
 const { fork } = require('child_process');
 const path = require('path');
 const logger = require('../../../logger')
+const { parseStreamId, findSessionByPrivateId } = require('../streamId');
 
 const {
     STREAMING_PASSPHRASE,
@@ -146,15 +147,19 @@ class MultiplexedSRTServer extends EventEmitter {
         const streamId = await this.asyncSrtHelper.getSockOpt(connection.fd, SRT.SRTO_STREAMID);
         logger.info(`Connection: ${connection.fd} --> Validating streamId ${streamId}`);
 
-        // Extract sessionId and channelId from streamId
-        const [sessionId, channelIndexStr] = streamId.split(",");
-        const channelIndex = parseInt(channelIndexStr, 10);
-        const session = this.sessions.find(s => s.id === sessionId);
-        // Validate session
-        if (!session) {
-            logger.warn(`Connection: ${connection.fd} --> session ${sessionId} not found.`);
+        // Extract the session PRIVATE id and channel index from streamId (see ../streamId.js)
+        const parsed = parseStreamId(streamId);
+        if (!parsed) {
+            logger.warn(`Connection: ${connection.fd} --> malformed streamId ${streamId}, expected <privateId>,<channelIndex>. Rejecting.`);
             return { isValid: false };
         }
+        const { privateId, channelIndex } = parsed;
+        const session = findSessionByPrivateId(this.sessions, privateId);
+        if (!session) {
+            logger.warn(`Connection: ${connection.fd} --> no session with this private id.`);
+            return { isValid: false };
+        }
+        const sessionId = session.id;
         // Find channel by index in array, it is recomputed at each update and ordered by id and starting at 0
         const sortedChannels = session.channels.sort((a, b) => a.id - b.id);
         const channel = sortedChannels[channelIndex];

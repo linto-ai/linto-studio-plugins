@@ -19,7 +19,20 @@ function pickAllowedChannelFields(channel) {
     );
 }
 
-function getEndpoints(sessionId, channelId) {
+// Session ids are public by design (Studio URLs, public session API, org
+// listings), so a stream is identified by the session's PRIVATE id instead
+// (Transcriber/components/StreamingServer/streamId.js). `privateId` never
+// leaves the API except embedded in the channels' streamEndpoints, which Studio
+// already hides on public sessions.
+const SESSION_EXCLUDED_ATTRIBUTES = ['privateId'];
+const CHANNEL_EXCLUDED_ATTRIBUTES = ['sessionId'];
+
+function newPrivateId() {
+    return require('crypto').randomUUID();
+}
+
+function getEndpoints(sessionPrivateId, channelId) {
+    const sessionId = sessionPrivateId;
     const {
         STREAMING_PASSPHRASE,
         STREAMING_SRT_MODE,
@@ -87,7 +100,15 @@ async function getSessionChannelIds(sessionId, transaction) {
     return channels.map(c => c.id);
 }
 
-async function setChannelsEndpoints(sessionId, transaction) {
+// `session` is the Session instance (it carries privateId). A row that somehow
+// has none (migration not applied) gets one here so its endpoints stay valid.
+async function setChannelsEndpoints(session, transaction) {
+    const sessionId = session.id;
+    let privateId = session.privateId;
+    if (!privateId) {
+        privateId = newPrivateId();
+        await session.update({ privateId }, { transaction });
+    }
     const channels = await Model.Channel.findAll({
         where: {
             sessionId
@@ -99,7 +120,7 @@ async function setChannelsEndpoints(sessionId, transaction) {
 
     for (const [index, channel] of channels.entries()) {
         await Model.Channel.update({
-            streamEndpoints: getEndpoints(sessionId, index),
+            streamEndpoints: getEndpoints(privateId, index),
         }, {
             transaction,
             where: {
@@ -122,10 +143,11 @@ async function setChannelsEndpoints(sessionId, transaction) {
 // @returns {Promise<object|null>} scrubbed plain session, or null when not found
 async function getSessionResult(sessionId, withCaptions=false) {
     const session = await Model.Session.findByPk(sessionId, {
+        attributes: { exclude: SESSION_EXCLUDED_ATTRIBUTES },
         include: {
             model: Model.Channel,
             attributes: {
-                exclude: ['sessionId']
+                exclude: CHANNEL_EXCLUDED_ATTRIBUTES
             },
         },
         order: [[Model.Channel, 'id', 'ASC']]
@@ -298,7 +320,7 @@ module.exports = (webserver) => {
 
                 const channel = await Model.Channel.findOne({
                     where: { id: channelId, sessionId },
-                    attributes: { exclude: ['sessionId'] }
+                    attributes: { exclude: CHANNEL_EXCLUDED_ATTRIBUTES }
                 });
                 if (!channel) {
                     return res.status(404).json({ error: 'Channel not found' });
@@ -387,10 +409,11 @@ module.exports = (webserver) => {
                     limit: limit,
                     offset: offset,
                     distinct: true,
+                    attributes: { exclude: SESSION_EXCLUDED_ATTRIBUTES },
                     include: {
                         model: Model.Channel,
                         attributes: {
-                            exclude: ['sessionId']
+                            exclude: CHANNEL_EXCLUDED_ATTRIBUTES
                         },
                     },
                     where: where,
@@ -424,6 +447,7 @@ module.exports = (webserver) => {
             const transaction = await Model.sequelize.transaction();
             try {
                 session = await Model.Session.create({
+                    privateId: newPrivateId(),
                     status: req.body.scheduleOn ? 'on_schedule' : 'ready',
                     name: req.body.name || `New session ${new Date().toISOString()}`,
                     startTime: null,
@@ -468,7 +492,7 @@ module.exports = (webserver) => {
                         meta: channel.meta
                     }, { transaction });
                 }
-                await setChannelsEndpoints(session.id, transaction);
+                await setChannelsEndpoints(session, transaction);
                 await transaction.commit();
 
                 // return the session with channels
@@ -635,7 +659,7 @@ module.exports = (webserver) => {
                     }, { transaction });
                 }
 
-                await setChannelsEndpoints(session.id, transaction);
+                await setChannelsEndpoints(session, transaction);
                 await transaction.commit();
 
                 // return the session with channels

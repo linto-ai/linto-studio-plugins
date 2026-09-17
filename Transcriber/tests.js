@@ -36,6 +36,7 @@ require('./tests/test_perstream_mixed_frames.js');
 require('./tests/test_perstream_recording.js');
 require('./tests/test_perstream_timeline.js');
 require('./tests/test_rtmp_stream_path.js');
+require('./tests/test_private_session_id.js');
 
 
 describe('CircularBuffer', () => {

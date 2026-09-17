@@ -8,6 +8,7 @@ In production, the **Transcriber service is horizontally scaled behind a load ba
 |---|---|
 | Affinity *within* a stream | A stream (one TCP connection for RTMP/WS, one SRT flow identified by 4-tuple) is pinned to a single Transcriber instance for its entire duration. Subsequent packets — including UDP/SRT packets that have no transport-level connection — are routed to the same instance. |
 | Affinity *across* a reconnect | **None.** On stream interruption (network glitch, client restart, SRT 5 s inactivity tear-down, RTMP/WS TCP FIN/RST), the LB treats the next stream attempt as a new flow and may route it to a **different** Transcriber instance. |
+| Authentication | A stream is addressed by the session's **private** id (`session.privateId`, only exposed inside `streamEndpoints`, broadcast with the session list); the public session id is refused. See `streaming-protocols.md`. Reconnects replace the running connection only with the private id. |
 | Parallelism | Only one Transcriber serves a given `(sessionId, channelIndex)` at a time. The application makes no provision for two instances driving the same channel concurrently (see "Race window" below). |
 
 The UDP affinity is what makes SRT survive across the LB. Without it, every SRT packet could land on a different instance and the GStreamer pipeline would never assemble. **Do not change LB configuration without preserving this guarantee.**

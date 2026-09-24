@@ -220,7 +220,7 @@ class ASR extends eventEmitter {
       else {
         this.logger.info(`Starting ${channel.transcriberProfile.config.type} ASR`);
         const backend = loadAsr(channel.transcriberProfile.config.type);
-        this.provider = new backend(this.session, this.channel);
+        this.provider = new backend(this.session, this._providerChannel());
       }
       this.state = ASR.states.CONNECTING;
       this.handleASREvents();
@@ -230,6 +230,38 @@ class ASR extends eventEmitter {
       this.state = ASR.states.ERROR;
       this.emit('error', error);
     }
+  }
+
+  // Whether the speaker label comes from the meeting rather than from the ASR
+  // provider: mixed native diarization (bot-fed SpeakerTracker) or per-stream
+  // (one sub-ASR per participant, identified by the shared segment allocator
+  // and/or a known participant id/name — K6 can leave id and name null at
+  // construction, the allocator is always there). In both cases
+  // _applyNativeSpeaker overwrites the provider's locutor on every result.
+  _speakerFromMeeting() {
+    if (this.participantId || this.participantName || this.segmentAllocator) return true;
+    return this.diarizationMode === 'native' && !!this.speakerTracker;
+  }
+
+  // Channel handed to the provider. When the speaker comes from the meeting,
+  // provider-side diarization is pointless (its label is overwritten) and, on
+  // Microsoft with translations, harmful: diarization + translation selects the
+  // DUAL mode (ConversationTranscriber + TranslationRecognizer) whose two
+  // recognizers segment the audio independently. On overlapping speech the
+  // primary cuts per voice while the secondary keeps one A+B utterance, so its
+  // translation lands on the last primary segment and bleeds into the next one
+  // (duplicated translations). Forcing diarization off yields ONE recognizer
+  // (a TranslationRecognizer when translations are set) whose results carry
+  // the original text AND the translations together, hence one segmentId.
+  // Shallow copy: the session/channel object itself is never mutated. Legacy
+  // (non-bot) channels get the original object, byte-for-byte.
+  _providerChannel() {
+    const channel = this.channel;
+    if (channel && channel.diarization && this._speakerFromMeeting()) {
+      this.logger.info('Speaker comes from the meeting: provider diarization disabled (single recognizer)');
+      return { ...channel, diarization: false };
+    }
+    return channel;
   }
 
   // Resolve the segmentId a result belongs to. Primary (or untagged) results
@@ -268,7 +300,7 @@ class ASR extends eventEmitter {
   // SpeakerTracker, overriding any provider-supplied locutor. The display name
   // is preferred (real meeting participant) and falls back to the id. No-op for
   // ordinary (non-bot) streams where speakerTracker is null.
-  _applyNativeSpeaker(transcription) {
+  _applyNativeSpeaker(transcription, isFinal = false) {
     // Per-stream: this ASR decodes exactly one participant's stream, so the
     // speaker IS that participant — assign it directly and skip the
     // SpeakerTracker guessing path entirely. We may know the participant by id
@@ -287,9 +319,14 @@ class ASR extends eventEmitter {
     // Only the canonical PRIMARY result owns the assignment; a dual-recognizer
     // secondary (isPrimary===false) reads it read-only so it inherits the
     // primary's speaker instead of re-deriving it from the (possibly changed)
-    // current speaker.
+    // current speaker. A primary partial opens/refreshes the segment (its label
+    // follows the current speaker); a primary final closes it on the speaker
+    // with the most speaking time during the segment.
     if (transcription.isPrimary !== false) {
       this.speakerTracker.assignSpeakerToSegment(transcription.segmentId);
+      if (isFinal && typeof this.speakerTracker.finalizeSegment === 'function') {
+        this.speakerTracker.finalizeSegment(transcription.segmentId);
+      }
     }
     const speaker = this.speakerTracker.getSpeakerForSegment(transcription.segmentId);
     if (speaker) {
@@ -531,7 +568,7 @@ class ASR extends eventEmitter {
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
         transcription.segmentId = this._segmentIdFor(transcription);
-        this._applyNativeSpeaker(transcription);
+        this._applyNativeSpeaker(transcription, true);
         this._applyTimeline(transcription);
         this.emit('final', transcription);
         // Origin-tagging for the Microsoft dual recognizer (diarization +

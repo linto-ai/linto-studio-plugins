@@ -18,6 +18,8 @@
 const assert = require('assert');
 const { describe, it, before, after } = require('mocha');
 const { setupMocks, fromTranscriber } = require('./helpers/asr_mocks');
+// Real tracker, loaded with the real live-srt-lib (before the mocks are set up).
+const SpeakerTracker = require('../components/StreamingServer/SpeakerTracker');
 
 const ASR_MOCK_OPTS = {
     invalidate: [fromTranscriber('ASR/index.js'), fromTranscriber('ASR/fake/index.js')],
@@ -534,6 +536,106 @@ describe('ASR native diarization + secret redaction', () => {
             // segment — no older segment is re-cleared and no double-clears.
             assert.deepStrictEqual(tracker.clearCalls, [segs[0], segs[1], segs[2]]);
             assert.ok(!tracker.clearCalls.includes(segs[3]), 'most recent segment is retained');
+        });
+    });
+
+    // -------- B1: meeting-sourced speaker disables provider diarization --
+
+    describe('provider channel when the speaker comes from the meeting', () => {
+        const fakePath = fromTranscriber('ASR/fake/index.js');
+
+        // Build an ASR whose provider is loaded through loadAsr('fake') (live
+        // transcripts on + a profile), with the fake class swapped for a spy
+        // that records the channel it is constructed with.
+        async function makeLiveAsr(options, channelOverrides) {
+            const Original = require(fakePath);
+            const seen = [];
+            class SpyTranscriber extends Original {
+                constructor(session, channel) { super(session, channel); seen.push(channel); }
+            }
+            require.cache[fakePath].exports = SpyTranscriber;
+            try {
+                const asr = await makeAsr(options, Object.assign({
+                    enableLiveTranscripts: true,
+                    transcriberProfile: { config: { type: 'fake', languages: [{ candidate: 'fr-FR' }] } },
+                }, channelOverrides));
+                return { asr, seen };
+            } finally {
+                require.cache[fakePath].exports = Original;
+            }
+        }
+
+        it('mixed native (speakerTracker): provider is built with diarization=false', async () => {
+            const { asr, seen } = await makeLiveAsr(
+                { diarizationMode: 'native', speakerTracker: new SpeakerTracker() },
+                { diarization: true, translations: ['en'] });
+            assert.strictEqual(seen.length, 1);
+            assert.strictEqual(seen[0].diarization, false, 'no provider diarization -> no MS dual mode');
+            assert.deepStrictEqual(seen[0].translations, ['en'], 'translations kept');
+            assert.strictEqual(asr.channel.diarization, true, 'session channel object not mutated');
+        });
+
+        it('per-stream sub-ASR (allocator, unknown participant yet): diarization=false', async () => {
+            const { seen } = await makeLiveAsr(
+                { segmentAllocator: { next: 1 }, record: false },
+                { diarization: true, translations: ['en'] });
+            assert.strictEqual(seen[0].diarization, false);
+        });
+
+        it('ordinary stream (no tracker): provider gets the original channel', async () => {
+            const { asr, seen } = await makeLiveAsr({}, { diarization: true, translations: ['en'] });
+            assert.strictEqual(seen[0], asr.channel, 'legacy path untouched (same object)');
+            assert.strictEqual(seen[0].diarization, true);
+        });
+
+        it("native mode announced but no tracker: provider diarization kept", async () => {
+            const { seen } = await makeLiveAsr({ diarizationMode: 'native' }, { diarization: true });
+            assert.strictEqual(seen[0].diarization, true);
+        });
+
+        it('single-recognizer results (original + translations, isPrimary) keep the native speaker', async () => {
+            const tracker = new SpeakerTracker();
+            const { asr } = await makeLiveAsr(
+                { diarizationMode: 'native', speakerTracker: tracker },
+                { diarization: true, translations: ['en'] });
+            tracker.addSpeakerChange({ speaker: { id: 'u1', name: 'Alice' } });
+            const finals = [];
+            asr.on('final', (t) => finals.push(t));
+            const seg = asr.segmentId;
+            asr.provider.emit('transcribed', {
+                text: 'bonjour', translations: { en: 'hello' }, isPrimary: true, locutor: undefined,
+            });
+            assert.strictEqual(finals.length, 1);
+            assert.strictEqual(finals[0].segmentId, seg);
+            assert.strictEqual(finals[0].locutor, 'Alice');
+            assert.deepStrictEqual(finals[0].translations, { en: 'hello' });
+        });
+    });
+
+    // -------- B2: partial label follows, final takes the majority ------
+
+    describe('native speaker with the real SpeakerTracker (partials live, final majority)', () => {
+        it('partials carry the current speaker; the final carries the majority speaker', async () => {
+            const ref = { now: 10000 };
+            const tracker = new SpeakerTracker({ gracePeriodMs: 200 });
+            tracker._now = () => ref.now;
+            const asr = await makeAsr({ diarizationMode: 'native', speakerTracker: tracker });
+            const partials = [];
+            const finals = [];
+            asr.on('partial', (t) => partials.push(t));
+            asr.on('final', (t) => finals.push(t));
+
+            tracker.addSpeakerChange({ speaker: { id: 'a', name: 'Alice' } });
+            asr.provider.emit('transcribing', { text: 'je pense' });           // A
+            ref.now += 1500;
+            tracker.addSpeakerChange({ speaker: { id: 'b', name: 'Bob' } });    // B overlaps
+            asr.provider.emit('transcribing', { text: 'je pense que oui' });   // live -> B
+            ref.now += 500;
+            asr.provider.emit('transcribed', { text: 'je pense que oui' });    // A 1500 vs B 500
+
+            assert.deepStrictEqual(partials.map((p) => p.locutor), ['Alice', 'Bob']);
+            assert.strictEqual(finals[0].locutor, 'Alice', 'final = majority speaker');
+            assert.strictEqual(finals[0].participantId, 'a');
         });
     });
 });

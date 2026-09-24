@@ -9,7 +9,8 @@ int32, clips to int16 and emits ONE mixed frame via on_frame(bytes).
 On the same tick it computes each contributing participant's RMS energy, picks
 the dominant speaker (loudest above the energy threshold) and, on a TRANSITION
 only, fires on_speaker_change({"id":…,"name":…}) — or None after a silence grace
-period. This ports BotService/bot/AudioMixer.js (the WEB bot reference) so the
+period. A change from one speaker to another is only emitted once the newcomer
+has been dominant for BOT_SPEAKER_HOLD_MS (hysteresis against overlap flapping). This ports BotService/bot/AudioMixer.js (the WEB bot reference) so the
 native Transcriber path receives the real display name instead of the provider's
 internal "Guest-N" diarization label.
 
@@ -49,6 +50,13 @@ DEFAULT_ENERGY_THRESHOLD = 300
 # (null-speaker) transition. Intra-speech pauses are 300–800 ms, so a shorter
 # grace would flap the diarization label on every breath. Matches the WEB bot.
 DEFAULT_SILENCE_GRACE_MS = 2000
+# Hysteresis on speaker CHANGES: a new dominant speaker must stay dominant this
+# long (cumulated 20 ms ticks, uninterrupted by the current speaker taking the
+# floor back) before the transition is emitted. Without it, two overlapping
+# voices of similar energy flip the label every tick and the Transcriber's
+# segments/partials inherit that noise. The FIRST speaker (from nobody) is still
+# emitted immediately. Env: BOT_SPEAKER_HOLD_MS; 0 disables the hold.
+DEFAULT_SPEAKER_HOLD_MS = 300
 
 # K4: per-participant buffer depth in 20 ms frames (~3.2 s), the JS reference's
 # `bufferFrames: 160`. Absorbs the jitter between the SFU's capture cadence and
@@ -83,6 +91,7 @@ class AudioMixer:
         silence_grace_ms: int = DEFAULT_SILENCE_GRACE_MS,
         buffer_frames: int | None = None,
         diarization: bool = True,
+        speaker_hold_ms: int | None = None,
     ) -> None:
         self.on_frame = on_frame
         self.on_speaker_change = on_speaker_change
@@ -92,6 +101,14 @@ class AudioMixer:
             )
         self.energy_threshold = energy_threshold
         self.silence_grace_ms = silence_grace_ms
+        if speaker_hold_ms is None:
+            try:
+                speaker_hold_ms = int(
+                    os.environ.get("BOT_SPEAKER_HOLD_MS", str(DEFAULT_SPEAKER_HOLD_MS))
+                )
+            except (TypeError, ValueError):
+                speaker_hold_ms = DEFAULT_SPEAKER_HOLD_MS
+        self.speaker_hold_ms = max(0, speaker_hold_ms)
         if buffer_frames is None:
             try:
                 buffer_frames = int(
@@ -117,6 +134,10 @@ class AudioMixer:
         # Native diarization state (ported from AudioMixer.js).
         self._current_speaker: dict | None = None  # {"id","name"} | None
         self._silence_ms = 0
+        # Speaker-change hysteresis: challenger to the current speaker and how
+        # long (ms) it has been dominant.
+        self._candidate: dict | None = None  # {"id","name"} | None
+        self._candidate_ms = 0
 
     def push(self, identity: str, pcm_bytes: bytes, name: str | None = None) -> None:
         buf = self.buffers.get(identity)
@@ -154,6 +175,8 @@ class AudioMixer:
         if self._current_speaker and self._current_speaker["id"] == identity:
             self._current_speaker = None
             self._silence_ms = 0
+        if self._candidate and self._candidate["id"] == identity:
+            self._reset_candidate()
 
     def clear(self) -> None:
         """Drop every buffered sample, keeping the participant names.
@@ -268,9 +291,20 @@ class AudioMixer:
 
         if dominant_id is not None:
             self._silence_ms = 0
-            if current_id != dominant_id:
-                self._current_speaker = {"id": dominant_id, "name": dominant_name}
-                self._emit_speaker(self._current_speaker)
+            if current_id == dominant_id:
+                # The current speaker holds the floor: any challenger starts over.
+                self._reset_candidate()
+                return
+            if current_id is None or self.speaker_hold_ms <= 0:
+                # Nobody was speaking (or hold disabled): switch immediately.
+                self._switch_speaker(dominant_id, dominant_name)
+                return
+            if self._candidate is None or self._candidate["id"] != dominant_id:
+                self._candidate = {"id": dominant_id, "name": dominant_name}
+                self._candidate_ms = 0
+            self._candidate_ms += FRAME_DURATION_MS
+            if self._candidate_ms >= self.speaker_hold_ms:
+                self._switch_speaker(dominant_id, dominant_name)
             return
 
         if current_id is not None:
@@ -281,7 +315,17 @@ class AudioMixer:
             if self._silence_ms >= self.silence_grace_ms and len(self.buffers) > 1:
                 self._current_speaker = None
                 self._silence_ms = 0
+                self._reset_candidate()
                 self._emit_speaker(None)
+
+    def _switch_speaker(self, speaker_id, speaker_name) -> None:
+        self._current_speaker = {"id": speaker_id, "name": speaker_name}
+        self._reset_candidate()
+        self._emit_speaker(self._current_speaker)
+
+    def _reset_candidate(self) -> None:
+        self._candidate = None
+        self._candidate_ms = 0
 
     def _emit_speaker(self, speaker: dict | None) -> None:
         if self.on_speaker_change is None:
@@ -298,4 +342,5 @@ class AudioMixer:
             self._task = None
         self._current_speaker = None
         self._silence_ms = 0
+        self._reset_candidate()
         self._carry_s = 0.0

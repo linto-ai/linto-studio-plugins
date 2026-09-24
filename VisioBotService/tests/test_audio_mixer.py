@@ -271,6 +271,69 @@ def test_rms_of_empty_pcm():
     assert rms_s16le(_tone(1000)) == 1000.0
 
 
+# --- speaker-change hysteresis (BOT_SPEAKER_HOLD_MS) ---------------------------
+def _ticks(mixer, n, loud, quiet=None):
+    """Run n ticks where `loud` dominates (5000) and `quiet` is audible but lower."""
+    for _ in range(n):
+        mixer.push(loud, _tone(5000), loud.title())
+        if quiet:
+            mixer.push(quiet, _tone(1000), quiet.title())
+        mixer._tick()
+
+
+def test_a_new_dominant_must_hold_before_the_change_is_emitted():
+    mixer, _, speakers = _mixer(speaker_hold_ms=300)
+    _ticks(mixer, 5, "alice", "bob")
+    assert speakers == [{"id": "alice", "name": "Alice"}], "first speaker is immediate"
+    _ticks(mixer, 14, "bob", "alice")  # 280 ms: not yet
+    assert len(speakers) == 1, speakers
+    _ticks(mixer, 1, "bob", "alice")  # 300 ms reached
+    assert speakers[-1] == {"id": "bob", "name": "Bob"}, speakers
+    assert len(speakers) == 2
+
+
+def test_flapping_overlap_emits_no_change():
+    mixer, _, speakers = _mixer(speaker_hold_ms=300)
+    _ticks(mixer, 1, "alice", "bob")
+    for _ in range(50):  # 2 s of alternation every 100 ms
+        _ticks(mixer, 5, "bob", "alice")
+        _ticks(mixer, 5, "alice", "bob")
+    assert speakers == [{"id": "alice", "name": "Alice"}], speakers
+
+
+def test_hold_zero_restores_the_immediate_switch():
+    mixer, _, speakers = _mixer(speaker_hold_ms=0)
+    _ticks(mixer, 1, "alice", "bob")
+    _ticks(mixer, 1, "bob", "alice")
+    assert [s["id"] for s in speakers] == ["alice", "bob"]
+
+
+def test_hold_comes_from_the_env_with_a_300_ms_default():
+    old = os.environ.pop("BOT_SPEAKER_HOLD_MS", None)
+    try:
+        assert AudioMixer(on_frame=lambda _: None).speaker_hold_ms == 300
+        os.environ["BOT_SPEAKER_HOLD_MS"] = "120"
+        assert AudioMixer(on_frame=lambda _: None).speaker_hold_ms == 120
+        os.environ["BOT_SPEAKER_HOLD_MS"] = "junk"
+        assert AudioMixer(on_frame=lambda _: None).speaker_hold_ms == 300
+    finally:
+        os.environ.pop("BOT_SPEAKER_HOLD_MS", None)
+        if old is not None:
+            os.environ["BOT_SPEAKER_HOLD_MS"] = old
+
+
+def test_a_departed_challenger_is_forgotten():
+    mixer, _, speakers = _mixer(speaker_hold_ms=300)
+    _ticks(mixer, 1, "alice", "bob")
+    _ticks(mixer, 10, "bob", "alice")  # 200 ms of challenge
+    mixer.remove_participant("bob")
+    mixer.push("bob", _tone(5000), "Bob")  # bob rejoins, starts from zero
+    mixer.push("alice", _tone(1000), "Alice")
+    mixer._tick()
+    _ticks(mixer, 5, "bob", "alice")  # 120 ms total since rejoin
+    assert len(speakers) == 1, speakers
+
+
 _TESTS = [
     test_single_participant_frame_is_passed_through_verbatim,
     test_two_participants_are_summed_and_clipped,
@@ -285,6 +348,11 @@ _TESTS = [
     test_diarization_off_produces_identical_audio_and_no_speaker_events,
     test_clear_drops_buffered_audio_on_a_role_change,
     test_rms_of_empty_pcm,
+    test_a_new_dominant_must_hold_before_the_change_is_emitted,
+    test_flapping_overlap_emits_no_change,
+    test_hold_zero_restores_the_immediate_switch,
+    test_hold_comes_from_the_env_with_a_300_ms_default,
+    test_a_departed_challenger_is_forgotten,
 ]
 
 

@@ -28,14 +28,21 @@ describe('SpeakerTracker (native diarization)', () => {
     assert.equal(t.lastKnownSpeaker.id, 'u1', 'lastKnownSpeaker survives silence');
   });
 
-  it('assigns the current speaker to a segment; re-assign is a no-op once locked', () => {
+  it('an open segment follows the current speaker; re-assign is a no-op once finalized', () => {
     const ref = { now: 1000 };
     const t = trackerAt(ref, { gracePeriodMs: 200 });
     t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
     t.assignSpeakerToSegment(5);
-    ref.now = 1300; // past grace -> the assignment is locked
+    ref.now = 1300; // past grace
     t.addSpeakerChange({ position: 50, speaker: { id: 'u2', name: 'Bob' } });
-    t.assignSpeakerToSegment(5); // already assigned -> no-op
+    t.assignSpeakerToSegment(5); // still partial -> live label follows u2
+    assert.equal(t.getSpeakerForSegment(5).id, 'u2', 'partial carries the current speaker');
+    ref.now = 1400;
+    t.finalizeSegment(5); // u1 300ms vs u2 100ms
+    assert.equal(t.getSpeakerForSegment(5).id, 'u1', 'final = majority');
+    ref.now = 2000;
+    t.addSpeakerChange({ position: 60, speaker: { id: 'u3', name: 'Carol' } });
+    t.assignSpeakerToSegment(5); // finalized -> frozen
     assert.equal(t.getSpeakerForSegment(5).id, 'u1');
   });
 
@@ -57,14 +64,91 @@ describe('SpeakerTracker (native diarization)', () => {
     assert.equal(t.getSpeakerForSegment(1).id, 'u2', 'corrected within grace');
   });
 
-  it('does not correct a segment after the grace period', () => {
+  it('after the grace period a change splits the segment instead of re-attributing it', () => {
     const ref = { now: 1000 };
     const t = trackerAt(ref, { gracePeriodMs: 200 });
     t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
     t.assignSpeakerToSegment(1);
     ref.now = 1300; // 300ms later, past grace
     t.addSpeakerChange({ position: 300, speaker: { id: 'u2', name: 'Bob' } });
-    assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'locked after grace');
+    assert.equal(t.getSpeakerForSegment(1).id, 'u2', 'live label follows the new speaker');
+    ref.now = 1400;
+    t.finalizeSegment(1);
+    assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'u1 kept its 300ms (no grace reset)');
+  });
+
+  it('finalizes on the speaker with the most accumulated time (overlap A then B)', () => {
+    const ref = { now: 1000 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.addSpeakerChange({ speaker: { id: 'a', name: 'A' } });
+    t.assignSpeakerToSegment(1);
+    ref.now = 1500;
+    t.addSpeakerChange({ speaker: { id: 'b', name: 'B' } });
+    t.assignSpeakerToSegment(1);
+    assert.equal(t.getSpeakerForSegment(1).id, 'b');
+    ref.now = 3000; // B speaks 1500ms vs A 500ms
+    t.finalizeSegment(1);
+    assert.equal(t.getSpeakerForSegment(1).id, 'b');
+  });
+
+  it('accumulates across alternations and ignores silence in the count', () => {
+    const ref = { now: 0 };
+    const t = trackerAt(ref, { gracePeriodMs: 200 });
+    t.addSpeakerChange({ speaker: { id: 'a' } });
+    t.assignSpeakerToSegment(1); // a from 0
+    ref.now = 400; t.addSpeakerChange({ speaker: { id: 'b' } }); // a 400
+    ref.now = 700; t.addSpeakerChange({ speaker: null }); // b 300, silence
+    ref.now = 5000; t.addSpeakerChange({ speaker: { id: 'b' } }); // silence not counted
+    ref.now = 5200; t.addSpeakerChange({ speaker: { id: 'a' } }); // b 500 total
+    ref.now = 5250;
+    t.finalizeSegment(1); // a 450 vs b 500
+    assert.equal(t.getSpeakerForSegment(1).id, 'b');
+  });
+
+  it('majority ties go to the first speaker of the segment', () => {
+    const ref = { now: 0 };
+    const t = trackerAt(ref, { gracePeriodMs: 0 });
+    t.addSpeakerChange({ speaker: { id: 'a' } });
+    t.assignSpeakerToSegment(1);
+    ref.now = 300; t.addSpeakerChange({ speaker: { id: 'b' } });
+    ref.now = 600;
+    t.finalizeSegment(1);
+    assert.equal(t.getSpeakerForSegment(1).id, 'a');
+  });
+
+  it('finalizing an unseen segment (final with no partial) opens and closes it on the current speaker', () => {
+    const t = new SpeakerTracker();
+    t.addSpeakerChange({ speaker: { id: 'u1', name: 'Alice' } });
+    t.finalizeSegment(4);
+    assert.equal(t.getSpeakerForSegment(4).id, 'u1');
+    const actions = t.getRecentEvents().map(e => e.action);
+    assert.deepEqual(actions, ['assign', 'final']);
+  });
+
+  it('majority skips a speaker who has left the meeting', () => {
+    const ref = { now: 0 };
+    const t = trackerAt(ref, { gracePeriodMs: 0 });
+    t.updateParticipant({ action: 'join', participant: { id: 'a' } });
+    t.updateParticipant({ action: 'join', participant: { id: 'b' } });
+    t.addSpeakerChange({ speaker: { id: 'a' } });
+    t.assignSpeakerToSegment(1);
+    ref.now = 1000; t.addSpeakerChange({ speaker: { id: 'b' } }); // a 1000
+    ref.now = 1200; t.updateParticipant({ action: 'leave', participant: { id: 'a' } });
+    ref.now = 1300;
+    t.finalizeSegment(1); // a departed -> b (300ms) wins
+    assert.equal(t.getSpeakerForSegment(1).id, 'b');
+  });
+
+  it('stops crediting a participant once they leave mid-segment', () => {
+    const ref = { now: 0 };
+    const t = trackerAt(ref, { gracePeriodMs: 0 });
+    t.updateParticipant({ action: 'join', participant: { id: 'a' } });
+    t.addSpeakerChange({ speaker: { id: 'a' } });
+    t.assignSpeakerToSegment(1);
+    ref.now = 100;
+    t.updateParticipant({ action: 'leave', participant: { id: 'a' } });
+    ref.now = 5000;
+    assert.equal(t.segmentSpeakers.get(1).durations.get('a').ms, 100);
   });
 
   it('clears the current/last speaker when that participant leaves', () => {
@@ -268,9 +352,14 @@ describe('SpeakerTracker (native diarization)', () => {
     t.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
     t.assignSpeakerToSegment(1);
     assert.deepEqual(t.getRecentEvents(), [], 'eventRingSize 0 keeps no events');
-    // With grace 0, a later speaker change cannot correct (now - assignedAt = 0, not < 0).
+    // With grace 0, a later speaker change is never a grace correction
+    // (now - assignedAt = 0, not < 0): it splits the segment, u1 keeps its time.
     t.addSpeakerChange({ position: 1, speaker: { id: 'u2', name: 'Bob' } });
-    assert.equal(t.getSpeakerForSegment(1).id, 'u1', 'grace 0 -> no correction');
+    ref.now = 1100;
+    t.addSpeakerChange({ position: 2, speaker: { id: 'u1', name: 'Alice' } });
+    ref.now = 1150;
+    t.finalizeSegment(1); // u2 100ms vs u1 50ms
+    assert.equal(t.getSpeakerForSegment(1).id, 'u2', 'grace 0 -> plain accumulation');
   });
 
   it('keeps only the most recent event with eventRingSize 1', () => {

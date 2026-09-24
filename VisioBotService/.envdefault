@@ -48,6 +48,11 @@ JOIN_TIMEOUT_SECONDS=120
 #   falls back to mixed.
 BOT_PERSTREAM=true
 BOT_VAD_ENERGY_THRESHOLD=300 # RMS above which a 20 ms frame counts as speech
+# Mixed mode only: a NEW dominant speaker must stay the loudest this long before the
+# speaker change is sent to the Transcriber (hysteresis). Without it, two overlapping
+# voices of similar energy flip the caption's speaker every 20 ms. The first speaker
+# after nobody is still sent immediately. 0 disables the hold (legacy behaviour).
+BOT_SPEAKER_HOLD_MS=300
 # How long a participant stays "active" after their last frame above the threshold.
 # The gated bursts are spliced end to end for the sub-ASR, so this trailing silence
 # is the ONLY thing that tells the provider an utterance is over: it must exceed the

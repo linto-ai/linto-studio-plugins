@@ -69,4 +69,31 @@ describe('validateBotUrlResolved() — DNS-aware SSRF guard', () => {
         assert.ok(/await validateBotUrlResolved\(url\)/.test(src));
         assert.ok(!/[^a-zA-Z]validateBotUrl\(url\)/.test(src), 'the sync, DNS-blind variant must not be used by the route');
     });
+
+    describe('BOT_URL_PRIVATE_HOST_ALLOWLIST (development only)', () => {
+        const privateLookup = async () => [{ address: '127.0.0.1', family: 4 }];
+        it('lets an allowlisted host that resolves privately through', async () => {
+            const err = await validateBotUrlResolved('http://127.0.0.1.nip.io:3000/room', {
+                lookup: privateLookup,
+                env: { BOT_URL_PRIVATE_HOST_ALLOWLIST: 'other.test, 127.0.0.1.NIP.IO' },
+            });
+            assert.strictEqual(err, undefined);
+        });
+        it('still rejects a host that is not in the list', async () => {
+            const err = await validateBotUrlResolved('http://internal.test/room', {
+                lookup: privateLookup,
+                env: { BOT_URL_PRIVATE_HOST_ALLOWLIST: '127.0.0.1.nip.io' },
+            });
+            assert.strictEqual(err && err.status, 400);
+        });
+        it('never exempts localhost or a literal private IP', async () => {
+            const env = { BOT_URL_PRIVATE_HOST_ALLOWLIST: 'localhost,10.0.0.1' };
+            assert.strictEqual((await validateBotUrlResolved('http://localhost/r', { lookup: privateLookup, env })).status, 400);
+            assert.strictEqual((await validateBotUrlResolved('http://10.0.0.1/r', { lookup: privateLookup, env })).status, 400);
+        });
+        it('is empty by default', async () => {
+            const err = await validateBotUrlResolved('http://127.0.0.1.nip.io/room', { lookup: privateLookup, env: {} });
+            assert.strictEqual(err && err.status, 400);
+        });
+    });
 });

@@ -173,12 +173,27 @@ function isReservedAddress(address) {
  *
  * `lookup` is injectable for tests; defaults to dns.promises.lookup({all:true}).
  */
-async function validateBotUrlResolved(url, { lookup } = {}) {
+/**
+ * Host names exempted from the DNS resolution check, from the comma-separated
+ * BOT_URL_PRIVATE_HOST_ALLOWLIST (empty by default). Development only: a local
+ * stack serves the meeting on a name that resolves to a private address (e.g.
+ * `127.0.0.1.nip.io`). Exact, case-insensitive host names; literal IPs and
+ * `localhost` stay rejected by validateBotUrl() whatever the list says.
+ */
+function privateHostAllowlist(env = process.env) {
+    return (env.BOT_URL_PRIVATE_HOST_ALLOWLIST || '')
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean);
+}
+
+async function validateBotUrlResolved(url, { lookup, env } = {}) {
     const staticError = validateBotUrl(url);
     if (staticError) return staticError;
 
     const host = new URL(url).hostname;
     if (isIpLiteral(host)) return undefined; // already classified above
+    if (privateHostAllowlist(env).includes(host.toLowerCase())) return undefined;
 
     const doLookup = lookup || ((name) => require('dns').promises.lookup(name, { all: true, verbatim: true }));
     let addresses;
@@ -205,4 +220,5 @@ module.exports = {
     isIpLiteral,
     validateBotUrl,
     validateBotUrlResolved,
+    privateHostAllowlist,
 };

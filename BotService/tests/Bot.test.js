@@ -3,6 +3,9 @@ const path = require('path')
 const { describe, it, beforeEach, afterEach } = require('mocha')
 const Bot = require('../bot')
 
+const frame = (value, n = 320) => Buffer.from(new Int16Array(n).fill(value).buffer)
+const samplesOf = (buf) => Array.from(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2))
+
 // Build a fake Playwright page that records the diagnostics handlers, init
 // scripts, routes and rule invocations so init()/execRule() can be asserted
 // without a real browser. Locator actions resolve unless told to reject.
@@ -60,10 +63,13 @@ const MANIFESTS = ['jitsi', 'bigbluebutton', 'teams', 'visio']
 
 function makeFakeMixer () {
   return {
-    added: [], removed: [], stopped: false,
-    addAudio (id, pcm, ts, name) { this.added.push({ id, name, len: pcm.length }) },
+    added: [], removed: [], removedTracks: [], attributed: new Map(), stopped: false,
+    addAudio (key, pcm) { this.added.push({ key, len: pcm.length }) },
+    setTrackParticipant (key, participant) { this.attributed.set(key, participant) },
+    removeTrack (key) { this.removedTracks.push(key) },
     removeParticipant (id) { this.removed.push(id) },
-    on () {}, start () {}, stop () { this.stopped = true }
+    trackIds () { return [...new Set([...this.added.map(a => a.key), ...this.attributed.keys()])] },
+    on () {}, stop () { this.stopped = true }
   }
 }
 
@@ -116,27 +122,35 @@ describe('Bot', () => {
     let bot, mixer
     beforeEach(() => { bot = makeBot('visio'); mixer = makeFakeMixer(); bot.audioMixer = mixer })
 
-    it('routes mapped-track audio to the mixer under the participant id', () => {
+    it('mixes each track under its own key and attributes it to its mapped participant', () => {
       bot._onParticipantMapping(0, { id: 'u1', name: 'Alice' })
       bot.handleAudioData(0, Buffer.alloc(640))
-      assert.equal(mixer.added.length, 1)
-      assert.equal(mixer.added[0].id, 'u1')
-      assert.equal(mixer.added[0].name, 'Alice')
+      assert.deepEqual(mixer.added, [{ key: 'c0:0', len: 640 }])
+      assert.deepEqual(mixer.attributed.get('c0:0'), { id: 'u1', name: 'Alice' })
     })
 
-    it('buffers early (unmapped) audio and flushes it once the mapping arrives', () => {
+    it('two tracks of one participant (mic + screen share) stay two tracks of the mix', () => {
+      bot._onParticipantMapping(0, { id: 'u1', name: 'Alice' })
+      bot._onParticipantMapping(1, { id: 'u1', name: 'Alice' })
+      bot.handleAudioData(0, Buffer.alloc(640))
+      bot.handleAudioData(1, Buffer.alloc(640))
+      assert.deepEqual(mixer.added.map(a => a.key), ['c0:0', 'c0:1'])
+      assert.equal(mixer.attributed.get('c0:1').id, 'u1')
+    })
+
+    it('mixes unmapped audio at once (no delayed early-audio flush); the mapping only attributes it', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
       bot.handleAudioData(0, Buffer.alloc(640))
-      assert.equal(mixer.added.length, 0, 'nothing mixed before mapping')
-      assert.equal(bot.earlyAudio.get('c0:0').length, 2)
+      assert.equal(mixer.added.length, 2, 'mixed in real time, before the mapping')
+      assert.equal(mixer.attributed.size, 0)
 
       let joined = null
       bot.on('participant-joined', (p) => { joined = p })
       bot._onParticipantMapping(0, { id: 'u1', name: 'Alice' })
 
-      assert.equal(mixer.added.length, 2, 'buffered frames flushed to the mixer')
+      assert.equal(mixer.added.length, 2, 'nothing replayed')
+      assert.deepEqual(mixer.attributed.get('c0:0'), { id: 'u1', name: 'Alice' })
       assert.deepEqual(joined, { identity: 'u1', name: 'Alice' })
-      assert.equal(bot.earlyAudio.has('c0:0'), false)
     })
 
     it('emits participant-left and arms the empty-meeting timer when the last one leaves', (done) => {
@@ -152,43 +166,30 @@ describe('Bot', () => {
       bot._onParticipantLeft({ id: 'u1', name: 'Alice' })
     })
 
-    it('cleans the early-audio buffer when its track is removed before any mapping', () => {
+    it('removes an unmapped track from the mixer when it ends', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
-      bot.handleAudioData(0, Buffer.alloc(640))
-      assert.equal(bot.earlyAudio.get('c0:0').length, 2)
-      assert.equal(bot.earlyAudioFirstSeen.has('c0:0'), true, 'age marker recorded')
       bot._onTrackRemoved(0)
-      assert.equal(bot.earlyAudio.has('c0:0'), false, 'early-audio dropped on track removal')
-      assert.equal(bot.earlyAudioFirstSeen.has('c0:0'), false, 'age marker dropped too (maps stay in sync)')
+      assert.deepEqual(mixer.removedTracks, ['c0:0'])
     })
 
-    it('the reaper drops stale early-audio whose track was never mapped', () => {
-      bot.handleAudioData(0, Buffer.alloc(640)) // stale: first seen "long ago"
-      bot.handleAudioData(1, Buffer.alloc(640)) // fresh: first seen "now"
-      // Backdate track 0 past the max age, leave track 1 fresh.
-      bot.earlyAudioFirstSeen.set('c0:0', Date.now() - 60000)
-      assert.notEqual(bot.earlyAudioReaper, null, 'reaper armed while early-audio is buffered')
-      bot._reapEarlyAudio() // runs the reaper body deterministically (no wall-clock wait)
-      assert.equal(bot.earlyAudio.has('c0:0'), false, 'stale track 0 reaped')
-      assert.equal(bot.earlyAudio.has('c0:1'), true, 'fresh track 1 kept')
+    it('a mapping for a removed track does not attribute it again', () => {
+      bot._onTrackRemoved(0)
+      bot._onParticipantMapping(0, { id: 'u1', name: 'Alice' })
+      assert.equal(mixer.attributed.has('c0:0'), false)
     })
 
-    it('the reaper stops itself once nothing is buffered', () => {
-      bot.handleAudioData(0, Buffer.alloc(640))
-      bot.earlyAudioFirstSeen.set('c0:0', Date.now() - 60000)
-      assert.notEqual(bot.earlyAudioReaper, null)
-      bot._reapEarlyAudio()
-      assert.equal(bot.earlyAudio.size, 0)
-      assert.equal(bot.earlyAudioReaper, null, 'reaper interval cleared when empty (no leak)')
+    it('applies the mappings received before the mixer started', () => {
+      const early = makeBot('visio')
+      early._onParticipantMapping(2, { id: 'u1', name: 'Alice' })
+      early._startMixer()
+      assert.deepEqual(early.audioMixer.getStats().tracks.map(t => [t.id, t.participantId]), [['c0:2', 'u1']])
+      early.audioMixer.stop()
     })
 
-    it('dispose clears early-audio state and the reaper timer', async () => {
-      bot.handleAudioData(0, Buffer.alloc(640))
-      assert.notEqual(bot.earlyAudioReaper, null)
+    it('dispose stops the mixer', async () => {
       await bot.dispose()
-      assert.equal(bot.earlyAudioReaper, null, 'reaper cleared on dispose')
-      assert.equal(bot.earlyAudio.size, 0)
-      assert.equal(bot.earlyAudioFirstSeen.size, 0)
+      assert.equal(mixer.stopped, true)
+      assert.equal(bot.audioMixer, null)
     })
 
     it('cancels the empty-meeting timer when a new participant joins', () => {
@@ -201,25 +202,63 @@ describe('Bot', () => {
     })
   })
 
-  describe('MCU/Teams pass-through audio', () => {
-    it('forwards server-mixed audio as-is (no mixer)', () => {
+  describe('MCU/Teams audio', () => {
+    it('passes a single server-mixed track through unchanged, in 20 ms frames', () => {
       const bot = makeBot('bigbluebutton')
       assert.equal(bot.isSfu, false)
-      let got = null
-      bot.on('audio', (buf) => { got = buf })
-      bot.handleAudioData(0, Buffer.alloc(640))
-      assert.ok(got && got.length === 640)
+      bot._startMixer()
+      const got = []
+      bot.on('audio', (buf) => got.push(buf))
+      const input = Array.from({ length: 46 * 20 }, (_, i) => (i * 37) % 2000 - 1000)
+      for (let i = 0; i < input.length; i += 46) bot.handleAudioData(0, Buffer.from(Int16Array.from(input.slice(i, i + 46)).buffer))
+      const output = got.flatMap(samplesOf)
+      assert.ok(got.every(b => b.length === 640))
+      assert.deepEqual(output, input.slice(0, output.length))
+      assert.equal(output.length, 640)
+    })
+
+    // A live Teams call: the track Teams replaced on admission kept rendering zeros
+    // next to its successor, and both were forwarded one after the other (2x real
+    // time, a slowed-down voice chopped by runs of zeros).
+    it('sums the tracks of a Teams page into one stream at the real-time rate', () => {
+      const bot = makeBot('teams')
+      bot._startMixer()
+      bot.hasSeenParticipant = true
+      const got = []
+      bot.on('audio', (buf) => got.push(buf))
+      const voice = Array.from({ length: 46 * 70 }, (_, i) => Math.round(6000 * Math.sin(i / 5)))
+      for (let i = 0; i < voice.length; i += 46) {
+        bot.handleAudioData(0, frame(0, 46)) // the replaced track, rendering zeros
+        bot.handleAudioData(1, Buffer.from(Int16Array.from(voice.slice(i, i + 46)).buffer))
+      }
+      const output = got.flatMap(samplesOf)
+      assert.equal(output.length, Math.floor(voice.length / 320) * 320, 'one track worth of samples, not two')
+      assert.deepEqual(output, voice.slice(0, output.length), 'the voice, unchopped')
     })
 
     it('holds Teams audio until admitted (no streaming from the lobby)', () => {
       const bot = makeBot('teams')
+      bot._startMixer()
       let got = null
       bot.on('audio', (buf) => { got = buf })
       bot.handleAudioData(0, Buffer.alloc(640))
       assert.equal(got, null, 'no audio while still in the Teams lobby (not admitted)')
+      assert.equal(bot.audioMixer.hasTrack('c0:0'), false, 'not even buffered')
       bot.hasSeenParticipant = true // admitted: a participant was detected
       bot.handleAudioData(0, Buffer.alloc(640))
       assert.ok(got && got.length === 640, 'audio flows once admitted')
+    })
+
+    it('never derives speakers from the mixer on Teams (they come from the page)', () => {
+      const bot = makeBot('teams')
+      bot._startMixer()
+      const events = []
+      bot.on('speakerChanged', (e) => events.push(e))
+      bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 0, participant: { id: 'm1', name: 'Carol' } })
+      bot.handleAudioData(0, frame(9000))
+      assert.deepEqual(bot.audioMixer.getStats().tracks.map(t => t.participantId), [null], 'the Teams mapping attributes no track')
+      bot.audioMixer.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'x' } })
+      assert.deepEqual(events, [], 'nor is a mixer speaker change forwarded')
     })
 
     it('forwards Teams page-polled speakerChanged', () => {
@@ -321,6 +360,7 @@ describe('Bot', () => {
 
     it('logs the first audio frame once (latched) and updates lastAudioAt', () => {
       const bot = makeBot('visio')
+      bot._startMixer()
       assert.equal(bot.hasSeenAudio, false)
       bot.handleAudioData(0, Buffer.alloc(640))
       assert.equal(bot.hasSeenAudio, true)
@@ -480,17 +520,13 @@ describe('Bot.init', () => {
     assert.equal(page.calls.goto[0].opts.timeout, 50000)
   })
 
-  it('starts the AudioMixer for SFU platforms', async () => {
-    const { bot } = makeInitBot('visio')
-    await bot.init()
-    assert.ok(bot.audioMixer, 'SFU init builds a mixer')
-    await bot.dispose()
-  })
-
-  it('does NOT start a mixer for MCU/Teams (pass-through audio)', async () => {
-    const { bot } = makeInitBot('bigbluebutton', {}, { address: 'https://bbb.example.com/room' })
-    await bot.init()
-    assert.equal(bot.audioMixer, null, 'no mixer for MCU pass-through')
+  it('starts the AudioMixer for every platform', async () => {
+    for (const [type, address] of [['visio'], ['teams'], ['bigbluebutton', 'https://bbb.example.com/room']]) {
+      const { bot } = makeInitBot(type, {}, { address })
+      await bot.init()
+      assert.ok(bot.audioMixer, `${type} init builds a mixer`)
+      await bot.dispose()
+    }
   })
 
   it('installs a domain allowlist route only when manifest.blockExternalDomains is set', async () => {
@@ -597,7 +633,7 @@ describe('Bot._wirePageDiagnostics', () => {
 })
 
 describe('Bot._startMixer', () => {
-  it('attaches audio + speakerChanged handlers that re-emit on the bot', () => {
+  it('SFU: re-emits the mixer audio and speaker changes on the bot', () => {
     const bot = makeBot('visio')
     bot._startMixer()
     let audioBuf = null
@@ -610,70 +646,21 @@ describe('Bot._startMixer', () => {
     assert.deepEqual(speaker, { id: 'x' }, 'mixer speakerChanged re-emitted')
     bot.audioMixer.stop()
   })
-})
 
-describe('Bot._bufferEarlyAudio internals', () => {
-  let bot, mixer
-  beforeEach(() => { bot = makeBot('visio'); mixer = makeFakeMixer(); bot.audioMixer = mixer })
-
-  it('creates the buffer and records an age marker on the first frame', () => {
-    const before = Date.now()
-    bot._bufferEarlyAudio(0, Buffer.alloc(640))
-    assert.equal(bot.earlyAudio.get(0).length, 1)
-    assert.ok(bot.earlyAudioFirstSeen.get(0) >= before, 'age marker set on first frame')
-  })
-
-  it('caps the buffer at MAX_EARLY_FRAMES and silently drops the overflow', () => {
-    for (let i = 0; i < 200; i++) bot._bufferEarlyAudio(0, Buffer.alloc(2))
-    assert.equal(bot.earlyAudio.get(0).length, 150, 'capped at MAX_EARLY_FRAMES (150)')
-  })
-
-  it('arms the reaper on the first buffered frame', () => {
-    assert.equal(bot.earlyAudioReaper, null)
-    bot._bufferEarlyAudio(0, Buffer.alloc(2))
-    assert.notEqual(bot.earlyAudioReaper, null)
-  })
-
-  it('buffers multiple tracks independently', () => {
-    bot._bufferEarlyAudio(0, Buffer.alloc(2))
-    bot._bufferEarlyAudio(1, Buffer.alloc(2))
-    bot._bufferEarlyAudio(1, Buffer.alloc(2))
-    assert.equal(bot.earlyAudio.get(0).length, 1)
-    assert.equal(bot.earlyAudio.get(1).length, 2)
-  })
-
-  it('handles audio arriving before the mapping (buffered, then flushed in order)', () => {
-    bot.handleAudioData(5, Buffer.alloc(10))
-    bot.handleAudioData(5, Buffer.alloc(20))
-    assert.equal(mixer.added.length, 0)
-    bot._onParticipantMapping(5, { id: 'u9', name: 'Zed' })
-    assert.equal(mixer.added.length, 2, 'both early frames flushed')
-    assert.deepEqual(mixer.added.map(a => a.len), [10, 20], 'flushed in arrival order')
-  })
-})
-
-describe('Bot early-audio reaper arm/cancel guards', () => {
-  it('_armEarlyAudioReaper is idempotent (a second call keeps the same interval)', () => {
-    const bot = makeBot('visio')
-    bot._armEarlyAudioReaper()
-    const first = bot.earlyAudioReaper
-    bot._armEarlyAudioReaper()
-    assert.strictEqual(bot.earlyAudioReaper, first, 'no second interval created')
-    bot._cancelEarlyAudioReaper()
-  })
-
-  it('_armEarlyAudioReaper does not arm when disposed', async () => {
-    const bot = makeBot('visio')
-    await bot.dispose() // sets disposed = true
-    bot._armEarlyAudioReaper()
-    assert.equal(bot.earlyAudioReaper, null, 'disposed bot never arms the reaper')
-  })
-
-  it('_cancelEarlyAudioReaper returns early when there is no interval', () => {
-    const bot = makeBot('visio')
-    assert.equal(bot.earlyAudioReaper, null)
-    bot._cancelEarlyAudioReaper() // must not throw
-    assert.equal(bot.earlyAudioReaper, null)
+  it('MCU/Teams: re-emits the mixer audio only', () => {
+    for (const type of ['teams', 'bigbluebutton']) {
+      const bot = makeBot(type)
+      bot._startMixer()
+      let audioBuf = null
+      let speaker = null
+      bot.on('audio', (b) => { audioBuf = b })
+      bot.on('speakerChanged', (e) => { speaker = e })
+      bot.audioMixer.emit('audio', Buffer.alloc(3))
+      bot.audioMixer.emit('speakerChanged', { id: 'x' })
+      assert.ok(audioBuf && audioBuf.length === 3, `${type}: mixer audio re-emitted`)
+      assert.equal(speaker, null, `${type}: no speaker from the mixer`)
+      bot.audioMixer.stop()
+    }
   })
 })
 
@@ -760,12 +747,12 @@ describe('Bot._onTrackRemoved', () => {
   let bot, mixer
   beforeEach(() => { bot = makeBot('visio'); mixer = makeFakeMixer(); bot.audioMixer = mixer })
 
-  it('deletes the mapping and the early-audio for the track together', () => {
-    bot.handleAudioData(0, Buffer.alloc(2))
-    bot._onParticipantMapping(1, { id: 'u1', name: 'A' }) // separate mapped track
+  it('deletes the mapping and the mixer track together', () => {
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' })
+    bot._onParticipantMapping(1, { id: 'u1', name: 'A' }) // second track, same participant
     bot._onTrackRemoved(0)
     assert.equal(bot.trackParticipants.has('c0:0'), false)
-    assert.equal(bot.earlyAudio.has('c0:0'), false)
+    assert.deepEqual(mixer.removedTracks, ['c0:0'])
   })
 
   it('removes the SFU participant once all of their tracks are gone', () => {
@@ -798,13 +785,13 @@ describe('Bot removed tracks', () => {
     bot.handleAudioData(0, Buffer.alloc(640))
     bot.handleAudioData(0, Buffer.alloc(640))
     assert.equal(mixer.added.length, 1, 'only the live frame was mixed')
-    assert.equal(bot.earlyAudio.size, 0, 'nor buffered as early audio')
     assert.equal(bot.removedTracks.get('c0:0'), 2)
     assert.equal(warns.filter(w => w.includes('removed track c0:0')).length, 1)
   })
 
   it('ignores PCM of a removed Teams track (the lobby track Teams replaces on admission)', () => {
     const bot = makeBot('teams')
+    bot._startMixer()
     bot.hasSeenParticipant = true
     const got = []
     bot.on('audio', (buf) => got.push(buf))
@@ -829,7 +816,7 @@ describe('Bot removed tracks', () => {
     bot._onParticipantMapping(0, { id: 'u2', name: 'B' }, 2)
     bot._onTrackRemoved(0, 1)
     bot.handleAudioData(0, Buffer.alloc(640), 2)
-    assert.deepEqual(mixer.added.map(a => a.id), ['u2'])
+    assert.deepEqual(mixer.added.map(a => a.key), ['c2:0'])
     bot.notifyAudioPipeClosed(1)
     assert.equal(bot.removedTracks.has('c1:0'), false)
   })
@@ -842,10 +829,9 @@ describe('Bot loopback connections', () => {
   it('keeps apart same-index tracks of different connections (each document numbers its tracks from 0)', () => {
     bot._onParticipantMapping(0, { id: 'u1', name: 'A' }, 1)
     bot.handleAudioData(0, Buffer.alloc(640), 2) // another document's track 0: not u1's
-    assert.equal(mixer.added.length, 0)
-    assert.equal(bot.earlyAudio.get('c2:0').length, 1)
     bot.handleAudioData(0, Buffer.alloc(640), 1)
-    assert.deepEqual(mixer.added.map(a => a.id), ['u1'])
+    assert.deepEqual(mixer.added.map(a => a.key), ['c2:0', 'c1:0'])
+    assert.deepEqual([...mixer.attributed.keys()], ['c1:0'])
   })
 
   it('a track removal only affects the connection it came from', () => {
@@ -862,11 +848,11 @@ describe('Bot loopback connections', () => {
     let left = 0
     bot.on('participant-left', () => { left++ })
     bot._onParticipantMapping(0, { id: 'u1', name: 'A' }, 1)
-    bot.handleAudioData(1, Buffer.alloc(640), 1) // unmapped: early audio
+    bot.handleAudioData(1, Buffer.alloc(640), 1) // unmapped
     bot._onParticipantMapping(0, { id: 'u2', name: 'B' }, 2)
     bot.notifyAudioPipeClosed(1)
     assert.equal(bot.trackParticipants.has('c1:0'), false)
-    assert.equal(bot.earlyAudio.has('c1:1'), false)
+    assert.deepEqual(mixer.removedTracks.sort(), ['c1:0', 'c1:1'], 'its tracks leave the mix')
     assert.equal(bot.trackParticipants.has('c2:0'), true, 'other connections untouched')
     assert.deepEqual([...bot.participants.keys()], ['u1', 'u2'])
     assert.equal(left, 0, 'a dropped connection is not a participant leave')
@@ -879,9 +865,10 @@ describe('Bot loopback connections', () => {
     h.onJson({ type: 'participantMapping', trackIndex: 3, participant: { id: 'u1', name: 'A' } }, 7)
     assert.equal(initBot.trackParticipants.has('c7:3'), true)
     h.onBinary(3, Buffer.alloc(640), 7)
-    assert.equal(initBot.audioMixer.hasParticipant('u1'), true, 'c7:3 audio routed to its participant')
+    assert.deepEqual(initBot.audioMixer.getStats().tracks.map(t => [t.id, t.participantId]), [['c7:3', 'u1']])
     h.onClose(7)
     assert.equal(initBot.trackParticipants.has('c7:3'), false)
+    assert.equal(initBot.audioMixer.hasTrack('c7:3'), false)
     await initBot.dispose()
   })
 })
@@ -1187,20 +1174,19 @@ describe('Bot.dispose', () => {
     assert.equal(record.unregisterBot.length, 1, 'cleanup runs exactly once despite concurrent dispose')
   })
 
-  it('cancels every timer and clears early-audio state', async () => {
+  it('cancels every timer and stops the mixer', async () => {
     const bot = makeBot('visio')
     bot._armJoinWatchdog()
     bot.emptyMeetingTimeoutMs = 10000
     bot.emptyMeetingTimer = setTimeout(() => {}, 10000)
     bot._armAudioSilenceWatchdog()
-    bot.handleAudioData(0, Buffer.alloc(2)) // arms the early-audio reaper (visio/SFU + no mixer-less path)
+    bot._startMixer()
+    bot.handleAudioData(0, Buffer.alloc(2))
     await bot.dispose()
     assert.equal(bot.joinWatchdog, null)
     assert.equal(bot.emptyMeetingTimer, null)
     assert.equal(bot.audioSilenceWatchdog, null)
-    assert.equal(bot.earlyAudioReaper, null)
-    assert.equal(bot.earlyAudio.size, 0)
-    assert.equal(bot.earlyAudioFirstSeen.size, 0)
+    assert.equal(bot.audioMixer, null)
   })
 
   it('nulls the page, unregisters the bot and destroys the context', async () => {

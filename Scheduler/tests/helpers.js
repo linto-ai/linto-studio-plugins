@@ -64,6 +64,13 @@ function makeMqttClient(mqttPublishes) {
     client.publish = (topic, payload, qos, retain, json) => {
         mqttPublishes.push({ topic, payload, qos, retain, json });
     };
+    // Acknowledged publish: rejects while `client.offline` is set, as the real
+    // client does when not connected.
+    client.offline = false;
+    client.publishConfirmed = async (topic, payload, qos, retain) => {
+        if (client.offline) throw new Error('MQTT client offline');
+        mqttPublishes.push({ topic, payload, qos, retain, confirmed: true });
+    };
     client.publishStatus = () => {};
     return client;
 }

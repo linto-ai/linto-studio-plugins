@@ -322,7 +322,10 @@ describe('BrokerClient bot routing (BotService)', () => {
         },
         Session: {
           findByPk: async () => ({ id: 'sess-1', status: 'active', organizationId: 'org-9' }),
-          update: async (values, opts) => { sessionUpdates.push({ values, opts }); return [1, []]; }
+          update: async (values, opts) => {
+            sessionUpdates.push({ values, opts });
+            return [1, [{ id: 'sess-1', organizationId: 'org-9' }]];
+          }
         },
         Channel: {
           count: async () => 0, // the bot's stream is already deactivated
@@ -335,8 +338,8 @@ describe('BrokerClient bot routing (BotService)', () => {
         await instance.stopBot(42, { endSession: true });
         // Still routes the targeted stopbot to the owner.
         assert.ok(mqttPublishes.find(p => p.topic === 'botservice/in/bs1/stopbot'));
-        // Session terminated + channels inactivated.
-        assert.equal(sessionUpdates.length, 1);
+        // Session terminated (with the owed sessions/ended marked), claimed, cleared.
+        assert.deepEqual(sessionUpdates.map(u => u.values.endedNotice), ['pending', 'sending', null]);
         assert.equal(sessionUpdates[0].values.status, 'terminated');
         assert.ok(sessionUpdates[0].values.endTime instanceof Date);
         assert.equal(channelUpdates.length, 1);

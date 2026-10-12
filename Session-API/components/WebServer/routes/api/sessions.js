@@ -751,10 +751,14 @@ module.exports = (webserver) => {
 
                 const waitFinal = req.query.waitFinal === 'true';
 
-                // If session is not active or force is true, proceed with update
+                // If session is not active or force is true, proceed with update.
+                // The caller (Studio's manual stop) takes the ending over: clearing
+                // endedNotice in the same UPDATE makes the Scheduler, if it was
+                // ending this session itself, publish no system/out/sessions/ended.
                 await Model.Session.update({
                     status: 'terminated',
-                    endTime: new Date()
+                    endTime: new Date(),
+                    endedNotice: null
                 }, {
                     where: {
                         'id': sessionId

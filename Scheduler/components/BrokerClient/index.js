@@ -48,6 +48,10 @@ class BrokerClient extends Component {
     // order matches MQTT arrival order, making the end-of-stream marker and
     // 'inactive' deactivate true barriers for readers.
     this.channelPersistChains = new Map();
+    // Sessions whose end (endSessions) is in progress in this process, so that
+    // the recovery of owed sessions/ended notices does not run it twice.
+    this.endingSessions = new Set();
+    this.recoveringEndedNotices = false;
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
@@ -56,6 +60,7 @@ class BrokerClient extends Component {
       this.client.publishStatus(); // scheduler status (online)
       await this.resetSessions(); // reset all active sessions / channels (streamStatus) to ready/inactive state
       await Model.Translator.update({ online: false }, { where: {} }); // mark all translators offline on startup
+      this.recoverEndedNotices(); // sessions/ended owed from before a restart or a broker outage
     });
     this.client.on("error", (err) => {
       this.state = ERROR;
@@ -69,6 +74,7 @@ class BrokerClient extends Component {
       if (autoStartUpdated || autoEndUpdated || reconciled) {
         await this.publishSessions();
       }
+      this.recoverEndedNotices();
     }, 60 * 1000);
   }
 
@@ -124,7 +130,8 @@ class BrokerClient extends Component {
       const [updatedCount, updatedSessions] = await Model.Session.update(
         {
           status: 'terminated',
-          endTime: new Date()
+          endTime: new Date(),
+          endedNotice: 'pending'
         },
         {
           where: {
@@ -143,6 +150,11 @@ class BrokerClient extends Component {
       if (endedSessionIds.length > 0) {
         logger.debug(`Auto end sessions ${endedSessionIds}`);
       }
+      // Before the commit makes the 'pending' marker visible to the recovery.
+      endedSessionIds.forEach(id => this.endingSessions.add(id));
+    }).catch((err) => {
+      endedSessionIds.forEach(id => this.endingSessions.delete(id));
+      throw err;
     });
 
     // The channels are not forced 'inactive' here: endSessions() waits for
@@ -154,10 +166,11 @@ class BrokerClient extends Component {
 
   // Second half of a session end driven by the Scheduler (autoEnd, a bot
   // leaving an empty meeting), once the caller has set the sessions to
-  // 'terminated'. Consumers (studio-api) react to system/out/sessions/ended by
-  // building the conversation from the stored captions and deleting the
-  // session, channels and captions included, so the notification must wait
-  // for the last caption, as PUT /sessions/:id/stop?waitFinal=true does:
+  // 'terminated' with endedNotice 'pending', in the same UPDATE. Consumers
+  // (studio-api) react to system/out/sessions/ended by building the
+  // conversation from the stored captions and deleting the session, channels
+  // and captions included, so the notification must wait for the last
+  // caption, as PUT /sessions/:id/stop?waitFinal=true does:
   //   1. publish the statuses snapshot without the sessions: the transcribers
   //      cut the streams still open on them (ASR flush -> end-of-stream marker
   //      -> 'inactive' deactivation, published in that order);
@@ -165,19 +178,33 @@ class BrokerClient extends Component {
   //      most SESSION_STOP_FLUSH_TIMEOUT_MS so a dead transcriber cannot hold
   //      the end back;
   //   3. force the channels still 'active' to 'inactive' (timeout case);
-  //   4. publish one system/out/sessions/ended per session. The payload is
-  //      minimal: consumers re-fetch the full session when needed.
+  //   4. publish one system/out/sessions/ended per session (publishSessionEnded).
+  // The endedNotice marker makes it durable: recoverEndedNotices() finishes
+  // the notices still owed after a restart or a failed publication.
   async endSessions(sessionIds) {
     if (sessionIds.length === 0) return;
+    sessionIds.forEach(id => this.endingSessions.add(id));
     try {
-      await this.publishSessions();
-    } catch (err) {
-      logger.error(`Failed to publish the session statuses to end ${sessionIds.join(', ')}: ${err?.message || err}`);
+      try {
+        await this.publishSessions();
+      } catch (err) {
+        logger.error(`Failed to publish the session statuses to end ${sessionIds.join(', ')}: ${err?.message || err}`);
+      }
+      const timeoutMs = parseInt(process.env.SESSION_STOP_FLUSH_TIMEOUT_MS, 10) || 10000;
+      await Promise.all(sessionIds.map(sessionId => this.publishSessionEnded(sessionId, timeoutMs)));
+    } finally {
+      sessionIds.forEach(id => this.endingSessions.delete(id));
     }
-    const timeoutMs = parseInt(process.env.SESSION_STOP_FLUSH_TIMEOUT_MS, 10) || 10000;
-    await Promise.all(sessionIds.map(sessionId => this.publishSessionEnded(sessionId, timeoutMs)));
   }
 
+  // Drain, then publish the session's system/out/sessions/ended if it is still
+  // owed. The publication is claimed first (endedNotice 'pending' -> 'sending',
+  // atomic): Session-API's stop clears the marker when Studio takes the ending
+  // over, and the Scheduler then publishes nothing. The marker is cleared only
+  // once the broker acknowledged the notice; until then (client offline, no
+  // acknowledgment) it stays 'sending' and the recovery publishes it again:
+  // at least once. The payload is minimal: consumers re-fetch the full
+  // session when needed.
   async publishSessionEnded(sessionId, timeoutMs) {
     try {
       if (!await this.waitSessionDrained(sessionId, timeoutMs)) {
@@ -187,20 +214,53 @@ class BrokerClient extends Component {
         { streamStatus: 'inactive' },
         { where: { sessionId } }
       );
-      const endedSession = await Model.Session.findByPk(sessionId, {
-        attributes: ['id', 'organizationId']
-      });
-      if (!endedSession) return;
+      const [claimed, claimedSessions] = await Model.Session.update(
+        { endedNotice: 'sending' },
+        {
+          where: { id: sessionId, endedNotice: { [Model.Op.in]: ['pending', 'sending'] } },
+          returning: true
+        }
+      );
+      if (claimed === 0) {
+        logger.info(`Session ${sessionId}: sessions/ended no longer owed (ending taken over, or session deleted)`);
+        return;
+      }
       logger.info(`Session ${sessionId} ended and drained; publishing sessions/ended`);
-      this.client.publish(
+      await this.client.publishConfirmed(
         'system/out/sessions/ended',
-        { id: endedSession.id, organizationId: endedSession.organizationId },
+        { id: sessionId, organizationId: claimedSessions[0].organizationId },
         1,
-        false,
-        true
+        false
+      );
+      await Model.Session.update(
+        { endedNotice: null },
+        { where: { id: sessionId, endedNotice: 'sending' } }
       );
     } catch (err) {
-      logger.error(`Failed to publish sessions/ended for ${sessionId}: ${err?.message || err}`);
+      logger.error(`Failed to publish sessions/ended for ${sessionId}, retried later: ${err?.message || err}`);
+    }
+  }
+
+  // Finish the sessions/ended notices still owed (endedNotice set): the
+  // Scheduler stopped while ending a session, or the broker did not
+  // acknowledge the notice. Runs on (re)connection to the broker and on every
+  // tick, never twice at once, and skips the ends in progress in this process.
+  async recoverEndedNotices() {
+    if (this.recoveringEndedNotices) return;
+    this.recoveringEndedNotices = true;
+    try {
+      const owed = await Model.Session.findAll({
+        where: { endedNotice: { [Model.Op.in]: ['pending', 'sending'] } },
+        attributes: ['id']
+      });
+      const sessionIds = owed.map(session => session.id).filter(id => !this.endingSessions.has(id));
+      if (sessionIds.length === 0) return;
+      logger.warn(`Resuming the end of session(s) ${sessionIds.join(', ')}: sessions/ended still owed`);
+      await this.endSessions(sessionIds);
+    } catch (err) {
+      logger.error(`Failed to recover owed sessions/ended notices: ${err?.message || err}`);
+    } finally {
+      this.recoveringEndedNotices = false;
     }
   }
 
@@ -636,9 +696,11 @@ class BrokerClient extends Component {
   // manual stop that raced ahead leaves the session untouched.
   async endBotSession(sessionId) {
     if (!sessionId) return;
+    // Before the UPDATE makes the 'pending' marker visible to the recovery.
+    this.endingSessions.add(sessionId);
     try {
       const [updatedCount] = await Model.Session.update(
-        { status: 'terminated', endTime: new Date() },
+        { status: 'terminated', endTime: new Date(), endedNotice: 'pending' },
         { where: { id: sessionId, status: { [Model.Op.ne]: 'terminated' } } }
       );
       if (updatedCount === 0) return; // already finalized, or gone
@@ -646,6 +708,8 @@ class BrokerClient extends Component {
       await this.endSessions([sessionId]);
     } catch (err) {
       logger.error(`Failed to end bot session ${sessionId}: ${err?.message || err}`);
+    } finally {
+      this.endingSessions.delete(sessionId);
     }
   }
 

@@ -22,7 +22,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // recorded in `events`, in order.
 async function load({ active = 1, captionDelayMs = 0, sessionsQuery } = {}) {
     const events = [];
-    const state = { active, status: 'active', counts: 0 };
+    const state = { active, status: 'active', notice: null, counts: 0 };
     const publishes = [];
     const mqttClient = makeMqttClient(publishes);
     const recordPublish = mqttClient.publish;
@@ -30,18 +30,33 @@ async function load({ active = 1, captionDelayMs = 0, sessionsQuery } = {}) {
         events.push(`publish ${topic}`);
         recordPublish(topic, ...rest);
     };
+    const recordConfirmed = mqttClient.publishConfirmed;
+    mqttClient.publishConfirmed = async (topic, ...rest) => {
+        await recordConfirmed(topic, ...rest);
+        events.push(`publish ${topic}`);
+    };
     const loaded = {};
     const model = buildModel({
         Session: {
             findAll: sessionsQuery || (async () => []),
             findByPk: async (id) => ({ id, status: state.status, organizationId: 'org-1' }),
             update: async (values, opts) => {
+                if ('endedNotice' in values && values.status === undefined) {
+                    // Claim ('sending') or clear (null) of the owed sessions/ended.
+                    const where = opts.where.endedNotice;
+                    const matches = where && where[Op.in] ? where[Op.in].includes(state.notice) : where === state.notice;
+                    if (!matches) return [0, []];
+                    state.notice = values.endedNotice;
+                    if (values.endedNotice === null) events.push('notice cleared');
+                    return [1, [{ id: SESSION, organizationId: 'org-1' }]];
+                }
                 if (values.status !== 'terminated') return [1, []]; // updateSession's recompute
                 const where = opts.where.status;
                 const matches = where && where[Op.in] ? where[Op.in].includes(state.status)
                     : !(where && where[Op.ne] === state.status);
                 if (!matches) return [0, []];
                 state.status = 'terminated';
+                state.notice = values.endedNotice;
                 events.push('terminated');
                 return [1, [{ id: SESSION, organizationId: 'org-1' }]];
             },
@@ -116,7 +131,7 @@ describe('Session end drain barrier', () => {
             await ending;
             assert.deepStrictEqual(events.slice(2), [
                 'caption 7', 'caption marker', 'channel deactivated', STATUSES,
-                'channels forced inactive', ENDED,
+                'channels forced inactive', ENDED, 'notice cleared',
             ]);
             assert.strictEqual(endedCount(publishes), 1);
             assert.deepStrictEqual(publishes.find((p) => p.topic === 'system/out/sessions/ended').payload,
@@ -126,7 +141,7 @@ describe('Session end drain barrier', () => {
         it('publishes at once when the stream was already deactivated', async () => {
             const { instance, events, publishes } = await load({ active: 0 });
             await instance.endBotSession(SESSION);
-            assert.deepStrictEqual(events, ['terminated', STATUSES, 'channels forced inactive', ENDED]);
+            assert.deepStrictEqual(events, ['terminated', STATUSES, 'channels forced inactive', ENDED, 'notice cleared']);
             assert.strictEqual(endedCount(publishes), 1);
         });
 
@@ -139,7 +154,7 @@ describe('Session end drain barrier', () => {
             assert.ok(elapsed >= 75 && elapsed < 1000, `bounded by the timeout, took ${elapsed}ms`);
             assert.ok(logs.some((l) => l.level === 'warn' && l.msg.includes(SESSION) && /still active 80ms/.test(l.msg)),
                 JSON.stringify(logs));
-            assert.deepStrictEqual(events.slice(-2), ['channels forced inactive', ENDED],
+            assert.deepStrictEqual(events.slice(-3), ['channels forced inactive', ENDED, 'notice cleared'],
                 'the session is never left half-open');
             assert.strictEqual(endedCount(publishes), 1);
         });
@@ -163,7 +178,7 @@ describe('Session end drain barrier', () => {
             await instance.endBotSession(SESSION);
             assert.ok(logs.some((l) => l.level === 'error' && l.msg.includes('db hiccup')));
             assert.strictEqual(endedCount(publishes), 1);
-            assert.strictEqual(events[events.length - 1], ENDED);
+            assert.deepStrictEqual(events.slice(-2), [ENDED, 'notice cleared']);
         });
     });
 
@@ -257,7 +272,7 @@ describe('Session end drain barrier', () => {
             instance.chainChannelPersist(SESSION, 10, () => instance.updateSession('tr-1', SESSION, 10, 'inactive'));
             assert.strictEqual(await ending, true);
             assert.deepStrictEqual(events.slice(2), [
-                'caption marker', 'channel deactivated', STATUSES, 'channels forced inactive', ENDED,
+                'caption marker', 'channel deactivated', STATUSES, 'channels forced inactive', ENDED, 'notice cleared',
             ]);
             assert.strictEqual(endedCount(publishes), 1);
         });

@@ -67,7 +67,14 @@ The same thing can happen on a **single instance**: a client may reconnect while
 
 ## Session-end guarantees and their cross-instance limits
 
-When a session ends, its `sessions/ended` notification waits until every channel is reported inactive (Scheduler drain; Studio's manual stop uses `PUT /sessions/:id/stop?waitFinal=true`, which waits the same way). A Transcriber reports a channel inactive once the stream's last finals, its end-of-stream marker and, with `keepAudio`, its audio file are stored. Some of these guarantees only hold within one Transcriber instance:
+When a session ends, its `sessions/ended` notification waits until every channel is reported inactive (Scheduler drain; Studio's manual stop uses `PUT /sessions/:id/stop?waitFinal=true`, which waits the same way).
+
+When the Scheduler ends a session itself (autoEnd, a bot leaving an empty meeting), it owes the notification durably (`sessions.endedNotice`):
+- `pending` is set in the same UPDATE as `terminated`.
+- `sending` is the atomic claim taken right before publishing.
+- The marker is cleared once the broker acknowledged the message (`MqttClient#publishConfirmed`).
+- If the Scheduler crashes mid-drain, or the broker is unreachable at publication time, the notice stays owed. The Scheduler finishes it when it reconnects to the broker and on its 60 s tick (`recoverEndedNotices`), at least once: a notice acknowledged but not yet cleared when the Scheduler stopped is published again.
+- Session-API's `PUT /sessions/:id/stop` clears the marker in its terminating UPDATE: Studio takes the ending over, and the Scheduler publishes nothing. A stop landing between the Scheduler's claim and its publication still yields both, a window of milliseconds. A Transcriber reports a channel inactive once the stream's last finals, its end-of-stream marker and, with `keepAudio`, its audio file are stored. Some of these guarantees only hold within one Transcriber instance:
 
 - **Segment ids.** Covered above: a reconnect that lands on another instance before the old stream's deactivation is processed can reuse the old stream's last segment ids.
 - **Kept audio.** A channel's audio file (`<session>-<channel>.wav|.mp3` in `AUDIO_STORAGE_PATH`) is appended to by each stream's save. The saves of a channel are serialized within a process, not across instances that share the storage. If an old instance's save and a new instance's save of the same channel overlap (a stream reconnected elsewhere that stops within seconds), both read the same file and rename their result over it, and one stream's audio is lost. Temporary file names are unique per save, so the saves do not overwrite each other's work in progress.

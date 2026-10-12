@@ -121,6 +121,16 @@ describe('PUT /sessions/:id/stop — drain barrier (waitFinal)', () => {
         };
     });
 
+    it('takes the ending over: clears the Scheduler\'s owed sessions/ended in the terminating UPDATE', async () => {
+        const sessionUpdates = [];
+        mockModel.Session.update = async (values, opts) => { sessionUpdates.push({ values, opts }); return [1]; };
+        await route.controller(makeReq({ force: 'true', waitFinal: 'true' }), makeRes(), () => {});
+        assert.strictEqual(sessionUpdates.length, 1);
+        assert.strictEqual(sessionUpdates[0].values.status, 'terminated');
+        assert.strictEqual(sessionUpdates[0].values.endedNotice, null);
+        assert.deepStrictEqual(sessionUpdates[0].opts.where, { id: 'sess-1' });
+    });
+
     it('legacy (no waitFinal): forces all channels inactive immediately, no polling', async () => {
         const res = makeRes();
         await route.controller(makeReq({ force: 'true' }), res, () => {});

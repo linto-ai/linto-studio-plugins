@@ -466,20 +466,34 @@ describe('AudioMixer', () => {
       const raw = []
       m.on('speakerChanged', (ev) => raw.push([ev.position, ev.speaker && ev.speaker.id, ev.reason]))
       open(m, ['alice'])
-      open(m, ['u1', 'u2'], false)
-      const step = (a, u1, u2) => feed(m, { alice: frame(a), u1: frame(u1), u2: frame(u2) })
-      step(0, 5000, 0) // 0: episode 1
-      step(0, 0, 5000) // 20: u2 takes over: same episode
-      step(0, 0, 0) // 40: a pause shorter than the grace
-      step(0, 5000, 0) // 60: same episode
-      step(0, 0, 0); step(0, 0, 0) // 80, 100: the grace is over: the episode ends
-      step(0, 5000, 0) // 120: episode 2
-      step(5000, 0, 0) // 140: Alice
-      step(0, 0, 5000) // 160: episode 3
+      open(m, ['u1'], false)
+      const step = (a, u1) => feed(m, { alice: frame(a), u1: frame(u1) })
+      step(0, 5000) // 0: episode 1
+      step(0, 0) // 20: a pause shorter than the grace
+      step(0, 5000) // 40: same episode
+      step(0, 0); step(0, 0) // 60, 80: the grace is over: the episode ends
+      step(0, 5000) // 100: episode 2
+      step(5000, 0) // 120: Alice
+      step(0, 5000) // 140: episode 3
       assert.deepEqual(raw, [
-        [0, null, 'unattributed'], [120, null, 'unattributed'], [140, 'alice', undefined], [160, null, 'unattributed']
+        [0, null, 'unattributed'], [100, null, 'unattributed'], [120, 'alice', undefined], [140, null, 'unattributed']
       ])
       m.stop()
+    })
+
+    // The Transcriber names the segments since the latest unattributed null with
+    // the participant mapped next ('mapped'): within a single episode, the second
+    // track's mapping would have named the first track's words too.
+    it('another unattributed track taking over starts its own episode', () => {
+      const raw = []
+      mixer.on('speakerChanged', (ev) => raw.push([ev.position, ev.speaker && ev.speaker.id, ev.reason]))
+      open(mixer, ['u1', 'u2'], false)
+      feed(mixer, { u1: frame(5000), u2: frame(0) }) // 0: u1
+      feed(mixer, { u1: frame(5000), u2: frame(0) })
+      feed(mixer, { u1: frame(0), u2: frame(5000) }) // 40: u2 takes over
+      mixer.setTrackParticipant('u2', { id: 'bob', name: 'Bob' })
+      mixer.setTrackParticipant('u1', { id: 'carol', name: 'Carol' }) // not the one speaking
+      assert.deepEqual(raw, [[0, null, 'unattributed'], [40, null, 'unattributed'], [60, 'bob', 'mapped']])
     })
 
     it('keeps the current speaker while the unattributed track is quiet or quieter', () => {
@@ -581,8 +595,9 @@ describe('AudioMixer', () => {
     it('nothing attributed (MCU/Teams): never a participant, one null per episode', () => {
       const ev = events(mixer)
       open(mixer, ['t0', 't1'], false)
-      for (let i = 0; i < 10; i++) feed(mixer, { t0: frame(i % 2 ? 9000 : 0), t1: frame(i % 2 ? 0 : 9000) })
-      assert.deepEqual(ev, [[0, null]])
+      for (let i = 0; i < 10; i++) feed(mixer, { t0: frame(0), t1: frame(9000) })
+      for (let i = 0; i < 4; i++) feed(mixer, { t0: frame(i % 2 ? 9000 : 0), t1: frame(i % 2 ? 0 : 9000) })
+      assert.deepEqual(ev, [[0, null], [220, null], [240, null], [260, null]], 'one per takeover, none in between')
     })
   })
 

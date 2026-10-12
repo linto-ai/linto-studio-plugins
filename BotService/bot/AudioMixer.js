@@ -300,12 +300,15 @@ class AudioMixer extends EventEmitter {
       // a silence one, after which the previous speaker may still be assumed. It
       // is sent once per episode: when unattributed speech starts, whatever came
       // before (a speaker, a silence, or nothing yet: the first words of the
-      // meeting), and again after the episode ended (a speaker, or a silence
-      // longer than the grace), never twice within one.
+      // meeting), when another unattributed track takes over (the Transcriber
+      // names the segments since the latest null with the participant mapped
+      // next: one track's mapping must not name another's words), and again after
+      // the episode ended (a speaker, or a silence longer than the grace); never
+      // twice within one.
       // No hysteresis, as between participants: the first louder frame switches
       // (the silence grace is the only one, and it applies here too).
       this._silenceMs = 0
-      if (this._unattributedSpeaker === null) {
+      if (this._unattributedSpeaker !== dominant.trackId) {
         this.currentSpeaker = null
         this._emitSpeaker(null, 'unattributed')
       }

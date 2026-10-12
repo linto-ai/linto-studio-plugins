@@ -68,6 +68,9 @@ class StreamingServer extends Component {
     this.channelStops = new Map();
     // Per channel: audio dropped from an older stream (see the 'data' handler).
     this.staleAudio = new Map();
+    // Per channel: the end-of-stream marker of the latest stream being stopped,
+    // { published (promise), deadline } (see _captionPublisher).
+    this.channelMarkers = new Map();
     this.lastOrphanAudioSweep = 0;
     this.orphanAudioGoneSince = new Map();
     this.sweepingOrphanAudio = false;
@@ -540,14 +543,53 @@ class StreamingServer extends Component {
   _wireAsr(session, channel, options, key, sessionId, channelId) {
     const asr = new ASR(session, channel, options);
     this._wireAsrErrors(asr, key);
-    asr.on('partial', (transcription) => {
-      this.emit('partial', transcription, sessionId, channelId, channel);
-    });
-    asr.on('final', (transcription) => {
-      this.emit('final', transcription, sessionId, channelId, channel);
-    });
+    const publish = this._captionPublisher(sessionId, channelId, channel,
+      this.channelMarkers.get(`${sessionId}_${channelId}`));
+    asr.on('partial', (transcription) => publish('partial', transcription));
+    asr.on('final', (transcription) => publish('final', transcription));
     this.ASRs.set(key, asr);
     return asr;
+  }
+
+  // Publishes an ASR's captions (partials and finals). An ASR of a stream
+  // started while an earlier stream of its channel is being stopped (a client
+  // reconnecting at once) transcribes at once, but its captions are held until
+  // that stream's end-of-stream marker is published, at most until that stop's
+  // deadline: Studio places a stream's captions on the timeline after the
+  // previous stream's marker.
+  _captionPublisher(sessionId, channelId, channel, earlierMarker) {
+    const emit = (kind, transcription) => this.emit(kind, transcription, sessionId, channelId, channel);
+    if (!earlierMarker) return emit;
+    let held = [];
+    let timer;
+    Promise.race([
+      earlierMarker.published,
+      new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, earlierMarker.deadline - Date.now())); }),
+    ]).then(() => {
+      clearTimeout(timer);
+      const captions = held;
+      held = null;
+      captions.forEach(([kind, transcription]) => emit(kind, transcription));
+    });
+    return (kind, transcription) => {
+      if (held) held.push([kind, transcription]);
+      else emit(kind, transcription);
+    };
+  }
+
+  // Registers the end-of-stream marker of a stream being stopped (see
+  // _captionPublisher): `published()` once it is out, or there is none.
+  _enterChannelMarker(ck, deadline) {
+    let resolve;
+    const marker = { published: new Promise((r) => { resolve = r; }), deadline };
+    this.channelMarkers.set(ck, marker);
+    return {
+      published: () => resolve(),
+      done: () => {
+        resolve();
+        if (this.channelMarkers.get(ck) === marker) this.channelMarkers.delete(ck);
+      },
+    };
   }
 
 
@@ -646,6 +688,7 @@ class StreamingServer extends Component {
     this.lastSegmentIds.set(ck, Math.max(this.lastSegmentIds.get(ck) || 1, reservedUpTo));
     asr.reserveAudioSave(deadline);
     const stop = this._enterChannelStops(ck);
+    const marker = this._enterChannelMarker(ck, deadline);
     let disposed = false;
     try {
       await asr.flushFinals();
@@ -654,6 +697,7 @@ class StreamingServer extends Component {
       asr.releaseAudioSave();
       if (stop.earlier) await this._awaitEarlierStops(stop.earlier, deadline, session, channelId);
       asr.streamStopped();
+      marker.published();
       // No newer stream took the cursor: give back the ids this ASR did not
       // use (asr.segmentId is still valid here, before dispose).
       if (this.lastSegmentIds.get(ck) === reservedUpTo) {
@@ -676,6 +720,7 @@ class StreamingServer extends Component {
         asr.removeAllListeners();
         asr.dispose();
       }
+      marker.done();
       stop.done();
     }
   }
@@ -736,6 +781,7 @@ class StreamingServer extends Component {
     const deadline = Date.now() + this._stopBudgetMs(channel);
     for (const recorder of recorders) recorder.reserveAudioSave(deadline);
     const stop = this._enterChannelStops(ck);
+    const marker = this._enterChannelMarker(ck, deadline);
     let disposed = false;
     try {
       // K3: the flushes are independent, each bounded by ASR_STOP_FLUSH_TIMEOUT_MS
@@ -767,6 +813,7 @@ class StreamingServer extends Component {
       if (asrs.length > 0) {
         asrs[0].streamStopped();
       }
+      marker.published();
       for (const asr of asrs) {
         asr.removeAllListeners();
         asr.dispose();
@@ -836,6 +883,7 @@ class StreamingServer extends Component {
           asr.dispose();
         }
       }
+      marker.done();
       stop.done();
     }
   }

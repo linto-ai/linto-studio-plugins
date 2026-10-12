@@ -218,12 +218,13 @@ describe('Kept audio across stream stops and reconnects', () => {
             ws.emit('session-stop', session, channel.id);
             await start(); // reconnects at once
             send([3, 4]);
+            streaming.ASRs.get('sess_7').provider.simulateFinal({ text: 'newer live', astart: 0 }); // while the older one flushes
             ws.emit('session-stop', session, channel.id);
             await wait(400);
             // The older stream's last final and marker, then the newer one's
-            // marker, the channel's deactivation last.
+            // captions and marker, the channel's deactivation last.
             assert.deepStrictEqual(events.filter((e) => !e.startsWith('transcode')), [
-                'final older flushed', 'marker', 'marker', 'inactive',
+                'final older flushed', 'marker', 'final newer live', 'marker', 'inactive',
             ]);
             // The audio in stream order, both saved before the deactivation.
             assert.deepStrictEqual(events.filter((e) => e.startsWith('transcode')), [
@@ -355,8 +356,13 @@ describe('Kept audio across stream stops and reconnects', () => {
                 ws.emit('session-stop', session, channel.id);
                 await start();
                 send([3, 4]);
+                const finals = [];
+                streaming.on('final', (t) => finals.push(t.text));
+                streaming.ASRs.get('sess_7').provider.simulateFinal({ text: 'newer live', astart: 0 });
+                assert.deepStrictEqual(finals, [], 'held: the older stream\'s marker has not come');
                 ws.emit('session-stop', session, channel.id);
                 await wait(500);
+                assert.ok(finals.includes('newer live'), 'published once the older stream\'s stop deadline passed');
                 await start();
                 send([5, 6]);
                 ws.emit('session-stop', session, channel.id);

@@ -193,6 +193,7 @@ describe('K2 per-stream recording split', () => {
     inst.stoppingAsrs = new WeakSet();
     inst.channelStops = new Map();
     inst.staleAudio = new Map();
+    inst.channelMarkers = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.pendingLeaves = new Map();

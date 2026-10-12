@@ -60,7 +60,7 @@ When several streams of a channel are being stopped at once (a reconnect, then t
 - each stream's audio is appended to the channel's audio file after the audio of the streams stopped before it (its place is taken when its stop starts);
 - its end-of-stream marker and the deactivation come once the earlier streams' stops are over: their last finals, markers and audio files.
 
-So once the latest stream reports the channel inactive, the captions and kept audio of all its streams are stored, within the stop budget below. Session-end drains rely on this. The finals a newer stream produced while an older one was still flushing are published before the older stream's last finals; their segment ids keep the stream order (see the reserve above).
+So once the latest stream reports the channel inactive, the captions and kept audio of all its streams are stored, within the stop budget below. Session-end drains rely on this. A stream started while an older one of its channel is being stopped transcribes at once, but its captions (partials and finals) are held until the older stream's end-of-stream marker is published, at most until that stop's deadline: the captions come in stream order, as Studio's timeline expects.
 
 A stop always stops its own stream's ASR. Streams of two servers may feed one channel (e.g. an SRT stream, then a WS stream, on one instance): audio is routed by stream, and only the latest stream's reaches the channel's ASR and kept audio. The older stream's audio is dropped (a throttled warning counts it), and its ASR keeps running until its own stop.
 

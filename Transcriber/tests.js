@@ -20,6 +20,7 @@ require('./tests/test_replaced_stream.js');
 require('./tests/test_segment_continuity.js');
 require('./tests/test_kept_audio.js');
 require('./tests/test_kept_audio_ffmpeg.js');
+require('./tests/test_kept_audio_orphans.js');
 require('./tests/test_security_diag.js');
 require('./tests/test_brokerclient_snapshot.js');
 require('./tests/test_amazon_epoch.js');

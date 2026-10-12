@@ -889,9 +889,13 @@ describe('K2 per-stream recording split', () => {
       await inst._stopAsr(session, 'chan');
       assert.ok(await waitFor(() => ffmpegCalls.length >= 2 && !fs.existsSync(pcm)));
 
-      const tempOut = path.join(storageDir, `${session.id}-chan-temp.wav`);
-      const tempOutput = path.join(storageDir, `${session.id}-chan-output.wav`);
+      // The save's temporary files carry a unique id (Transcribers sharing the
+      // storage may save the same channel at once).
       assert.deepStrictEqual(ffmpegCalls.map(c => c.op), ['transcode', 'concat']);
+      const tempOut = ffmpegCalls[0].output;
+      const tempOutput = ffmpegCalls[1].output;
+      assert.match(path.basename(tempOut), new RegExp(`^${session.id}-chan-temp-[0-9a-f-]{36}\\.wav$`));
+      assert.match(path.basename(tempOutput), new RegExp(`^${session.id}-chan-output-[0-9a-f-]{36}\\.wav$`));
       assert.deepStrictEqual(ffmpegCalls[0], { op: 'transcode', inputs: [pcm], output: tempOut });
       assert.deepStrictEqual(ffmpegCalls[1], { op: 'concat', inputs: [wav, tempOut], output: tempOutput });
       // unlink(temp) + rename(output -> out) leave exactly one archive behind.

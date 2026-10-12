@@ -19,6 +19,13 @@ const SERVER_MAPPING = {
 // ones are given back when no newer stream started meanwhile.
 const STOPPING_STREAM_SEGMENT_RESERVE = 10;
 
+// Transient kept-audio files left by a crash or a failed save are swept on a
+// statuses snapshot (the live sessions), at most once per interval: those of
+// sessions no longer live, untouched for ORPHAN_AUDIO_MAX_AGE_MS (see
+// ASR.sweepOrphanAudio).
+const ORPHAN_AUDIO_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const ORPHAN_AUDIO_MAX_AGE_MS = 60 * 60 * 1000;
+
 // Per-stream overflow: tags beyond the per-channel ASR cap collapse onto this
 // single shared "mixed" sub-ASR. 255 is reserved by the tagged-frame protocol
 // (see WebsocketServer._parseTaggedFrame) and is never a real participant tag.
@@ -51,6 +58,7 @@ class StreamingServer extends Component {
     // Legacy ASR -> the server's stream object it serves (see _stopAsr); a
     // per-stream context carries its own (`ctx.stream`).
     this.asrStreams = new WeakMap();
+    this.lastOrphanAudioSweep = 0;
     this.servers = [];
     this.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     // Per-stream diarization (one ASR per participant). All keyed by the channel
@@ -1009,6 +1017,23 @@ class StreamingServer extends Component {
   setSessions(sessions) {
     for(const server of this.servers) {
       server.setSessions(sessions);
+    }
+    this.sweepOrphanAudio(sessions);
+  }
+
+  async sweepOrphanAudio(sessions) {
+    const storagePath = process.env.AUDIO_STORAGE_PATH;
+    const now = Date.now();
+    if (!storagePath || now - this.lastOrphanAudioSweep < ORPHAN_AUDIO_SWEEP_INTERVAL_MS) return;
+    this.lastOrphanAudioSweep = now;
+    try {
+      const live = new Set(sessions.map(session => session.id));
+      const removed = await ASR.sweepOrphanAudio(storagePath, live, ORPHAN_AUDIO_MAX_AGE_MS, now);
+      if (removed.length > 0) {
+        logger.info(`Removed ${removed.length} orphan kept-audio file(s): ${removed.join(', ')}`);
+      }
+    } catch (error) {
+      logger.warn(`Orphan kept-audio sweep failed: ${error.message}`);
     }
   }
 

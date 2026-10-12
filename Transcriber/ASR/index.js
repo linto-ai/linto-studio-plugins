@@ -13,6 +13,15 @@ const REDACTED = '[REDACTED]';
 // Kept-audio saves in progress, per `${sessionId}-${channelId}` (see saveAudio).
 const audioSaves = new Map();
 
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+// Transient kept-audio files: a stream's raw file and a save's temporary
+// files, with their current and former names (<session>-<channel>.pcm,
+// -temp.<ext>, -output.<ext>). Group 1 is the session id. The channel's audio
+// file, <session>-<channel>.wav|.mp3, does not match.
+const TRANSIENT_AUDIO_FILE = new RegExp(
+  `^(${UUID})-\\d+(?:-${UUID}\\.pcm|\\.pcm|-(?:temp|output)(?:-${UUID})?\\.(?:wav|mp3))$`
+);
+
 
 function loadAsr(provider) {
   const asrPath = path.join(__dirname, provider, 'index.js');
@@ -788,8 +797,11 @@ class ASR extends eventEmitter {
     }
 
     if (fs.existsSync(outFilePath)) {
-      const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-temp`) + fileExtension;
-      const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-output`) + fileExtension;
+      // Unique per save: Transcribers sharing the storage may save the same
+      // channel at once (their saves are serialized per process only).
+      const saveId = crypto.randomUUID();
+      const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-temp-${saveId}`) + fileExtension;
+      const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-output-${saveId}`) + fileExtension;
       await transcodeFn(pcmFilePath, tempOutFilePath);
       if (await this.hasAudio(tempOutFilePath)) {
         await this.concatAudioFiles(outFilePath, tempOutFilePath, tempOutputFilePath);
@@ -804,6 +816,29 @@ class ASR extends eventEmitter {
 
     this.logger.info(`Audio file saved as ${outFilePath}`);
     fs.unlinkSync(pcmFilePath);
+  }
+
+  // Delete the transient kept-audio files (TRANSIENT_AUDIO_FILE) that a crash
+  // or a failed save left in `storagePath`. Only those of sessions no longer
+  // live (not in `liveSessionIds`) and not modified for `maxAgeMs` are deleted:
+  // a live session's stream may be writing them on any Transcriber sharing the
+  // storage, and a recent one may be read by a save in progress elsewhere.
+  // Returns the names of the deleted files.
+  static async sweepOrphanAudio(storagePath, liveSessionIds, maxAgeMs, now = Date.now()) {
+    const removed = [];
+    for (const name of await fs.promises.readdir(storagePath)) {
+      const match = TRANSIENT_AUDIO_FILE.exec(name);
+      if (!match || liveSessionIds.has(match[1])) continue;
+      const file = path.join(storagePath, name);
+      try {
+        if (now - (await fs.promises.stat(file)).mtimeMs < maxAgeMs) continue;
+        await fs.promises.unlink(file);
+        removed.push(name);
+      } catch (e) {
+        // Removed meanwhile (e.g. by another instance's sweep).
+      }
+    }
+    return removed;
   }
 
   // Whether an audio file decodes to some audio (ffprobe reports a duration).

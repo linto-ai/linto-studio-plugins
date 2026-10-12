@@ -19,7 +19,8 @@ const EventEmitter = require('events');
 const liveSrtLibPath = require.resolve('live-srt-lib');
 const brokerClientPath = path.resolve(__dirname, '../components/BrokerClient/index.js');
 
-// Sequelize Op stub: BrokerClient uses Model.Op.in / Model.Op.lt / Model.Op.lte / Model.Op.ne / Model.Op.not.
+// Sequelize Op stub: BrokerClient uses Model.Op.in / Model.Op.lt / Model.Op.lte / Model.Op.ne / Model.Op.not /
+// Model.Op.or / Model.Op.startsWith.
 // Symbols would be opaque to assertions, so plain string keys keep the where-clause readable.
 const Op = {
     in: 'OP_IN',
@@ -27,6 +28,8 @@ const Op = {
     lte: 'OP_LTE',
     ne: 'OP_NE',
     not: 'OP_NOT',
+    or: 'OP_OR',
+    startsWith: 'OP_STARTS_WITH',
 };
 
 function makeLogger(logs) {

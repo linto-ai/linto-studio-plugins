@@ -42,9 +42,10 @@ async function load({ active = 1, captionDelayMs = 0, sessionsQuery } = {}) {
             findByPk: async (id) => ({ id, status: state.status, organizationId: 'org-1' }),
             update: async (values, opts) => {
                 if ('endedNotice' in values && values.status === undefined) {
-                    // Claim ('sending') or clear (null) of the owed sessions/ended.
-                    const where = opts.where.endedNotice;
-                    const matches = where && where[Op.in] ? where[Op.in].includes(state.notice) : where === state.notice;
+                    // Claim ('sending:<claim>', of a 'pending' notice here), then
+                    // clear (null) or give back ('pending') of the owed sessions/ended.
+                    const claiming = typeof values.endedNotice === 'string' && values.endedNotice.startsWith('sending:');
+                    const matches = claiming ? state.notice === 'pending' : opts.where.endedNotice === state.notice;
                     if (!matches) return [0, []];
                     state.notice = values.endedNotice;
                     if (values.endedNotice === null) events.push('notice cleared');

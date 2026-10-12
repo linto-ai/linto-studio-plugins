@@ -94,6 +94,8 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const ANTI_ALIAS_HZ = 7000;
   const MAX_RECONNECT_RETRIES = 10;
   const RECONNECT_DELAY_MS = 1000;
+  // At most one capture-failure warning per this period (see warnCaptureFailure).
+  const CAPTURE_WARN_INTERVAL_MS = 10000;
   const intervals = [];
 
   function log() { if (DEBUG) console.log.apply(console, ['[WebRTC-Intercept]'].concat([].slice.call(arguments))); }
@@ -321,13 +323,28 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   // Transport message: [trackIndex, samples, trackIndex, samples, ...] in render
   // order. Quanta of a track torn down in the meantime are dropped, so nothing of
-  // a track is sent after its trackRemoved.
+  // a track is sent after its trackRemoved. A quantum that fails to convert or
+  // send only costs its own track.
   function onTransportMessage(e) {
     const queue = e.data;
     for (let i = 0; i < queue.length; i += 2) {
       const capture = captures.get(queue[i]);
-      if (capture) sendPcm(capture, queue[i + 1]);
+      if (!capture) continue;
+      try { sendPcm(capture, queue[i + 1]); } catch (err) { warnCaptureFailure('capture of track ' + capture.index + ' failed', err); }
     }
+  }
+
+  // A track that cannot be captured is lost to the transcript: say so in the
+  // Node logs (warn, whatever DEBUG), at most once per CAPTURE_WARN_INTERVAL_MS,
+  // with the count of the failures not reported in between.
+  let lastCaptureWarnAt = -Infinity, unreportedCaptureFailures = 0;
+  function warnCaptureFailure(what, e) {
+    const now = Date.now();
+    if (now - lastCaptureWarnAt < CAPTURE_WARN_INTERVAL_MS) { unreportedCaptureFailures++; return; }
+    lastCaptureWarnAt = now;
+    warn(what + ': ' + (e && e.message ? e.message : 'unknown error') +
+      (unreportedCaptureFailures ? ' (and ' + unreportedCaptureFailures + ' other failure(s) since the last report)' : ''));
+    unreportedCaptureFailures = 0;
   }
 
   // Load the module and start the transport, once per context: tracks set up
@@ -423,7 +440,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
     // A sub-frame connects on its first track (announced once the socket opens).
     if (!ws) connectWs();
     sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });
-    setupTrackCapture(track, capture).catch(function (e) { log('capture setup failed', e && e.message); });
+    setupTrackCapture(track, capture).catch(function (e) {
+      // This track is not captured (the others are not affected): release what
+      // was built for it, and report it.
+      teardownCapture(capture);
+      warnCaptureFailure('capture setup failed for track ' + capture.index, e);
+    });
     track.addEventListener('ended', function () {
       // Tear down first: nothing of this track is sent after its trackRemoved.
       teardownCapture(capture);

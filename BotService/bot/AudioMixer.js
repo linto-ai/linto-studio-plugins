@@ -60,10 +60,13 @@ const DEFAULTS = {
  *
  * @emits audio          Buffer — one mixed 20 ms frame (S16LE 16 kHz mono, 640 B)
  * @emits speakerChanged {type:'speakerChanged', position:number, speaker:{id,name}|null,
- *                       reason?:'unattributed'|'mapped'} — emitted ONLY on a transition
- *                       (new dominant speaker, silence after the grace period, a track
- *                       not attributed yet speaking: null with reason 'unattributed', or
- *                       that track's participant once mapped: reason 'mapped')
+ *                       reason?:'unattributed'|'mapped', track?:string} — emitted ONLY
+ *                       on a transition (new dominant speaker, silence after the grace
+ *                       period, a track not attributed yet speaking: null with reason
+ *                       'unattributed', or that track's participant once mapped: reason
+ *                       'mapped'). `track`, on those two, tells which track (and owner)
+ *                       they are about: an opaque tag, the same on a track's null and
+ *                       on its 'mapped'
  */
 class AudioMixer extends EventEmitter {
   constructor (options = {}) {
@@ -81,6 +84,9 @@ class AudioMixer extends EventEmitter {
     this.stalls = 0 // stalls of every track (removed ones too)
     this.currentSpeaker = null // { id, name } | null
     this._unattributedSpeaker = null // id of the unattributed track last heard speaking
+    // Tags of the tracks announced unattributed in the current run (since the last
+    // named speaker, or the last silence past the grace)
+    this._announced = new Set()
     this._silenceMs = 0
 
     // Pre-allocated accumulators: the hot path runs 50×/s. Tracks are summed wide
@@ -99,6 +105,7 @@ class AudioMixer extends EventEmitter {
       samplesAvailable: 0,
       active: false, // waited for: delivering, and not left behind
       participant: null, // { id, name } the track is attributed to (SFU)
+      generation: 0, // bumped when the track loses its participant (see _trackTag)
       inputSamples: 0, // samples received
       droppedSamples: 0, // samples overwritten on ring-buffer overflow
       lastWarnedDrops: 0, // droppedSamples value at the last throttled warn
@@ -297,22 +304,24 @@ class AudioMixer extends EventEmitter {
       // yet): the speaker is unknown, and keeping the previous one would put their
       // name on someone else's words. Its participant is announced as soon as the
       // track is attributed (setTrackParticipant). The reason tells this null from
-      // a silence one, after which the previous speaker may still be assumed. It
-      // is sent once per episode: when unattributed speech starts, whatever came
-      // before (a speaker, a silence, or nothing yet: the first words of the
-      // meeting), when another unattributed track takes over (the Transcriber
-      // names the segments since the latest null with the participant mapped
-      // next: one track's mapping must not name another's words), and again after
-      // the episode ended (a speaker, or a silence longer than the grace); never
-      // twice within one.
+      // a silence one, after which the previous speaker may still be assumed, and
+      // the track tag tells whose: the Transcriber names that track's pending
+      // segments with the participant its 'mapped' carries, never another track's.
+      // Each track is announced once per run of unattributed speech (whatever came
+      // before: a speaker, a silence, or nothing yet, the first words of the
+      // meeting), so that cross-talk or a cough on another unmapped track does not
+      // re-announce the one speaking. The run ends with a named speaker, or a
+      // silence past the grace (after which a new null opens a new window).
       // No hysteresis, as between participants: the first louder frame switches
       // (the silence grace is the only one, and it applies here too).
       this._silenceMs = 0
-      if (this._unattributedSpeaker !== dominant.trackId) {
-        this.currentSpeaker = null
-        this._emitSpeaker(null, 'unattributed')
-      }
       this._unattributedSpeaker = dominant.trackId
+      const tag = this._trackTag(dominant.trackId)
+      if (!this._announced.has(tag)) {
+        this._announced.add(tag)
+        this.currentSpeaker = null
+        this._emitSpeaker(null, 'unattributed', tag)
+      }
       return
     }
 
@@ -326,15 +335,24 @@ class AudioMixer extends EventEmitter {
         this._silenceMs = 0
         this._emitSpeaker(null)
       }
-    } else if (this._unattributedSpeaker !== null) {
-      // The unattributed track is quiet: past the grace, its mapping no longer
-      // means that its participant is the one speaking.
+    } else if (this._announced.size > 0) {
+      // Unattributed speech went quiet: past the grace, the run is over (a mapping
+      // no longer means its participant is the one speaking, and a track speaking
+      // again is announced again).
       this._silenceMs += FRAME_DURATION_MS
       if (this._silenceMs >= this.silenceGraceMs) {
         this._unattributedSpeaker = null
+        this._announced.clear()
         this._silenceMs = 0
       }
     }
+  }
+
+  // The opaque tag of a track as attributed now: its id, and how many times it
+  // lost its participant (a recycled receiver carries somebody else from then on,
+  // who must never be named after the previous owner's speech, nor the reverse).
+  _trackTag (trackId) {
+    return `${trackId}.${this.tracks.get(trackId).generation}`
   }
 
   _participantCount () {
@@ -343,9 +361,13 @@ class AudioMixer extends EventEmitter {
     return ids.size
   }
 
-  _emitSpeaker (speaker, reason) {
+  _emitSpeaker (speaker, reason, track) {
     const event = { type: 'speakerChanged', position: this.mixPosition, speaker }
-    if (reason) event.reason = reason // additive: a silence keeps the original shape
+    // Additive fields: a silence, or a participant found by the VAD, keeps the
+    // original shape.
+    if (reason) event.reason = reason
+    if (track) event.track = track
+    if (speaker) this._announced.clear() // a named speaker ends the unattributed run
     this.emit('speakerChanged', event)
   }
 
@@ -362,12 +384,14 @@ class AudioMixer extends EventEmitter {
    */
   setTrackParticipant (trackId, participant) {
     const track = this._track(trackId)
+    const previous = track.participant
     track.participant = participant ? { id: participant.id, name: participant.name || participant.id } : null
+    if (previous && (!track.participant || track.participant.id !== previous.id)) track.generation++
     if (track.participant && this._unattributedSpeaker === trackId) {
       this._unattributedSpeaker = null
       this._silenceMs = 0
       this.currentSpeaker = { id: track.participant.id, name: track.participant.name }
-      this._emitSpeaker(this.currentSpeaker, 'mapped')
+      this._emitSpeaker(this.currentSpeaker, 'mapped', this._trackTag(trackId))
     }
   }
 
@@ -384,7 +408,10 @@ class AudioMixer extends EventEmitter {
    */
   removeParticipant (participantId) {
     for (const track of this.tracks.values()) {
-      if (track.participant && track.participant.id === participantId) track.participant = null
+      if (track.participant && track.participant.id === participantId) {
+        track.participant = null
+        track.generation++
+      }
     }
     this._participantMix.delete(participantId)
     if (this.currentSpeaker && this.currentSpeaker.id === participantId) {
@@ -444,6 +471,7 @@ class AudioMixer extends EventEmitter {
     this.stalls = 0
     this.currentSpeaker = null
     this._unattributedSpeaker = null
+    this._announced.clear()
     this._silenceMs = 0
   }
 }

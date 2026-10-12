@@ -869,9 +869,9 @@ describe('Bot SFU join sequence, as the Transcriber receives it', () => {
     assert.deepEqual(control, [
       { type: 'participant', action: 'join', participant: { id: 'u1', name: 'Alice' } },
       { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } },
-      { type: 'speakerChanged', position: 480, speaker: null, reason: 'unattributed' },
+      { type: 'speakerChanged', position: 480, speaker: null, reason: 'unattributed', track: 'c0:1.0' },
       { type: 'participant', action: 'join', participant: { id: 'u2', name: 'Bob' } },
-      { type: 'speakerChanged', position: 720, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped' }
+      { type: 'speakerChanged', position: 720, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped', track: 'c0:1.0' }
     ])
     stream.dispose()
   })

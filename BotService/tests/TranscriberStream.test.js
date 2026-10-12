@@ -125,14 +125,14 @@ describe('TranscriberStream', () => {
 
   it('forwards speakerChanged untouched: its reason when it has one, no reason otherwise', () => {
     ws.emit('open')
-    bot.emit('speakerChanged', { type: 'speakerChanged', position: 20, speaker: null, reason: 'unattributed' })
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 20, speaker: null, reason: 'unattributed', track: 'c3:1.0' })
     bot.emit('speakerChanged', { type: 'speakerChanged', position: 40, speaker: null })
-    bot.emit('speakerChanged', { type: 'speakerChanged', position: 60, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped' })
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 60, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped', track: 'c3:1.0' })
     const sent = ws.sent.filter(x => typeof x === 'string').slice(1) // after init
     assert.deepEqual(sent, [
-      '{"type":"speakerChanged","position":20,"speaker":null,"reason":"unattributed"}',
+      '{"type":"speakerChanged","position":20,"speaker":null,"reason":"unattributed","track":"c3:1.0"}',
       '{"type":"speakerChanged","position":40,"speaker":null}',
-      '{"type":"speakerChanged","position":60,"speaker":{"id":"u2","name":"Bob"},"reason":"mapped"}'
+      '{"type":"speakerChanged","position":60,"speaker":{"id":"u2","name":"Bob"},"reason":"mapped","track":"c3:1.0"}'
     ])
   })
 

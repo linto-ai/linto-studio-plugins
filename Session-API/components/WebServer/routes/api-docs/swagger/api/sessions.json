@@ -463,7 +463,7 @@
       ],
       "operationId": "stopSession",
       "summary": "Stop a session by ID",
-      "description": "Terminates the session and marks all its channels inactive. Active and paused sessions are refused with 400 unless ?force=true is set (so that an operator who issues a stop on a live session has to confirm the data-loss intent).",
+      "description": "Terminates the session and marks all its channels inactive. Active and paused sessions are refused with 400 unless ?force=true is set (so that an operator who issues a stop on a live session has to confirm the data-loss intent). With ?waitFinal=true, the stop is the storing path: the caller (Studio, before it stores the conversation and deletes the session) takes the ending over, so the Scheduler does not publish system/out/sessions/ended for this session, even when it was ending the session itself (autoEnd, a bot leaving an empty meeting). A caller that stops with waitFinal=true without storing the conversation leaves it unstored. Without waitFinal, the stop stores nothing and a pending sessions/ended notification still goes out.",
       "parameters": [
         {
           "name": "id",
@@ -479,6 +479,15 @@
           "in": "query",
           "name": "force",
           "description": "Force session stop",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "in": "query",
+          "name": "waitFinal",
+          "description": "Storing stop. The response waits until every channel is reported inactive (at most SESSION_STOP_FLUSH_TIMEOUT_MS, 10 s by default), so that the last captions and kept audio are stored, instead of forcing the channels inactive at once. It also suppresses the Scheduler's system/out/sessions/ended notification for this session: the caller stores the conversation itself.",
           "required": false,
           "schema": {
             "type": "boolean"

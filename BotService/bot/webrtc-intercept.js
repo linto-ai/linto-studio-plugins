@@ -257,7 +257,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   // ── Track capture ─────────────────────────────────────────────────────────
   let trackIndexSeq = 0;
-  const tracks = new Map(); // trackId -> { index, participantId }
+  // trackId -> { index, participantId, unmappedAt, voiceAt }: when it last lost
+  // (or never had) its participant, and last carried speech while unmapped.
+  const tracks = new Map();
   const processedTracks = new Set();
   // trackIndex -> capture graph of a live track: { index, trackId, ended, sink, source, node, resample },
   // filled in as setupTrackCapture() progresses. Also what keeps the sink element
@@ -317,8 +319,19 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   // Convert and send a chunk of a track's audio, at the context rate.
   function sendPcm(capture, samples) {
+    const info = capture.info;
+    if (info && !info.participantId && isSpeech(samples)) info.voiceAt = Date.now();
     const pcm = capture.resample ? capture.resample(samples) : samples;
     if (pcm.length > 0) sendBinary(capture.index, float32ToInt16(pcm));
+  }
+
+  // Above the Node mixer's speech threshold (RMS 500 in 16-bit samples): only
+  // checked for the tracks not mapped yet (see needsFastPoll).
+  var SPEECH_RMS = 500 / 32768;
+  function isSpeech(samples) {
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+    return samples.length > 0 && sum / samples.length > SPEECH_RMS * SPEECH_RMS;
   }
 
   // Transport message: [trackIndex, samples, trackIndex, samples, ...] in render
@@ -434,9 +447,10 @@ function getInterceptScript (localWsUrl, platformConfig) {
       return;
     }
     processedTracks.add(track.id);
-    const capture = { index: trackIndexSeq++, trackId: track.id, ended: false, sink: null, source: null, node: null, resample: null };
+    const info = { index: trackIndexSeq++, participantId: null, unmappedAt: Date.now(), voiceAt: -Infinity };
+    const capture = { index: info.index, trackId: track.id, info: info, ended: false, sink: null, source: null, node: null, resample: null };
     captures.set(capture.index, capture);
-    tracks.set(track.id, { index: capture.index, participantId: null });
+    tracks.set(track.id, info);
     // A sub-frame connects on its first track (announced once the socket opens).
     if (!ws) connectWs();
     sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });
@@ -470,8 +484,17 @@ function getInterceptScript (localWsUrl, platformConfig) {
   window.RTCPeerConnection = PatchedRTCPeerConnection;
   if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = PatchedRTCPeerConnection;
 
-  function hasUnmappedTrack() {
-    for (const info of tracks.values()) if (!info.participantId) return true;
+  // A track waiting for its participant is worth a fast poll for a while after it
+  // appeared or lost its participant (its owner is normally found within a few
+  // polls), and for as long as it carries speech (words attributed to nobody until
+  // then). A receiver nobody takes back (unused, it renders silence) is then left
+  // to the normal cadence instead of keeping the fast one for good.
+  var FAST_POLL_WINDOW_MS = 10000;
+  function needsFastPoll(now) {
+    for (const info of tracks.values()) {
+      if (info.participantId) continue;
+      if (now - info.unmappedAt < FAST_POLL_WINDOW_MS || now - info.voiceAt < FAST_POLL_WINDOW_MS) return true;
+    }
     return false;
   }
   // Map a track to the participant publishing it. A track already mapped to
@@ -514,6 +537,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function forgetMapping(info) {
     if (!info || !info.participantId) return;
     info.participantId = null;
+    info.unmappedAt = Date.now();
     sentMappings.delete(info.index);
     sendJson({ type: 'trackUnmapped', trackIndex: info.index });
   }
@@ -547,12 +571,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
 // ── SFU participant mapping (Jitsi + LiveKit/Visio) ─────────────────────────
 // Emitted only for platformType === 'sfu'. Relies on shared helpers
-// (tracks, hasUnmappedTrack, mapTrack, sendJson, intervals, log).
+// (tracks, needsFastPoll, mapTrack, sendJson, intervals, log).
 const SFU_MAPPING_BLOCK = `
   // Polling starts with the page. Jitsi's state is read directly (cheap): at
-  // every tick. LiveKit's: while a captured track waits for its participant,
-  // poll fast, since its words are only attributed from the mapping on; otherwise
-  // at the normal cadence, for subscriptions and leaves. Finding the LiveKit Room
+  // every tick. LiveKit's: while a captured track waits for its participant
+  // (needsFastPoll), poll fast, since its words are only attributed from the
+  // mapping on; otherwise at the normal cadence, for subscriptions and leaves. Finding the LiveKit Room
   // walks the React fiber tree of the whole DOM, which is expensive: at most once
   // per SFU_POLL_MS, and no more once found (the Room object is kept).
   var SFU_FAST_POLL_MS = 250, SFU_POLL_MS = 1500;
@@ -715,7 +739,7 @@ const SFU_MAPPING_BLOCK = `
   function pollSfu() {
     const now = Date.now();
     pollJitsi();
-    if (!hasUnmappedTrack() && now - lastSfuPoll < SFU_POLL_MS) return;
+    if (!needsFastPoll(now) && now - lastSfuPoll < SFU_POLL_MS) return;
     lastSfuPoll = now;
     pollLivekit(now);
   }

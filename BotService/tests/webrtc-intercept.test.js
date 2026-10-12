@@ -1501,6 +1501,46 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.strictEqual(lk.stats.polls, 2, 'back to every 1.5 s')
     })
 
+    // A recycled receiver nobody took back kept the poller fast for good.
+    it('a receiver nobody takes back is polled fast for 10 s, then at the normal cadence', async () => {
+      const lk = lkSetup()
+      lk.pubs.push(subscribed('bob-t'))
+      const ctx = runScript(s, Object.assign({ audioOpts: { sampleRate: 16000 } }, lk.page))
+      await openLoopback(ctx)
+      const track = makeTrack('bob-t')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      runFor(ctx, 250) // mapped to Bob
+      lk.pubs.length = 0 // Bob unpublishes: his receiver is reused, but nobody's publication carries it
+      emitTrack(ctx, track)
+      lk.stats.polls = 0
+      runFor(ctx, 3000)
+      assert.strictEqual(lk.stats.polls, 12, 'fast at first')
+      runFor(ctx, 7000)
+      lk.stats.polls = 0
+      runFor(ctx, 30000)
+      assert.strictEqual(lk.stats.polls, 20, 'then every 1.5 s')
+    })
+
+    it('stays fast while an unmapped track carries speech, and for 10 s after it', async () => {
+      const lk = lkSetup()
+      const ctx = runScript(s, Object.assign({ audioOpts: { sampleRate: 16000 } }, lk.page))
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('stray-t'))
+      await flush(); await flush(); await flush()
+      const speech = new Float32Array(128).fill(0.05)
+      const quiet = new Float32Array(128).fill(0.01) // under the speech threshold
+      const play = (samples, ms) => { for (let t = 0; t < ms; t += 250) { feed(ctx, 0, samples); runFor(ctx, 250) } }
+      play(speech, 20000)
+      lk.stats.polls = 0
+      play(speech, 3000)
+      assert.strictEqual(lk.stats.polls, 12, 'speech, 20 s on: fast')
+      play(quiet, 10000)
+      lk.stats.polls = 0
+      play(quiet, 30000)
+      assert.strictEqual(lk.stats.polls, 20, 'quiet for 10 s: every 1.5 s')
+    })
+
     it('walks the DOM for the Room at most every 1.5 s, and never again once found', async () => {
       const lk = lkSetup({ hidden: true }) // the meeting client has not rendered it yet
       const ctx = runScript(s, lk.page)
@@ -1553,9 +1593,9 @@ describe('webrtc-intercept getInterceptScript()', () => {
       runFor(ctx, 10000)
       assert.strictEqual(pub.calls, 3, 'at 0, 2 and 6 s, not 40 times')
       pub.isSubscribed = true
-      runFor(ctx, 250)
-      pub.isSubscribed = false // unsubscribed later on: asked again at once
-      runFor(ctx, 250)
+      runFor(ctx, 1500)
+      pub.isSubscribed = false // unsubscribed later on: asked again at the next poll
+      runFor(ctx, 1500)
       assert.strictEqual(pub.calls, 4)
     })
 

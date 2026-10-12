@@ -57,12 +57,13 @@ describe('Kept audio across stream stops and reconnects', () => {
         require.cache[require.resolve('live-srt-lib')].exports.Component = FakeComponent;
         createStreamingServer = require(STREAMING_SERVER);
         ASR = require('../ASR/index.js');
-        original = { wav: ASR.prototype.transcodeToWav, concat: ASR.prototype.concatAudioFiles };
+        original = { wav: ASR.prototype.transcodeToWav, concat: ASR.prototype.concatAudioFiles, hasAudio: ASR.prototype.hasAudio };
     });
 
     after(() => {
         ASR.prototype.transcodeToWav = original.wav;
         ASR.prototype.concatAudioFiles = original.concat;
+        ASR.prototype.hasAudio = original.hasAudio;
         if (teardown) teardown();
         for (const [k, v] of Object.entries(ORIG_ENV)) {
             if (v === undefined) delete process.env[k]; else process.env[k] = v;
@@ -92,6 +93,9 @@ describe('Kept audio across stream stops and reconnects', () => {
         ASR.prototype.concatAudioFiles = async function (first, second, output) {
             fs.writeFileSync(output, Buffer.concat([fs.readFileSync(first), fs.readFileSync(second)]));
         };
+        // These stub outputs hold audio as soon as they hold bytes (ffprobe is
+        // exercised by test_kept_audio_ffmpeg.js).
+        ASR.prototype.hasAudio = async (file) => fs.statSync(file).size > 0;
         streaming = createStreamingServer({ components: {} });
         await wait(0);
         ws = streaming.servers[0];

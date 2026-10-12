@@ -79,6 +79,20 @@ function ffmpegMock(input) {
   }
   return api;
 }
+// ffprobe: a file holds audio when it is not empty (the stub's files hold the
+// bytes they were given), as ASR#hasAudio asks before appending to a file.
+ffmpegMock.ffprobe = (file, callback) => {
+  setImmediate(() => {
+    let size;
+    try {
+      size = fs.statSync(file).size;
+    } catch (error) {
+      callback(error);
+      return;
+    }
+    callback(null, { format: { duration: size > 0 ? size / 32000 : 0 } });
+  });
+};
 
 // A streaming server stand-in: the per-stream participant map is opt-in so the
 // same class covers the legacy (null map) path.

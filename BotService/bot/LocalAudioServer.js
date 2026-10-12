@@ -15,6 +15,11 @@ const JSON_QUOTE = 0x22 // '"'
  * every bot in the process. Each bot registers a handler under a unique path
  * and the in-page interceptor connects back to it, so audio never leaves the
  * machine and there is one server regardless of the number of concurrent bots.
+ *
+ * The interceptor runs in every document of the bot's page (sub-frames, and the
+ * document a navigation replaces while it unloads), so a path can have several
+ * open connections at once. Each gets an id, passed to the handlers, that tells
+ * them apart.
  */
 class LocalAudioServer {
   constructor () {
@@ -22,7 +27,8 @@ class LocalAudioServer {
     this.wss = null
     this.port = 0
     this.handlers = new Map() // path -> { onBinary, onJson, onClose }
-    this.connections = new Map() // path -> ws
+    this.connections = new Map() // path -> Set of open ws
+    this.connectionSeq = 0 // last connection id handed out (unique per server)
   }
 
   /** Bind to an ephemeral loopback port. Resolves once listening. */
@@ -49,44 +55,51 @@ class LocalAudioServer {
       ws.close()
       return
     }
-    this.connections.set(path, ws)
+    const connId = ++this.connectionSeq
+    let sockets = this.connections.get(path)
+    if (!sockets) {
+      sockets = new Set()
+      this.connections.set(path, sockets)
+    }
+    sockets.add(ws)
 
-    ws.on('message', (message, isBinary) => this._dispatch(path, handler, message, isBinary))
+    ws.on('message', (message, isBinary) => this._dispatch(path, handler, message, isBinary, connId))
     ws.on('close', () => {
-      // Guard against a stale close from a connection already replaced by a reconnect.
-      if (this.connections.get(path) === ws) this.connections.delete(path)
-      if (handler.onClose) handler.onClose()
+      // The path may have been unregistered (and its set dropped) in the meantime.
+      const open = this.connections.get(path)
+      if (open && open.delete(ws) && open.size === 0) this.connections.delete(path)
+      if (handler.onClose) handler.onClose(connId)
     })
     ws.on('error', (err) => logger.error(`LocalAudioServer: ws error on ${path}: ${err.message}`))
   }
 
-  _dispatch (path, handler, message, isBinary) {
+  _dispatch (path, handler, message, isBinary, connId) {
     if (typeof message === 'string') {
-      this._handleJson(path, handler, message)
+      this._handleJson(path, handler, message, connId)
       return
     }
     if (!Buffer.isBuffer(message)) return
 
     // `ws` delivers text frames as Buffers when isBinary is false.
     if (isBinary === false) {
-      this._handleJson(path, handler, message.toString())
+      this._handleJson(path, handler, message.toString(), connId)
       return
     }
     // A JSON control message may also arrive on a binary frame — sniff `{"`.
     if (message.length > 1 && message[0] === JSON_BRACE && message[1] === JSON_QUOTE) {
-      this._handleJson(path, handler, message.toString())
+      this._handleJson(path, handler, message.toString(), connId)
       return
     }
     if (message.length > HEADER_BYTES && handler.onBinary) {
       const trackIndex = message.readUInt16BE(0)
-      handler.onBinary(trackIndex, message.subarray(HEADER_BYTES))
+      handler.onBinary(trackIndex, message.subarray(HEADER_BYTES), connId)
     }
   }
 
-  _handleJson (path, handler, raw) {
+  _handleJson (path, handler, raw, connId) {
     if (!handler.onJson) return
     try {
-      handler.onJson(JSON.parse(raw))
+      handler.onJson(JSON.parse(raw), connId)
     } catch (e) {
       logger.error(`LocalAudioServer: JSON parse error on ${path}: ${e.message}`)
     }
@@ -102,9 +115,11 @@ class LocalAudioServer {
   }
 
   unregisterBot (path) {
-    const ws = this.connections.get(path)
-    if (ws) {
-      try { ws.close() } catch (e) { /* already closing */ }
+    const sockets = this.connections.get(path)
+    if (sockets) {
+      for (const ws of sockets) {
+        try { ws.close() } catch (e) { /* already closing */ }
+      }
       this.connections.delete(path)
     }
     this.handlers.delete(path)
@@ -112,8 +127,10 @@ class LocalAudioServer {
   }
 
   async stop () {
-    for (const ws of this.connections.values()) {
-      try { ws.close() } catch (e) { /* already closing */ }
+    for (const sockets of this.connections.values()) {
+      for (const ws of sockets) {
+        try { ws.close() } catch (e) { /* already closing */ }
+      }
     }
     this.connections.clear()
     this.handlers.clear()

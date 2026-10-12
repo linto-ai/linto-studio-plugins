@@ -277,6 +277,65 @@ describe('LocalAudioServer', () => {
     })
   })
 
+  describe('several connections on one path (one per document of the page)', () => {
+    it('serves every connection and tells them apart by id', (done) => {
+      const ids = {}
+      server.registerBot('/bot-multi', {
+        onJson: (j, connId) => {
+          ids[j.tag] = connId
+          if (Object.keys(ids).length < 2) return
+          assert.ok(Number.isInteger(ids.a) && Number.isInteger(ids.b))
+          assert.notEqual(ids.a, ids.b)
+          done()
+        }
+      })
+      const a = connect('/bot-multi'); a.on('open', () => a.send(JSON.stringify({ tag: 'a' })))
+      const b = connect('/bot-multi'); b.on('open', () => b.send(JSON.stringify({ tag: 'b' })))
+    })
+
+    it('passes the same connection id with its PCM frames and on its close', (done) => {
+      let binaryConn = null
+      server.registerBot('/bot-ids', {
+        onBinary: (trackIndex, pcm, connId) => { binaryConn = connId; ws.close() },
+        onClose: (connId) => { assert.ok(binaryConn > 0); assert.equal(connId, binaryConn); done() }
+      })
+      const ws = connect('/bot-ids')
+      ws.on('open', () => ws.send(frame(0, Buffer.from([1, 2]))))
+    })
+
+    it('unregisterBot closes every connection of the path', (done) => {
+      let closed = 0
+      server.registerBot('/bot-all', {
+        onClose: () => {
+          if (++closed < 2) return
+          assert.equal(server.connections.has('/bot-all'), false)
+          done()
+        }
+      })
+      let opened = 0
+      const onOpen = () => { if (++opened === 2) server.unregisterBot('/bot-all') }
+      connect('/bot-all').on('open', onOpen)
+      connect('/bot-all').on('open', onOpen)
+    })
+
+    it('a connection that closes leaves the other ones registered', (done) => {
+      let closed = 0
+      server.registerBot('/bot-sibling', {
+        onClose: () => {
+          if (++closed > 1) return // the other one, closed by the afterEach stop()
+          assert.equal(server.connections.get('/bot-sibling').size, 1)
+          done()
+        }
+      })
+      const a = connect('/bot-sibling')
+      const b = connect('/bot-sibling')
+      let opened = 0
+      const onOpen = () => { if (++opened === 2) a.close() }
+      a.on('open', onOpen)
+      b.on('open', onOpen)
+    })
+  })
+
   describe('_dispatch logic (direct, deterministic)', () => {
     // Drive _dispatch directly with a fake handler — no socket, fully synchronous.
     const dispatch = (handler, message, isBinary) =>

@@ -128,7 +128,7 @@ describe('Bot', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
       bot.handleAudioData(0, Buffer.alloc(640))
       assert.equal(mixer.added.length, 0, 'nothing mixed before mapping')
-      assert.equal(bot.earlyAudio.get(0).length, 2)
+      assert.equal(bot.earlyAudio.get('c0:0').length, 2)
 
       let joined = null
       bot.on('participant-joined', (p) => { joined = p })
@@ -136,7 +136,7 @@ describe('Bot', () => {
 
       assert.equal(mixer.added.length, 2, 'buffered frames flushed to the mixer')
       assert.deepEqual(joined, { identity: 'u1', name: 'Alice' })
-      assert.equal(bot.earlyAudio.has(0), false)
+      assert.equal(bot.earlyAudio.has('c0:0'), false)
     })
 
     it('emits participant-left and arms the empty-meeting timer when the last one leaves', (done) => {
@@ -155,27 +155,27 @@ describe('Bot', () => {
     it('cleans the early-audio buffer when its track is removed before any mapping', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
       bot.handleAudioData(0, Buffer.alloc(640))
-      assert.equal(bot.earlyAudio.get(0).length, 2)
-      assert.equal(bot.earlyAudioFirstSeen.has(0), true, 'age marker recorded')
+      assert.equal(bot.earlyAudio.get('c0:0').length, 2)
+      assert.equal(bot.earlyAudioFirstSeen.has('c0:0'), true, 'age marker recorded')
       bot._onTrackRemoved(0)
-      assert.equal(bot.earlyAudio.has(0), false, 'early-audio dropped on track removal')
-      assert.equal(bot.earlyAudioFirstSeen.has(0), false, 'age marker dropped too (maps stay in sync)')
+      assert.equal(bot.earlyAudio.has('c0:0'), false, 'early-audio dropped on track removal')
+      assert.equal(bot.earlyAudioFirstSeen.has('c0:0'), false, 'age marker dropped too (maps stay in sync)')
     })
 
     it('the reaper drops stale early-audio whose track was never mapped', () => {
       bot.handleAudioData(0, Buffer.alloc(640)) // stale: first seen "long ago"
       bot.handleAudioData(1, Buffer.alloc(640)) // fresh: first seen "now"
       // Backdate track 0 past the max age, leave track 1 fresh.
-      bot.earlyAudioFirstSeen.set(0, Date.now() - 60000)
+      bot.earlyAudioFirstSeen.set('c0:0', Date.now() - 60000)
       assert.notEqual(bot.earlyAudioReaper, null, 'reaper armed while early-audio is buffered')
       bot._reapEarlyAudio() // runs the reaper body deterministically (no wall-clock wait)
-      assert.equal(bot.earlyAudio.has(0), false, 'stale track 0 reaped')
-      assert.equal(bot.earlyAudio.has(1), true, 'fresh track 1 kept')
+      assert.equal(bot.earlyAudio.has('c0:0'), false, 'stale track 0 reaped')
+      assert.equal(bot.earlyAudio.has('c0:1'), true, 'fresh track 1 kept')
     })
 
     it('the reaper stops itself once nothing is buffered', () => {
       bot.handleAudioData(0, Buffer.alloc(640))
-      bot.earlyAudioFirstSeen.set(0, Date.now() - 60000)
+      bot.earlyAudioFirstSeen.set('c0:0', Date.now() - 60000)
       assert.notEqual(bot.earlyAudioReaper, null)
       bot._reapEarlyAudio()
       assert.equal(bot.earlyAudio.size, 0)
@@ -690,13 +690,13 @@ describe('Bot.handleJsonMessage dispatch', () => {
   it('participantMapping registers the track and participant', () => {
     bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 0, participant: { id: 'u1', name: 'A' } })
     assert.equal(bot.participants.size, 1)
-    assert.deepEqual(bot.trackParticipants.get(0), { id: 'u1', name: 'A' })
+    assert.deepEqual(bot.trackParticipants.get('c0:0'), { id: 'u1', name: 'A' })
   })
 
   it('trackRemoved routes to track removal', () => {
     bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 0, participant: { id: 'u1', name: 'A' } })
     bot.handleJsonMessage({ type: 'trackRemoved', trackIndex: 0 })
-    assert.equal(bot.trackParticipants.has(0), false)
+    assert.equal(bot.trackParticipants.has('c0:0'), false)
   })
 
   it('participantLeft removes the participant', () => {
@@ -736,7 +736,7 @@ describe('Bot._onParticipantMapping edge cases', () => {
     bot._onParticipantMapping(0, { id: 'u1', name: 'Old' })
     bot._onParticipantMapping(0, { id: 'u1', name: 'New' })
     assert.equal(joins, 1, 'participant-joined fires only once for the same id')
-    assert.equal(bot.trackParticipants.get(0).name, 'New', 'track mapping reflects the updated participant')
+    assert.equal(bot.trackParticipants.get('c0:0').name, 'New', 'track mapping reflects the updated participant')
   })
 
   it('participant-joined fires once per distinct participant id', () => {
@@ -764,8 +764,8 @@ describe('Bot._onTrackRemoved', () => {
     bot.handleAudioData(0, Buffer.alloc(2))
     bot._onParticipantMapping(1, { id: 'u1', name: 'A' }) // separate mapped track
     bot._onTrackRemoved(0)
-    assert.equal(bot.trackParticipants.has(0), false)
-    assert.equal(bot.earlyAudio.has(0), false)
+    assert.equal(bot.trackParticipants.has('c0:0'), false)
+    assert.equal(bot.earlyAudio.has('c0:0'), false)
   })
 
   it('removes the SFU participant once all of their tracks are gone', () => {
@@ -781,6 +781,57 @@ describe('Bot._onTrackRemoved', () => {
     bot._onTrackRemoved(0)
     assert.equal(bot.participants.has('u1'), true, 'participant survives while a track remains')
     assert.deepEqual(mixer.removed, [])
+  })
+})
+
+describe('Bot loopback connections', () => {
+  let bot, mixer
+  beforeEach(() => { bot = makeBot('visio'); mixer = makeFakeMixer(); bot.audioMixer = mixer })
+
+  it('keeps apart same-index tracks of different connections (each document numbers its tracks from 0)', () => {
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' }, 1)
+    bot.handleAudioData(0, Buffer.alloc(640), 2) // another document's track 0: not u1's
+    assert.equal(mixer.added.length, 0)
+    assert.equal(bot.earlyAudio.get('c2:0').length, 1)
+    bot.handleAudioData(0, Buffer.alloc(640), 1)
+    assert.deepEqual(mixer.added.map(a => a.id), ['u1'])
+  })
+
+  it('a track removal only affects the connection it came from', () => {
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' }, 1)
+    bot._onParticipantMapping(0, { id: 'u2', name: 'B' }, 2)
+    bot._onTrackRemoved(0, 2)
+    assert.equal(bot.trackParticipants.has('c1:0'), true)
+    assert.equal(bot.trackParticipants.has('c2:0'), false)
+    assert.equal(bot.participants.has('u1'), true)
+    assert.equal(bot.participants.has('u2'), false)
+  })
+
+  it('forgets the tracks of a closed connection but keeps the participants', () => {
+    let left = 0
+    bot.on('participant-left', () => { left++ })
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' }, 1)
+    bot.handleAudioData(1, Buffer.alloc(640), 1) // unmapped: early audio
+    bot._onParticipantMapping(0, { id: 'u2', name: 'B' }, 2)
+    bot.notifyAudioPipeClosed(1)
+    assert.equal(bot.trackParticipants.has('c1:0'), false)
+    assert.equal(bot.earlyAudio.has('c1:1'), false)
+    assert.equal(bot.trackParticipants.has('c2:0'), true, 'other connections untouched')
+    assert.deepEqual([...bot.participants.keys()], ['u1', 'u2'])
+    assert.equal(left, 0, 'a dropped connection is not a participant leave')
+  })
+
+  it('init wires the connection id of every loopback message into the track keys', async () => {
+    const { bot: initBot, record } = makeInitBot('visio')
+    await initBot.init()
+    const h = record.registerBot[0].handlers
+    h.onJson({ type: 'participantMapping', trackIndex: 3, participant: { id: 'u1', name: 'A' } }, 7)
+    assert.equal(initBot.trackParticipants.has('c7:3'), true)
+    h.onBinary(3, Buffer.alloc(640), 7)
+    assert.equal(initBot.audioMixer.hasParticipant('u1'), true, 'c7:3 audio routed to its participant')
+    h.onClose(7)
+    assert.equal(initBot.trackParticipants.has('c7:3'), false)
+    await initBot.dispose()
   })
 })
 

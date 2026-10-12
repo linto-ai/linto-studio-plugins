@@ -37,6 +37,13 @@ function envTimeoutMs (name, defaultSeconds) {
   return (Number.isFinite(v) && v > 0 ? v : defaultSeconds) * 1000
 }
 
+// A capture track is identified by the loopback connection it streams on plus its
+// in-page index: every document of the page (sub-frames, or the document that a
+// navigation replaces) numbers its own tracks from 0 on its own connection.
+function trackKey (connId, trackIndex) {
+  return `c${connId}:${trackIndex}`
+}
+
 // Page-console noise from meeting SPAs we never want in our logs.
 const IGNORED_CONSOLE = [
   'Content Security Policy', 'ERR_UNKNOWN_URL_SCHEME', 'net::ERR_', 'Failed to load resource',
@@ -68,10 +75,10 @@ class Bot extends EventEmitter {
     // empty-meeting timer never arms — so leave anyway after this window.
     this.joinTimeoutMs = envTimeoutMs('JOIN_TIMEOUT_SECONDS', 120)
 
-    this.trackParticipants = new Map() // trackIndex -> { id, name }
+    this.trackParticipants = new Map() // trackKey -> { id, name }
     this.participants = new Map() // participantId -> { id, name }
-    this.earlyAudio = new Map() // trackIndex -> [Buffer] buffered until mapped (SFU)
-    this.earlyAudioFirstSeen = new Map() // trackIndex -> ts of first buffered frame (reaper)
+    this.earlyAudio = new Map() // trackKey -> [Buffer] buffered until mapped (SFU)
+    this.earlyAudioFirstSeen = new Map() // trackKey -> ts of first buffered frame (reaper)
     this.earlyAudioReaper = null // interval dropping stale unmapped early-audio
     this.hasSeenParticipant = false
     this.hasSeenAudio = false // one-shot latch for the "first audio frame" log
@@ -127,10 +134,10 @@ class Bot extends EventEmitter {
 
       // Loopback audio sink for the in-page interceptor.
       this.audioServer.registerBot(this.wsPath, {
-        onBinary: (trackIndex, pcm) => this.handleAudioData(trackIndex, pcm),
-        onJson: (json) => this.handleJsonMessage(json),
+        onBinary: (trackIndex, pcm, connId) => this.handleAudioData(trackIndex, pcm, connId),
+        onJson: (json, connId) => this.handleJsonMessage(json, connId),
         // learn when the loopback audio pipe drops.
-        onClose: () => this.notifyAudioPipeClosed()
+        onClose: (connId) => this.notifyAudioPipeClosed(connId)
       })
 
       const localWsUrl = `ws://127.0.0.1:${this.audioServer.getPort()}${this.wsPath}`
@@ -203,17 +210,18 @@ class Bot extends EventEmitter {
     this.audioMixer.start()
   }
 
-  handleAudioData (trackIndex, pcmBuffer) {
+  handleAudioData (trackIndex, pcmBuffer, connId = 0) {
     // note every PCM frame for the silence watchdog.
     this.lastAudioAt = Date.now()
     if (this.isSfu) {
       this._noteFirstAudio()
       if (!this.audioMixer) return
-      const mapping = this.trackParticipants.get(trackIndex)
+      const key = trackKey(connId, trackIndex)
+      const mapping = this.trackParticipants.get(key)
       if (mapping) {
         this.audioMixer.addAudio(mapping.id, pcmBuffer, Date.now(), mapping.name)
       } else {
-        this._bufferEarlyAudio(trackIndex, pcmBuffer)
+        this._bufferEarlyAudio(key, pcmBuffer)
       }
     } else {
       // MCU/Teams: a single server-mixed track, forwarded as-is.
@@ -234,12 +242,12 @@ class Bot extends EventEmitter {
     logger.info(`Bot[${this.contextId}]: first audio frame received`)
   }
 
-  _bufferEarlyAudio (trackIndex, pcmBuffer) {
-    let buf = this.earlyAudio.get(trackIndex)
+  _bufferEarlyAudio (key, pcmBuffer) {
+    let buf = this.earlyAudio.get(key)
     if (!buf) {
       buf = []
-      this.earlyAudio.set(trackIndex, buf)
-      this.earlyAudioFirstSeen.set(trackIndex, Date.now()) // age for the reaper
+      this.earlyAudio.set(key, buf)
+      this.earlyAudioFirstSeen.set(key, Date.now()) // age for the reaper
     }
     if (buf.length < MAX_EARLY_FRAMES) buf.push(pcmBuffer)
     this._armEarlyAudioReaper()
@@ -247,18 +255,18 @@ class Bot extends EventEmitter {
 
   // Drop a track's early-audio buffer and its age marker together so the two maps
   // never diverge. Called on map/flush, on track removal, and by the reaper.
-  _dropEarlyAudio (trackIndex) {
-    this.earlyAudio.delete(trackIndex)
-    this.earlyAudioFirstSeen.delete(trackIndex)
+  _dropEarlyAudio (key) {
+    this.earlyAudio.delete(key)
+    this.earlyAudioFirstSeen.delete(key)
   }
 
-  _flushEarlyAudio (trackIndex, participant) {
-    const buffered = this.earlyAudio.get(trackIndex)
-    if (!buffered || !this.audioMixer) { this._dropEarlyAudio(trackIndex); return }
+  _flushEarlyAudio (key, participant) {
+    const buffered = this.earlyAudio.get(key)
+    if (!buffered || !this.audioMixer) { this._dropEarlyAudio(key); return }
     for (const pcm of buffered) {
       this.audioMixer.addAudio(participant.id, pcm, Date.now(), participant.name)
     }
-    this._dropEarlyAudio(trackIndex)
+    this._dropEarlyAudio(key)
   }
 
   // Periodically drop early-audio buffers whose track was never mapped so they
@@ -271,10 +279,10 @@ class Bot extends EventEmitter {
   }
 
   _reapEarlyAudio (now = Date.now()) {
-    for (const [trackIndex, firstSeen] of [...this.earlyAudioFirstSeen.entries()]) {
+    for (const [key, firstSeen] of [...this.earlyAudioFirstSeen.entries()]) {
       if (now - firstSeen < EARLY_AUDIO_MAX_AGE_MS) continue
-      logger.debug(`Bot[${this.contextId}]: reaping stale early-audio for track ${trackIndex} (never mapped)`)
-      this._dropEarlyAudio(trackIndex)
+      logger.debug(`Bot[${this.contextId}]: reaping stale early-audio for track ${key} (never mapped)`)
+      this._dropEarlyAudio(key)
     }
     if (this.earlyAudio.size === 0) this._cancelEarlyAudioReaper()
   }
@@ -285,15 +293,15 @@ class Bot extends EventEmitter {
     this.earlyAudioReaper = null
   }
 
-  handleJsonMessage (json) {
+  handleJsonMessage (json, connId = 0) {
     switch (json.type) {
       case 'trackAdded':
         break
       case 'trackRemoved':
-        this._onTrackRemoved(json.trackIndex)
+        this._onTrackRemoved(json.trackIndex, connId)
         break
       case 'participantMapping':
-        this._onParticipantMapping(json.trackIndex, json.participant)
+        this._onParticipantMapping(json.trackIndex, json.participant, connId)
         break
       case 'speakerChanged':
         // Teams native diarization (page-polled). SFU speaker changes come from
@@ -312,8 +320,9 @@ class Bot extends EventEmitter {
     }
   }
 
-  _onParticipantMapping (trackIndex, participant) {
-    this.trackParticipants.set(trackIndex, participant)
+  _onParticipantMapping (trackIndex, participant, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    this.trackParticipants.set(key, participant)
     if (!this.participants.has(participant.id)) {
       this.participants.set(participant.id, participant)
       logger.info(`Bot[${this.contextId}]: participant joined: ${participant.name} (${this.participants.size} present)`)
@@ -327,14 +336,15 @@ class Bot extends EventEmitter {
     this.hasSeenParticipant = true
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
-    this._flushEarlyAudio(trackIndex, participant)
+    this._flushEarlyAudio(key, participant)
   }
 
-  _onTrackRemoved (trackIndex) {
-    const removed = this.trackParticipants.get(trackIndex)
-    this.trackParticipants.delete(trackIndex)
+  _onTrackRemoved (trackIndex, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    const removed = this.trackParticipants.get(key)
+    this.trackParticipants.delete(key)
     // always clean the early-audio buffer for a removed track, mapped or not.
-    this._dropEarlyAudio(trackIndex)
+    this._dropEarlyAudio(key)
     if (!this.isSfu || !removed) return
     // SFU: a participant is gone once they have no remaining mapped tracks.
     const stillPresent = [...this.trackParticipants.values()].some(p => p.id === removed.id)
@@ -432,12 +442,23 @@ class Bot extends EventEmitter {
     this.audioSilenceWatchdog = null
   }
 
-  // The LocalAudioServer reports the in-page loopback socket closed. Not fatal on
+  // The LocalAudioServer reports an in-page loopback socket closed. Not fatal on
   // its own (the interceptor retries) but a strong signal the capture pipe is in
   // trouble; the audio-silence watchdog declares it dead if no audio resumes.
-  notifyAudioPipeClosed () {
+  // The tracks that streamed on it are forgotten: a document that reconnects
+  // streams them on the new connection (and replays their participant mappings),
+  // one that is gone (navigated away, removed frame) never sends for them again.
+  // Participants are left alone, their presence comes from mappings and leaves.
+  notifyAudioPipeClosed (connId = 0) {
     if (this.disposed) return
-    logger.debug(`Bot[${this.contextId}]: loopback audio connection closed (in-page interceptor will attempt to reconnect)`)
+    logger.debug(`Bot[${this.contextId}]: loopback audio connection ${connId} closed (in-page interceptor will attempt to reconnect)`)
+    const prefix = trackKey(connId, '')
+    for (const key of [...this.trackParticipants.keys()]) {
+      if (key.startsWith(prefix)) this.trackParticipants.delete(key)
+    }
+    for (const key of [...this.earlyAudio.keys()]) {
+      if (key.startsWith(prefix)) this._dropEarlyAudio(key)
+    }
   }
 
   getParticipantsList () {

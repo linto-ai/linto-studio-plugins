@@ -21,10 +21,10 @@ const STOPPING_STREAM_SEGMENT_RESERVE = 10;
 
 // Transient kept-audio files left by a crash or a failed save are swept on a
 // statuses snapshot (the live sessions), at most once per interval: those of
-// sessions no longer live, untouched for ORPHAN_AUDIO_MAX_AGE_MS (see
+// sessions gone from the snapshots for ORPHAN_AUDIO_GRACE_MS (see
 // ASR.sweepOrphanAudio).
 const ORPHAN_AUDIO_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
-const ORPHAN_AUDIO_MAX_AGE_MS = 60 * 60 * 1000;
+const ORPHAN_AUDIO_GRACE_MS = 60 * 60 * 1000;
 
 // Per-stream overflow: tags beyond the per-channel ASR cap collapse onto this
 // single shared "mixed" sub-ASR. 255 is reserved by the tagged-frame protocol
@@ -63,6 +63,8 @@ class StreamingServer extends Component {
     // Completion of each channel's latest stop (see _stopAsr).
     this.channelStops = new Map();
     this.lastOrphanAudioSweep = 0;
+    this.orphanAudioGoneSince = new Map();
+    this.sweepingOrphanAudio = false;
     this.servers = [];
     this.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     // Per-stream diarization (one ASR per participant). All keyed by the channel
@@ -1118,16 +1120,19 @@ class StreamingServer extends Component {
   async sweepOrphanAudio(sessions) {
     const storagePath = process.env.AUDIO_STORAGE_PATH;
     const now = Date.now();
-    if (!storagePath || now - this.lastOrphanAudioSweep < ORPHAN_AUDIO_SWEEP_INTERVAL_MS) return;
+    if (!storagePath || this.sweepingOrphanAudio || now - this.lastOrphanAudioSweep < ORPHAN_AUDIO_SWEEP_INTERVAL_MS) return;
     this.lastOrphanAudioSweep = now;
+    this.sweepingOrphanAudio = true;
     try {
       const live = new Set(sessions.map(session => session.id));
-      const removed = await ASR.sweepOrphanAudio(storagePath, live, ORPHAN_AUDIO_MAX_AGE_MS, now);
+      const removed = await ASR.sweepOrphanAudio(storagePath, live, this.orphanAudioGoneSince, ORPHAN_AUDIO_GRACE_MS, now);
       if (removed.length > 0) {
         logger.info(`Removed ${removed.length} orphan kept-audio file(s): ${removed.join(', ')}`);
       }
     } catch (error) {
       logger.warn(`Orphan kept-audio sweep failed: ${error.message}`);
+    } finally {
+      this.sweepingOrphanAudio = false;
     }
   }
 

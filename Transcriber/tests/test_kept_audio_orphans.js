@@ -2,7 +2,9 @@
  * Kept-audio files left behind, and Transcribers sharing the audio storage.
  *
  * A crash or a failed save leaves a stream's raw file (.pcm) or a save's
- * temporary files in AUDIO_STORAGE_PATH, where nothing removed them. And a
+ * temporary files in AUDIO_STORAGE_PATH, where nothing removed them. They are
+ * swept once their session has been gone for an hour; a file's age does not
+ * count (a stream paused for long writes nothing). And a
  * save's temporary files had fixed names (<session>-<channel>-temp/-output),
  * shared by two Transcribers saving the same channel at once on a shared
  * storage (saves are serialized per process only).
@@ -74,26 +76,69 @@ describe('Kept-audio orphans and shared storage', () => {
     const present = () => fs.readdirSync(storage).sort();
 
     describe('ASR.sweepOrphanAudio()', () => {
-        it('deletes old transient files of ended sessions only', async () => {
-            const orphans = [
-                file(`${ENDED}-7-${STREAM}.pcm`, 2 * HOUR), // a stream's raw file
-                file(`${ENDED}-7.pcm`, 2 * HOUR), // former raw file name
-                file(`${ENDED}-7-temp-${STREAM}.mp3`, 2 * HOUR),
-                file(`${ENDED}-7-output-${STREAM}.wav`, 2 * HOUR),
-                file(`${ENDED}-7-temp.wav`, 2 * HOUR), // former temporary names
-                file(`${ENDED}-7-output.mp3`, 2 * HOUR),
-            ];
+        const orphanNames = () => [
+            `${ENDED}-7-${STREAM}.pcm`, // a stream's raw file
+            `${ENDED}-7.pcm`, // former raw file name
+            `${ENDED}-7-temp-${STREAM}.mp3`,
+            `${ENDED}-7-output-${STREAM}.wav`,
+            `${ENDED}-7-temp.wav`, // former temporary names
+            `${ENDED}-7-output.mp3`,
+        ];
+
+        it('deletes the transient files of sessions gone for the grace period, whatever their age', async () => {
+            const orphans = orphanNames().map((name) => file(name, 2 * HOUR));
             const kept = [
                 file(`${LIVE}-7-${STREAM}.pcm`, 2 * HOUR), // live session (e.g. paused for long)
                 file(`${LIVE}-7-temp-${STREAM}.mp3`, 2 * HOUR),
-                file(`${ENDED}-8-${STREAM}.pcm`, 10 * 60 * 1000), // recent: maybe a save in progress elsewhere
                 file(`${ENDED}-7.wav`, 2 * HOUR), // the channel's audio files
                 file(`${ENDED}-7.mp3`, 2 * HOUR),
                 file('notes.txt', 2 * HOUR), // anything else
             ];
-            const removed = await ASR.sweepOrphanAudio(storage, new Set([LIVE]), HOUR);
+            const goneSince = new Map();
+            const t0 = Date.now();
+            // Untouched for 2 h, but the session has only just been found gone
+            // (e.g. a stream paused for long, whose session just ended).
+            assert.deepStrictEqual(await ASR.sweepOrphanAudio(storage, new Set([LIVE]), goneSince, HOUR, t0), []);
+            assert.deepStrictEqual(goneSince, new Map([[ENDED, t0]]));
+            assert.deepStrictEqual(await ASR.sweepOrphanAudio(storage, new Set([LIVE]), goneSince, HOUR, t0 + HOUR - 1), []);
+            const removed = await ASR.sweepOrphanAudio(storage, new Set([LIVE]), goneSince, HOUR, t0 + HOUR);
             assert.deepStrictEqual(removed.sort(), orphans.sort());
             assert.deepStrictEqual(present(), kept.sort());
+            assert.deepStrictEqual(goneSince, new Map(), 'nothing left to track');
+        });
+
+        it('never deletes the files of a stream this process still writes or saves', async () => {
+            const channel = {
+                id: 7, enableLiveTranscripts: false, keepAudio: true, compressAudio: false,
+                transcriberProfile: { config: { type: 'fake', languages: [] } }, translations: [],
+            };
+            const asr = new ASR({ id: ENDED }, channel); // e.g. paused for 2 h, its session just ended
+            await asr._transitionLock;
+            if (asr.audioFile.pending) await new Promise((resolve) => asr.audioFile.once('ready', resolve));
+            const raw = path.basename(asr.audioPcmPath);
+            const at = new Date(Date.now() - 2 * HOUR);
+            fs.utimesSync(asr.audioPcmPath, at, at);
+            const goneSince = new Map([[ENDED, Date.now() - 2 * HOUR]]);
+            await ASR.sweepOrphanAudio(storage, new Set(), goneSince, HOUR);
+            assert.deepStrictEqual(present(), [raw]);
+            // Once its save failed (here: it cannot be transcoded), it is an
+            // orphan, swept after the grace period.
+            asr.on('error', () => {});
+            asr.transcodeToWav = async () => { throw new Error('no ffmpeg'); };
+            asr.audioFile.write(Buffer.from([1, 2]));
+            assert.strictEqual(await asr.dispose(), false);
+            const t0 = Date.now();
+            assert.deepStrictEqual(await ASR.sweepOrphanAudio(storage, new Set(), goneSince, HOUR, t0), []);
+            assert.deepStrictEqual(await ASR.sweepOrphanAudio(storage, new Set(), goneSince, HOUR, t0 + HOUR), [raw]);
+        });
+
+        it('forgets a session found live again', async () => {
+            file(`${ENDED}-7-${STREAM}.pcm`, 0);
+            const goneSince = new Map();
+            await ASR.sweepOrphanAudio(storage, new Set(), goneSince, HOUR);
+            assert.ok(goneSince.has(ENDED));
+            await ASR.sweepOrphanAudio(storage, new Set([ENDED]), goneSince, HOUR); // resumed
+            assert.deepStrictEqual(goneSince, new Map());
         });
     });
 
@@ -101,13 +146,15 @@ describe('Kept-audio orphans and shared storage', () => {
         it('sweeps on a statuses snapshot, at most once per interval', async () => {
             const streaming = createStreamingServer({ components: {} });
             await wait(0);
-            const first = file(`${ENDED}-7-${STREAM}.pcm`, 2 * HOUR);
+            streaming.orphanAudioGoneSince.set(ENDED, Date.now() - 2 * HOUR); // gone for long already
+            const first = file(`${ENDED}-7-${STREAM}.pcm`, 0);
             const live = file(`${LIVE}-7-${STREAM}.pcm`, 2 * HOUR);
             streaming.setSessions([{ id: LIVE, channels: [] }]);
             await wait(50);
             assert.deepStrictEqual(present(), [live], `${first} swept, the live session's file kept`);
 
             const second = file(`${ENDED}-8-${STREAM}.pcm`, 2 * HOUR);
+            streaming.orphanAudioGoneSince.set(ENDED, Date.now() - 2 * HOUR);
             streaming.setSessions([{ id: LIVE, channels: [] }]);
             await wait(50);
             assert.deepStrictEqual(present(), [live, second].sort(), 'not swept again within the interval');

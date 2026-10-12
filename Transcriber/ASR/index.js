@@ -12,6 +12,10 @@ const REDACTED = '[REDACTED]';
 
 // Kept-audio saves in progress, per `${sessionId}-${channelId}` (see saveAudio).
 const audioSaves = new Map();
+// Transient kept-audio files this process is writing or still has to save: a
+// stream's raw file until its save is over, a save's temporary files. The
+// orphan sweep never deletes them (see sweepOrphanAudio).
+const audioFilesInUse = new Set();
 // ffprobe's error on a file it read and found no audio frame in, e.g. an MP3
 // of headers only, as encoded from no audio. Only small files count as
 // holding no audio on this error (see hasAudio).
@@ -226,6 +230,7 @@ class ASR extends eventEmitter {
       // nor have its own deleted by that save.
       if (channel.keepAudio && this.record) {
         this.audioPcmPath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-${crypto.randomUUID()}.pcm`);
+        audioFilesInUse.add(this.audioPcmPath);
         this.audioFile = fs.createWriteStream(this.audioPcmPath);
       }
       // C8: keep the buffer allocated by the constructor (it may already hold
@@ -771,7 +776,8 @@ class ASR extends eventEmitter {
     const save = (audioSaves.get(key) || Promise.resolve())
       .catch(() => {})
       .then(() => ready)
-      .then(() => this._saveAudio());
+      .then(() => this._saveAudio())
+      .finally(() => audioFilesInUse.delete(this.audioPcmPath));
     audioSaves.set(key, save);
     save.catch(() => {}).then(() => {
       if (audioSaves.get(key) === save) audioSaves.delete(key);
@@ -834,6 +840,8 @@ class ASR extends eventEmitter {
       const saveId = crypto.randomUUID();
       const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-temp-${saveId}`) + fileExtension;
       const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-output-${saveId}`) + fileExtension;
+      audioFilesInUse.add(tempOutFilePath);
+      audioFilesInUse.add(tempOutputFilePath);
       try {
         await transcodeFn(pcmFilePath, tempOutFilePath);
         const appended = await this.hasAudio(tempOutFilePath);
@@ -847,8 +855,10 @@ class ASR extends eventEmitter {
           this.logger.warn(`Nothing appended to ${outFilePath}: this stream's audio encodes to no audio frame`);
         }
       } finally {
-        fs.rmSync(tempOutFilePath, { force: true });
-        fs.rmSync(tempOutputFilePath, { force: true });
+        for (const temp of [tempOutFilePath, tempOutputFilePath]) {
+          fs.rmSync(temp, { force: true });
+          audioFilesInUse.delete(temp);
+        }
       }
     } else {
       await transcodeFn(pcmFilePath, outFilePath);
@@ -859,24 +869,41 @@ class ASR extends eventEmitter {
   }
 
   // Delete the transient kept-audio files (TRANSIENT_AUDIO_FILE) that a crash
-  // or a failed save left in `storagePath`. Only those of sessions no longer
-  // live (not in `liveSessionIds`) and not modified for `maxAgeMs` are deleted:
-  // a live session's stream may be writing them on any Transcriber sharing the
-  // storage, and a recent one may be read by a save in progress elsewhere.
-  // Returns the names of the deleted files.
-  static async sweepOrphanAudio(storagePath, liveSessionIds, maxAgeMs, now = Date.now()) {
+  // or a failed save left in `storagePath`, those of sessions gone for
+  // `graceMs`. A session is gone when it is not live (in `liveSessionIds`, the
+  // statuses snapshot); `goneSince` (session id -> time) records when a sweep
+  // first found its files so, and is kept up to date here. A file's age does
+  // not count: a stream paused for long writes nothing, and its session may
+  // just have ended. The grace leaves the stops and saves of an ended session
+  // on other Transcribers sharing the storage time to complete; this process's
+  // own files in use are never deleted. The directory is read in batches,
+  // yielding to the event loop. Returns the names of the deleted files.
+  static async sweepOrphanAudio(storagePath, liveSessionIds, goneSince, graceMs, now = Date.now()) {
     const removed = [];
-    for (const name of await fs.promises.readdir(storagePath)) {
-      const match = TRANSIENT_AUDIO_FILE.exec(name);
+    const waiting = new Set();
+    let read = 0;
+    for await (const entry of await fs.promises.opendir(storagePath, { bufferSize: 256 })) {
+      if (++read % 256 === 0) await new Promise((resolve) => setImmediate(resolve));
+      const match = TRANSIENT_AUDIO_FILE.exec(entry.name);
       if (!match || liveSessionIds.has(match[1])) continue;
-      const file = path.join(storagePath, name);
+      const file = path.join(storagePath, entry.name);
+      if (audioFilesInUse.has(file)) continue;
+      const sessionId = match[1];
+      if (!goneSince.has(sessionId)) goneSince.set(sessionId, now);
+      if (now - goneSince.get(sessionId) < graceMs) {
+        waiting.add(sessionId);
+        continue;
+      }
       try {
-        if (now - (await fs.promises.stat(file)).mtimeMs < maxAgeMs) continue;
         await fs.promises.unlink(file);
-        removed.push(name);
+        removed.push(entry.name);
       } catch (e) {
         // Removed meanwhile (e.g. by another instance's sweep).
       }
+    }
+    // Only sessions with files waiting for their grace period are tracked.
+    for (const sessionId of goneSince.keys()) {
+      if (!waiting.has(sessionId)) goneSince.delete(sessionId);
     }
     return removed;
   }

@@ -12,6 +12,11 @@ const REDACTED = '[REDACTED]';
 
 // Kept-audio saves in progress, per `${sessionId}-${channelId}` (see saveAudio).
 const audioSaves = new Map();
+// ffprobe's error on a file it read and found no audio frame in, e.g. an MP3
+// of headers only, as encoded from no audio. Only small files count as
+// holding no audio on this error (see hasAudio).
+const NO_AUDIO_FRAME = /Failed to read frame size|Invalid data found when processing input/;
+const HEADERS_ONLY_MAX_BYTES = 4096;
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 // Transient kept-audio files: a stream's raw file and a save's temporary
@@ -793,19 +798,34 @@ class ASR extends eventEmitter {
     const pcmFilePath = this.audioPcmPath;
     let outFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}`) + fileExtension;
 
-    // A stream that received no audio is not saved: encoding nothing yields a
-    // file with no audio frame (an MP3 of headers only), which then breaks
-    // every later concat of the channel's file.
+    // A stream that received no audio is not appended: encoding nothing
+    // yields a file with no audio frame (an MP3 of headers only), which then
+    // breaks every later concat of the channel's file. A WAV channel still
+    // gets its file, a valid empty WAV: studio-api waits for one to transcribe
+    // the channel offline.
     if (fs.statSync(pcmFilePath).size === 0) {
-      this.logger.info('No kept audio to save for this stream');
+      if (!this.channel.compressAudio && !fs.existsSync(outFilePath)) {
+        await transcodeFn(pcmFilePath, outFilePath);
+        this.logger.info(`No audio in this stream: empty audio file saved as ${outFilePath}`);
+      } else {
+        this.logger.info('No kept audio to save for this stream');
+      }
       fs.unlinkSync(pcmFilePath);
       return;
     }
-    // A channel file holding no audio (e.g. saved from an empty stream by an
-    // older version) cannot be concatenated to: replace it.
-    if (fs.existsSync(outFilePath) && !(await this.hasAudio(outFilePath))) {
-      this.logger.warn(`Replacing ${outFilePath}: it holds no audio`);
-      fs.unlinkSync(outFilePath);
+    // A channel file holding no audio (an empty WAV, or an MP3 saved from an
+    // empty stream by an older version) cannot be concatenated to: replace it.
+    // When that cannot be told, nothing is changed: the save fails, keeping
+    // the channel file and this stream's raw file.
+    if (fs.existsSync(outFilePath)) {
+      const holdsAudio = await this.hasAudio(outFilePath);
+      if (holdsAudio === null) {
+        throw new Error(`cannot tell whether ${outFilePath} holds audio: kept as is, this stream's audio left in ${pcmFilePath}`);
+      }
+      if (!holdsAudio) {
+        this.logger.warn(`Replacing ${outFilePath}: it holds no audio`);
+        fs.unlinkSync(outFilePath);
+      }
     }
 
     if (fs.existsSync(outFilePath)) {
@@ -814,14 +834,22 @@ class ASR extends eventEmitter {
       const saveId = crypto.randomUUID();
       const tempOutFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-temp-${saveId}`) + fileExtension;
       const tempOutputFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-output-${saveId}`) + fileExtension;
-      await transcodeFn(pcmFilePath, tempOutFilePath);
-      if (await this.hasAudio(tempOutFilePath)) {
-        await this.concatAudioFiles(outFilePath, tempOutFilePath, tempOutputFilePath);
-        fs.renameSync(tempOutputFilePath, outFilePath);
-      } else {
-        this.logger.warn(`Nothing appended to ${outFilePath}: this stream's audio encodes to no audio frame`);
+      try {
+        await transcodeFn(pcmFilePath, tempOutFilePath);
+        const appended = await this.hasAudio(tempOutFilePath);
+        if (appended === null) {
+          throw new Error(`cannot tell whether this stream's audio encodes to audio: ${outFilePath} kept as is, this stream's audio left in ${pcmFilePath}`);
+        }
+        if (appended) {
+          await this.concatAudioFiles(outFilePath, tempOutFilePath, tempOutputFilePath);
+          fs.renameSync(tempOutputFilePath, outFilePath);
+        } else {
+          this.logger.warn(`Nothing appended to ${outFilePath}: this stream's audio encodes to no audio frame`);
+        }
+      } finally {
+        fs.rmSync(tempOutFilePath, { force: true });
+        fs.rmSync(tempOutputFilePath, { force: true });
       }
-      fs.unlinkSync(tempOutFilePath);
     } else {
       await transcodeFn(pcmFilePath, outFilePath);
     }
@@ -853,11 +881,24 @@ class ASR extends eventEmitter {
     return removed;
   }
 
-  // Whether an audio file decodes to some audio (ffprobe reports a duration).
+  // Whether an audio file decodes to some audio: true when ffprobe reports a
+  // duration, false on evidence of no audio (ffprobe read the file and reports
+  // no duration, or no audio frame in a file small enough to hold headers
+  // only), null otherwise (ffprobe or the file could not be read).
   hasAudio(file) {
     return new Promise((resolve) => {
       ffmpeg.ffprobe(file, (err, data) => {
-        resolve(!err && Number(data && data.format && data.format.duration) > 0);
+        if (!err) {
+          resolve(Number(data && data.format && data.format.duration) > 0);
+          return;
+        }
+        let size = null;
+        try {
+          size = fs.statSync(file).size;
+        } catch (e) {
+          // Unreadable: unknown.
+        }
+        resolve(NO_AUDIO_FRAME.test(err.message) && size !== null && size <= HEADERS_ONLY_MAX_BYTES ? false : null);
       });
     });
   }
@@ -887,7 +928,7 @@ class ASR extends eventEmitter {
       if (this.audioFile) {
         // The last writes must reach the raw file before it is transcoded. A
         // stream that received no audio (K2: nobody ever spoke on a per-stream
-        // channel, so its recorder's mixed flow stayed empty) saves nothing,
+        // channel, so its recorder's mixed flow stayed empty) appends nothing,
         // see _saveAudio.
         const closed = this._closeAudioFile();
         if (this._reservedAudioSave) {

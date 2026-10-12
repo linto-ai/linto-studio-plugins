@@ -555,7 +555,10 @@ describe('K2 per-stream recording split', () => {
       assert.deepStrictEqual(listFiles(), [`${session.id}-chan.wav`]);
     });
 
-    it('nobody spoke: no marker, no transcode, the empty .pcm is removed, session-stop still fires', async () => {
+    // Like any kept-audio stream that received no audio: a WAV channel still
+    // gets its (empty) file, which studio-api waits for to transcribe the
+    // channel offline; an MP3 channel gets none (see the next test).
+    it('nobody spoke: no marker, the empty .pcm is removed, an empty WAV is kept, session-stop still fires', async () => {
       const { inst, server } = await wire([{ id: 'u0', name: 'P0', tag: 0 }]);
       const session = makeSession();
       server.emit('session-start', session, makeChannel());
@@ -574,9 +577,23 @@ describe('K2 per-stream recording split', () => {
       assert.strictEqual(inst.emitted.filter(e => e[0] === 'session-stop').length, 1,
         'the deactivate is still published, the session is not stuck');
       assert.ok(await waitFor(() => !fs.existsSync(rawFile)), 'the 0-byte .pcm is dropped');
-      assert.deepStrictEqual(listFiles(), [], 'ffmpeg is never run on an empty input');
-      assert.deepStrictEqual(ffmpegCalls, []);
+      assert.deepStrictEqual(listFiles(), [`${session.id}-chan.wav`], 'the channel still gets its audio file');
+      assert.deepStrictEqual(ffmpegCalls.map(c => c.op), ['transcode'], 'an empty WAV, nothing appended');
+      assert.strictEqual(fs.statSync(wavOf(session)).size, 0, 'it holds no audio');
       assert.deepStrictEqual(errors, []);
+    });
+
+    it('nobody spoke on an MP3 channel: no transcode, no file', async () => {
+      const { inst, server } = await wire([{ id: 'u0', name: 'P0', tag: 0 }]);
+      const session = makeSession();
+      server.emit('session-start', session, makeChannel({ compressAudio: true }));
+      await settleAll(inst);
+      const rawFile = inst.ASRs.get(`${session.id}_chan#rec`).audioPcmPath;
+
+      assert.strictEqual(await inst._stopAsr(session, 'chan'), true);
+      assert.ok(await waitFor(() => !fs.existsSync(rawFile)), 'the 0-byte .pcm is dropped');
+      assert.deepStrictEqual(listFiles(), [], 'an MP3 of headers only would break every later concat');
+      assert.deepStrictEqual(ffmpegCalls, []);
     });
   });
 

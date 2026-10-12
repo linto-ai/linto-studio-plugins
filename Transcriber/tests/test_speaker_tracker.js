@@ -684,7 +684,8 @@ describe('SpeakerTracker unattributed speaker', () => {
 // another track or a silence): `{ speaker: null, reason: 'unattributed', track }`,
 // then `{ speaker, reason: 'mapped', track }` once that track is mapped. The
 // time track T is the speaker is T's: only T's mapping names it, within the
-// window opened by T's first null.
+// window from the time T's speech started in the segment. A tag changes when
+// its track changes hands.
 describe('SpeakerTracker unattributed speaker, per track', () => {
   const ALICE = { id: 'u1', name: 'Alice' };
   const BOB = { id: 'u2', name: 'Bob' };
@@ -748,28 +749,48 @@ describe('SpeakerTracker unattributed speaker, per track', () => {
     assert.equal(speakerOf(t, 6), 'u1', 'Alice is still the speaker');
   });
 
-  it('keeps the window of the first null when a track resumes after a short silence', () => {
+  it('names both turns of a track resuming after a short silence', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000; t.addSpeakerChange(unattributed(1000, 'tb')); next(t, null, 5);
     ref.now = 2300; t.addSpeakerChange({ position: 1300, speaker: null }); // silence
     next(t, 5, 6);
     ref.now = 2800; t.finalizeSegment(6); t.addSpeakerChange(unattributed(1800, 'tb')); // Bob resumes
     ref.now = 3050; t.assignSpeakerToSegment(7);
-    ref.now = 3300; t.addSpeakerChange(mapped(2300, BOB, 'tb')); // within 2000 + 1.5 s
+    ref.now = 3300; t.addSpeakerChange(mapped(2300, BOB, 'tb')); // within 1.5 s of each turn's start
     t.finalizeSegment(7);
     assert.deepEqual([5, 6, 7].map((s) => speakerOf(t, s)), ['u2', 'u1', 'u2'],
       'both of Bob\'s turns named; the silence keeps the lastKnownSpeaker fallback');
   });
 
-  it('opens no new window when a track resumes after its window: the late turn stays unknown', () => {
+  it('names the segments of a track mapped late that started within the window, the older ones stay unknown', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000; t.addSpeakerChange(unattributed(1000, 'tb')); next(t, null, 5);
-    ref.now = 2300; t.addSpeakerChange({ position: 1300, speaker: null }); t.finalizeSegment(5);
-    ref.now = 4500; t.addSpeakerChange(unattributed(3500, 'tb')); // after 2 s of silence
+    ref.now = 2800; next(t, 5, 6); // Bob keeps speaking
+    ref.now = 3300; next(t, 6, 7);
+    ref.now = 3600; t.addSpeakerChange(mapped(2600, BOB, 'tb')); // 1.6 s after Bob's first words
+    t.finalizeSegment(7);
+    assert.deepEqual([5, 6, 7].map((s) => speakerOf(t, s)), [null, 'u2', 'u2'],
+      'segment 5 is past its window (its final is out), 6 and 7 are not');
+  });
+
+  it('gives a track resuming after a long silence a new chance for its new segments', () => {
+    const { ref, t } = aliceSpeaking();
+    ref.now = 2000; t.addSpeakerChange(unattributed(1000, 'tb')); next(t, null, 5);
+    ref.now = 2300; t.finalizeSegment(5); t.addSpeakerChange({ position: 1300, speaker: ALICE }); // Alice answers
+    ref.now = 4500; t.addSpeakerChange(unattributed(3500, 'tb')); // Bob again, still unmapped
     t.assignSpeakerToSegment(7);
     ref.now = 4600; t.addSpeakerChange(mapped(3600, BOB, 'tb'));
     t.finalizeSegment(7);
-    assert.deepEqual([5, 7].map((s) => speakerOf(t, s)), [null, null]);
+    assert.deepEqual([5, 7].map((s) => speakerOf(t, s)), [null, 'u2'], 'segment 5 is past its window');
+  });
+
+  it('never names the segments of a previous owner of the track: the tag changed hands', () => {
+    const { ref, t } = aliceSpeaking();
+    ref.now = 2000; t.addSpeakerChange(unattributed(1000, 'rx.0')); next(t, null, 5); // its first owner, never found
+    ref.now = 2300; t.finalizeSegment(5); t.addSpeakerChange(unattributed(1300, 'rx.1')); t.assignSpeakerToSegment(6); // the receiver recycled for Bob
+    ref.now = 2400; t.addSpeakerChange(mapped(1400, BOB, 'rx.1'));
+    t.finalizeSegment(6);
+    assert.deepEqual([5, 6].map((s) => speakerOf(t, s)), [null, 'u2']);
   });
 
   it('gives a segment assigned just before another track\'s null to that track', () => {
@@ -795,19 +816,6 @@ describe('SpeakerTracker unattributed speaker, per track', () => {
     ref.now = 3100; t.addSpeakerChange(mapped(2100, CAROL, 'tc'));
     t.finalizeSegment(6);
     assert.equal(speakerOf(t, 6), null);
-  });
-
-  it('remembers a bounded number of track tags; clear() forgets them', () => {
-    const { ref, t } = aliceSpeaking();
-    for (let i = 0; i < 300; i++) t.addSpeakerChange(unattributed(i, `t${i}`));
-    assert.equal(t.trackSince.size, 256);
-    t.clear();
-    assert.equal(t.trackSince.size, 0);
-    assert.equal(t.currentTrack, null);
-    ref.now = 9000; t.addSpeakerChange(unattributed(0, 't299')); t.assignSpeakerToSegment(1);
-    ref.now = 9100; t.addSpeakerChange(mapped(100, BOB, 't299'));
-    t.finalizeSegment(1);
-    assert.equal(speakerOf(t, 1), 'u2', 'a fresh window after clear()');
   });
 
   it('clear() forgets the current track', () => {

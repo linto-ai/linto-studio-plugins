@@ -1,9 +1,9 @@
 const { logger } = require('live-srt-lib')
 
 const DEFAULT_GRACE_PERIOD_MS = 200
-// After a `reason: 'unattributed'` null, how long the participant the track
-// gets mapped to can still name the time heard from the speaker the bot could
-// not name. The bot sends that participant (join, then speakerChanged) as soon
+// After a `reason: 'unattributed'` null, how long the bot's `reason: 'mapped'`
+// change naming the participant the track got mapped to can still name the
+// time heard from the speaker the bot could not name. The bot sends it as soon
 // as the track is mapped, ~250 ms on an SFU: 1.5 s covers that delay several
 // times over, event and network jitter included.
 const DEFAULT_UNATTRIBUTED_WINDOW_MS = 1500
@@ -35,8 +35,9 @@ const DEFAULT_EVENT_RING_SIZE = 50
  *     cannot name yet is speaking (SFU track not mapped to a participant yet).
  *     Their speaking time is credited to that unnamed speaker, never to the
  *     previous one, and a segment's label shows nobody while they speak. Only
- *     the participant the track gets mapped to names that time: one whose join
- *     arrives after that null, speaking within the unattributed window.
+ *     the bot's `{ speaker, reason: 'mapped' }` change, naming the participant
+ *     that unattributed track was just mapped to, names that time, within the
+ *     unattributed window, and only for its own episode (the latest null).
  *     Otherwise it stays unnamed (unknown beats wrong): unnamed time that wins
  *     a segment's majority leaves it without speaker. A null without reason is
  *     silence.
@@ -45,10 +46,6 @@ class SpeakerTracker {
   constructor (options = {}) {
     this.participants = new Map() // id -> { id, name }
     this.departed = new Set() // ids of participants that have left
-    // Joins received so far, and the value of that count when each participant
-    // last joined: tells a participant who joined after an unattributed null.
-    this.joinCount = 0
-    this.joinedAt = new Map() // id -> joinCount after its join
     this.currentSpeaker = null
     this.lastKnownSpeaker = null
     // segmentId -> { speaker, assignedAt, final, durations, openSpeaker,
@@ -57,8 +54,8 @@ class SpeakerTracker {
     //     order; `key` is a participant id, or the key of an unnamed speaker
     //     (see _unnamed), whose entry in `unattributed` says whether, and by
     //     whom, it got named;
-    //   unattributed: Map<key, { episode, pendingUntil, joinsBefore, speaker }>,
-    //     the unnamed speakers heard in the segment;
+    //   unattributed: Map<key, { episode, pendingUntil, speaker }>, the
+    //     unnamed speakers heard in the segment;
     //   openSpeaker: the participant or the unnamed speaker holding the floor
     //     (null during silence), since openSince;
     //   finalUnnamed: the unnamed speaker a final was frozen on, so its later
@@ -67,11 +64,9 @@ class SpeakerTracker {
     this.gracePeriodMs = options.gracePeriodMs != null ? options.gracePeriodMs : DEFAULT_GRACE_PERIOD_MS
     this.unattributedWindowMs = options.unattributedWindowMs != null ? options.unattributedWindowMs : DEFAULT_UNATTRIBUTED_WINDOW_MS
     // Time of the 'unattributed' null the current state comes from, null when
-    // the current state is a speaker or silence, and the join count at that
-    // null. Each null opens a new episode: the unnamed speaker of each episode
-    // is told apart.
+    // the current state is a speaker or silence. Each null opens a new
+    // episode: a 'mapped' change names the latest episode's time only.
     this.unattributedSince = null
-    this.unattributedJoins = 0
     this.unattributedEpisode = 0
     // Bounded ring of recent diarization events for offline debugging of locutor
     // accuracy. Not on any hot path (one push per assignment/correction/final).
@@ -121,8 +116,6 @@ class SpeakerTracker {
     if (message.action === 'join') {
       this.participants.set(message.participant.id, message.participant)
       this.departed.delete(message.participant.id)
-      this.joinCount += 1
-      this.joinedAt.set(message.participant.id, this.joinCount)
       logger.debug(`SpeakerTracker: participant joined ${message.participant.name || message.participant.id}`)
     } else if (message.action === 'leave') {
       const id = message.participant.id
@@ -169,7 +162,6 @@ class SpeakerTracker {
       entry.unattributed.set(unnamed.key, {
         episode: unnamed.episode,
         pendingUntil: this._now() <= pendingUntil ? pendingUntil : null,
-        joinsBefore: this.unattributedJoins,
         speaker: null
       })
     }
@@ -218,11 +210,14 @@ class SpeakerTracker {
       }
       return
     }
-    // The unnamed speaker's time is named only by the participant its track
-    // gets mapped to: one who joined after the unattributed null, speaking
-    // within the window. A participant known before (e.g. answering the
-    // newcomer) never names it, nor does a grace-period correction.
-    this._resolvePending(event)
+    // The unnamed speaker's time is named only by the 'mapped' change of its
+    // episode (the latest), within the window. Any other speaker (e.g. a
+    // participant answering the newcomer, another newcomer) never names it,
+    // nor does a grace-period correction.
+    if (event.reason === 'mapped') {
+      const episode = this.unattributedEpisode
+      this._resolvePending(event, (slot) => slot.episode === episode)
+    }
     this.currentSpeaker = event.speaker
     this.unattributedSince = null
     this.lastKnownSpeaker = event.speaker
@@ -249,7 +244,6 @@ class SpeakerTracker {
   _setUnattributed (event, now) {
     this.unattributedEpisode += 1
     this.unattributedSince = now
-    this.unattributedJoins = this.joinCount
     this._recordEvent(event.position, 'unattributed', null)
     const unnamed = this._unnamed()
     for (const [segmentId, entry] of this.segmentSpeakers) {
@@ -266,12 +260,11 @@ class SpeakerTracker {
     }
   }
 
-  // Names the unnamed time of every segment (still within its window) with
-  // the speaker just announced, if that speaker joined after its null. A final
-  // frozen on that unnamed speaker is named too.
-  _resolvePending (event) {
+  // Names the unnamed time `matches` selects in every segment (still within
+  // its window) with the mapped participant. A final frozen on that unnamed
+  // speaker is named too.
+  _resolvePending (event, matches) {
     const now = this._now()
-    const joined = this.joinedAt.get(event.speaker.id) || 0
     for (const [segmentId, entry] of this.segmentSpeakers) {
       for (const [key, slot] of entry.unattributed) {
         if (slot.speaker || slot.pendingUntil === null) continue
@@ -279,7 +272,7 @@ class SpeakerTracker {
           slot.pendingUntil = null
           continue
         }
-        if (joined <= slot.joinsBefore) continue
+        if (!matches(slot)) continue
         slot.speaker = event.speaker
         slot.pendingUntil = null
         if (entry.final && entry.finalUnnamed === key) {
@@ -400,10 +393,7 @@ class SpeakerTracker {
     this.currentSpeaker = null
     this.lastKnownSpeaker = null
     this.unattributedSince = null
-    this.unattributedJoins = 0
     this.unattributedEpisode = 0
-    this.joinCount = 0
-    this.joinedAt.clear()
     this._events = []
   }
 

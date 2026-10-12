@@ -46,7 +46,16 @@ class ASR extends eventEmitter {
     // Both default to the legacy values, so a legacy ASR is bit-exact.
     this.record = options.record !== false;
     this.recordOnly = options.recordOnly === true;
-    this.segmentId = options.initialSegmentId || 1;
+    // options.initialSegmentId is a number, or a promise of one when the
+    // channel's previous stream is still stopping on this Transcriber (see
+    // StreamingServer#initialSegmentIdFor): that stream's ASR may still publish
+    // finals, so this one starts its provider, hence emits anything, only once
+    // the id following them is known. Audio received meanwhile is buffered.
+    const initialSegmentId = options.initialSegmentId;
+    const pendingSegmentId = initialSegmentId && typeof initialSegmentId.then === 'function'
+      ? initialSegmentId
+      : null;
+    this.segmentId = pendingSegmentId ? null : (initialSegmentId || 1);
     // Segment the most recent primary final/partial was assigned to. Used to
     // align dual-mode secondary (translation-only) results onto the same
     // segment as the primary that produced the source text. Before any primary
@@ -112,9 +121,16 @@ class ASR extends eventEmitter {
     // state stays CLOSED until init(), so transcribe() still forwards nothing to
     // a provider that does not exist yet, and the frame is forwarded with the
     // rest once the provider is READY. init() keeps the buffer it finds so those
-    // early frames are never discarded.
+    // early frames are never discarded. The same holds for a legacy ASR whose
+    // provider waits for a pending initial segment id (see above).
     this.audioBuffer = new CircularBuffer();
     this._transitionLock = Promise.resolve();
+    if (pendingSegmentId) {
+      this._chainTransition(async () => {
+        this.segmentId = await pendingSegmentId;
+        this._lastPrimarySegmentId = this.segmentId;
+      });
+    }
     // Chain init() into the transition lock so any pause()/resume() queued
     // right after construction runs *after* init() has set up provider/state.
     this._chainTransition(() => this.init());

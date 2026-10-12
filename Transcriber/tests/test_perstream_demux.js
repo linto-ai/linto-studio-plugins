@@ -313,6 +313,7 @@ describe('StreamingServer per-stream demux', () => {
     const inst = Object.create(StreamingServer.prototype);
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
+    inst.stoppingStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.emitted = [];

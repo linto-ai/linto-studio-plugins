@@ -15,6 +15,7 @@ require('./tests/test_asr_pause_resume.js');
 require('./tests/test_asr_flush_finals.js');
 require('./tests/test_asr_empty_finals.js');
 require('./tests/test_streaming_server_stop.js');
+require('./tests/test_segment_continuity.js');
 require('./tests/test_security_diag.js');
 require('./tests/test_brokerclient_snapshot.js');
 require('./tests/test_amazon_epoch.js');

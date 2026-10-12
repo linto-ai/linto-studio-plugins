@@ -275,7 +275,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
     }
 
     if (initMessage.type === 'init') {
-        logger.info(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}, diarizationMode=${initMessage.diarizationMode || 'asr'}`);
+        logger.info(`Received configuration: sampleRate=${initMessage.sampleRate}, encoding=${initMessage.encoding}, diarizationMode=${initMessage.diarizationMode || 'asr'}, speakerEvents=${initMessage.speakerEvents || 'unspecified'}`);
 
         if(initMessage.encoding == 'pcm' && initMessage.sampleRate != 16000) {
             logger.warn(`Invalid sample rate: ${initMessage.sampleRate}`);
@@ -331,7 +331,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
             fd.streamParticipants = m;
             logger.info(`Per-stream diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${m.size} initial participants: ${[...m.values()].map(p => `${p.tag}=${p.name || p.id}`).join(', ')}, mixedRecording=${fd.mixedRecording})`);
         } else if (fd.diarizationMode === 'native') {
-            const tracker = new SpeakerTracker();
+            // speakerEvents: whether the bot's speaker events lead the speech
+            // (SFU) or lag it (Teams), see SpeakerTracker.
+            const tracker = new SpeakerTracker({ speakerEvents: initMessage.speakerEvents });
             for (const participant of (initMessage.participants || [])) {
                 tracker.updateParticipant({ action: 'join', participant });
             }

@@ -1,0 +1,935 @@
+{
+ "2c": {
+  "truth": {
+   "A1": "alice",
+   "B1": "bob",
+   "C0": "carol",
+   "C1": "carol"
+  },
+  "ops": [
+   [
+    0,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "alice",
+      "name": "alice"
+     }
+    }
+   ],
+   [
+    260,
+    "change",
+    {
+     "speaker": {
+      "id": "alice",
+      "name": "alice"
+     },
+     "reason": "mapped",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    400,
+    "assign",
+    "A1"
+   ],
+   [
+    1020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1400,
+    "read",
+    "A1"
+   ],
+   [
+    1400,
+    "assign",
+    "B1"
+   ],
+   [
+    1480,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1760,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ],
+   [
+    1760,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     },
+     "reason": "mapped",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1840,
+    "assign",
+    "C0"
+   ],
+   [
+    1920,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    2260,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     },
+     "reason": "mapped",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2400,
+    "read",
+    "B1"
+   ],
+   [
+    2840,
+    "read",
+    "C0"
+   ],
+   [
+    3220,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ],
+   [
+    3600,
+    "assign",
+    "C1"
+   ],
+   [
+    4420,
+    "read",
+    "C1"
+   ]
+  ]
+ },
+ "3": {
+  "truth": {
+   "A1": "alice",
+   "B1": "bob",
+   "C1": "carol"
+  },
+  "ops": [
+   [
+    0,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "alice",
+      "name": "alice"
+     }
+    }
+   ],
+   [
+    260,
+    "change",
+    {
+     "speaker": {
+      "id": "alice",
+      "name": "alice"
+     },
+     "reason": "mapped",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    400,
+    "assign",
+    "A1"
+   ],
+   [
+    1020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1120,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1220,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1320,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1400,
+    "read",
+    "A1"
+   ],
+   [
+    1420,
+    "assign",
+    "B1"
+   ],
+   [
+    1420,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1520,
+    "assign",
+    "C1"
+   ],
+   [
+    1520,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1620,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1720,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1820,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1920,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    2020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2120,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    2220,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    2260,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     },
+     "reason": "mapped",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ],
+   [
+    2260,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     },
+     "reason": "mapped",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    2320,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ],
+   [
+    2420,
+    "read",
+    "B1"
+   ],
+   [
+    2420,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    2520,
+    "read",
+    "C1"
+   ],
+   [
+    2520,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ]
+  ]
+ },
+ "4a": {
+  "truth": {
+   "A1": "alice",
+   "B1": "bob",
+   "B2": "bob"
+  },
+  "ops": [
+   [
+    0,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "alice",
+      "name": "alice"
+     }
+    }
+   ],
+   [
+    260,
+    "change",
+    {
+     "speaker": {
+      "id": "alice",
+      "name": "alice"
+     },
+     "reason": "mapped",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    400,
+    "assign",
+    "A1"
+   ],
+   [
+    1020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1400,
+    "read",
+    "A1"
+   ],
+   [
+    1400,
+    "assign",
+    "B1"
+   ],
+   [
+    2400,
+    "read",
+    "B1"
+   ],
+   [
+    3000,
+    "assign",
+    "B2"
+   ],
+   [
+    3260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    3260,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     },
+     "reason": "mapped",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    4000,
+    "read",
+    "B2"
+   ]
+  ]
+ },
+ "4b": {
+  "truth": {
+   "A1": "alice",
+   "B1": "bob",
+   "B2": "bob"
+  },
+  "ops": [
+   [
+    0,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "alice",
+      "name": "alice"
+     }
+    }
+   ],
+   [
+    260,
+    "change",
+    {
+     "speaker": {
+      "id": "alice",
+      "name": "alice"
+     },
+     "reason": "mapped",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    400,
+    "assign",
+    "A1"
+   ],
+   [
+    1020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1400,
+    "read",
+    "A1"
+   ],
+   [
+    1400,
+    "assign",
+    "B1"
+   ],
+   [
+    2400,
+    "read",
+    "B1"
+   ],
+   [
+    4120,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    4500,
+    "assign",
+    "B2"
+   ],
+   [
+    4760,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    4760,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     },
+     "reason": "mapped",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    5500,
+    "read",
+    "B2"
+   ]
+  ]
+ },
+ "3b": {
+  "truth": {
+   "A1": "alice",
+   "B1": "bob",
+   "C1": "carol"
+  },
+  "ops": [
+   [
+    0,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "alice",
+      "name": "alice"
+     }
+    }
+   ],
+   [
+    260,
+    "change",
+    {
+     "speaker": {
+      "id": "alice",
+      "name": "alice"
+     },
+     "reason": "mapped",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    400,
+    "assign",
+    "A1"
+   ],
+   [
+    1020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1400,
+    "read",
+    "A1"
+   ],
+   [
+    1400,
+    "assign",
+    "B1"
+   ],
+   [
+    1520,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1900,
+    "assign",
+    "C1"
+   ],
+   [
+    2020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2100,
+    "read",
+    "C1"
+   ],
+   [
+    2260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    2260,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     },
+     "reason": "mapped",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    2260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ],
+   [
+    2260,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     },
+     "reason": "mapped",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    2900,
+    "read",
+    "B1"
+   ]
+  ]
+ },
+ "3c": {
+  "truth": {
+   "A1": "alice",
+   "B1": "bob",
+   "C1": "carol"
+  },
+  "ops": [
+   [
+    0,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    260,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "alice",
+      "name": "alice"
+     }
+    }
+   ],
+   [
+    260,
+    "change",
+    {
+     "speaker": {
+      "id": "alice",
+      "name": "alice"
+     },
+     "reason": "mapped",
+     "track": "c1:0.0"
+    }
+   ],
+   [
+    400,
+    "assign",
+    "A1"
+   ],
+   [
+    1020,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1400,
+    "read",
+    "A1"
+   ],
+   [
+    1400,
+    "assign",
+    "B1"
+   ],
+   [
+    1520,
+    "change",
+    {
+     "speaker": null,
+     "reason": "unattributed",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1760,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    1760,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     },
+     "reason": "mapped",
+     "track": "c1:1.0"
+    }
+   ],
+   [
+    1760,
+    "participant",
+    {
+     "action": "join",
+     "participant": {
+      "id": "carol",
+      "name": "carol"
+     }
+    }
+   ],
+   [
+    1760,
+    "change",
+    {
+     "speaker": {
+      "id": "carol",
+      "name": "carol"
+     },
+     "reason": "mapped",
+     "track": "c1:2.0"
+    }
+   ],
+   [
+    1900,
+    "assign",
+    "C1"
+   ],
+   [
+    2020,
+    "change",
+    {
+     "speaker": {
+      "id": "bob",
+      "name": "bob"
+     }
+    }
+   ],
+   [
+    2100,
+    "read",
+    "C1"
+   ],
+   [
+    2900,
+    "read",
+    "B1"
+   ]
+  ]
+ }
+}

@@ -285,6 +285,19 @@ describe('WebsocketServer handleInitMessage tracker construction', () => {
     assert.equal(server.speakerTrackers.has('s_c'), false);
   });
 
+  it('gives the tracker the timing of the bot\'s speaker events (init.speakerEvents)', () => {
+    const init = (speakerEvents) => Buffer.from(JSON.stringify({
+      type: 'init', encoding: 'pcm', sampleRate: 16000, diarizationMode: 'native', speakerEvents,
+    }));
+    const backward = (speakerEvents, channel) => {
+      server.handleInitMessage(ws, init(speakerEvents), { session: { id: 's' }, channel: { id: channel } });
+      return server.getSpeakerTracker('s', channel).backwardCorrections;
+    };
+    assert.equal(backward('leading', 'sfu'), false, 'SFU: no backward correction');
+    assert.equal(backward('lagging', 'teams'), true);
+    assert.equal(backward(undefined, 'older-bot'), true);
+  });
+
   it('creates a tracker with zero participants when participants is undefined', () => {
     const fd = { session: { id: 's' }, channel: { id: 'c' } };
     server.handleInitMessage(ws, nativeInit(undefined), fd);

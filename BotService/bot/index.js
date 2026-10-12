@@ -381,6 +381,11 @@ class Bot extends EventEmitter {
     if (!this.participants.has(id)) return
     this.participants.delete(id)
     logger.info(`Bot[${this.contextId}]: participant left: ${name} (${this.participants.size} remaining)`)
+    // Their tracks are no longer theirs: an SFU may reuse one for somebody else,
+    // or for them, back (the page then maps it again, and they join again).
+    for (const [key, participant] of [...this.trackParticipants]) {
+      if (participant.id === id) this.trackParticipants.delete(key)
+    }
     if (this.audioMixer) this.audioMixer.removeParticipant(id)
     this.emit('participant-left', { identity: id, name })
     this._checkEmptyMeeting()

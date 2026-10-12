@@ -1216,6 +1216,98 @@ describe('webrtc-intercept getInterceptScript()', () => {
   // a track was mapped up to ~4.5 s after the join, or 1.5 s after it started
   // streaming, and its words meanwhile were attributed to nobody (or to the
   // previous speaker).
+  // An SFU recycles its subscriber receivers: when a participant leaves, the
+  // receiver (and its MediaStreamTrack) is reused for the next subscription, and
+  // Chromium fires 'track' again with the same track (measured: no 'ended', only
+  // 'mute' while unused). A track mapped once was never mapped again, so a
+  // participant coming back was never joined again (the empty-meeting timer
+  // ended the session while they spoke), and a reconnect replayed the mapping of
+  // somebody gone.
+  describe('reused receivers (behavioral)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    const lkPart = (identity, name, trackId) => ({
+      identity, name, trackPublications: { forEach (cb) { cb({ kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: { id: trackId } } }) } }
+    })
+    // A LiveKit Room whose roster the test changes.
+    function room (parts) {
+      const r = { state: 'connected', localParticipant: {}, remoteParticipants: parts }
+      return { r, elements: [{ __reactFiber$x: { memoizedProps: { room: r }, memoizedState: null, return: null } }] }
+    }
+    const poll = (ctx) => { ctx.clock.advance(1500); ctx.clock.tickIntervals() }
+    const sent = (ws) => jsonFrames(ws).filter((f) => f.type !== 'trackAdded').map((f) => f.type + ':' + f.participant.id)
+
+    it('a participant who left and comes back on the same receiver is mapped again', async () => {
+      const lk = room([lkPart('bob', 'Bob', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      poll(ctx)
+      lk.r.remoteParticipants = [] // Bob leaves: the receiver is only muted
+      poll(ctx)
+      lk.r.remoteParticipants = [lkPart('bob', 'Bob', 'rx')] // back, on the same receiver
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'participantLeft:bob', 'participantMapping:bob'])
+    })
+
+    it('the receiver taken over by somebody else is mapped to them', async () => {
+      const lk = room([lkPart('bob', 'Bob', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      poll(ctx)
+      lk.r.remoteParticipants = [lkPart('carol', 'Carol', 'rx')] // within one poll
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'participantMapping:carol', 'participantLeft:bob'])
+    })
+
+    it("a re-fired 'track' is not captured twice, and its participant is found again at the next fast poll", async () => {
+      const lk = room([lkPart('bob', 'Bob', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements, audioOpts: { sampleRate: 16000 } })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('rx')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      poll(ctx)
+      emitTrack(ctx, track) // the SFU reused the receiver
+      await flush(); await flush()
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 1)
+      assert.strictEqual(ctx.audio.workletNodes.length, 1, 'one capture')
+      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'participantMapping:bob'])
+    })
+
+    it('a reconnect does not re-announce the mapping of a participant who left', async () => {
+      const lk = room([lkPart('bob', 'Bob', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      poll(ctx)
+      lk.r.remoteParticipants = []
+      poll(ctx)
+      ws.readyState = 3; ws.onclose()
+      ctx.clock.advance(1000); await flush()
+      const ws2 = await openLoopback(ctx)
+      assert.deepStrictEqual(jsonFrames(ws2).map((f) => f.type), ['trackAdded'])
+    })
+
+    it('Jitsi: a receiver reused for another participant is mapped again, even with every track mapped', async () => {
+      const jt = (id) => ({ getType: () => 'audio', track: { id } })
+      let parts = [{ getId: () => 'p1', getDisplayName: () => 'Alice', getTracks: () => [jt('rx')] }]
+      const APP = { conference: { _room: { getParticipants: () => parts } } }
+      const ctx = runScript(s, { APP })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      poll(ctx)
+      parts = [{ getId: () => 'p2', getDisplayName: () => 'Bob', getTracks: () => [jt('rx')] }]
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:p1', 'participantMapping:p2'])
+    })
+  })
+
   describe('SFU polling cadence (behavioral)', () => {
     const s = getInterceptScript(WS, { platformType: 'sfu' })
     // Let `ms` of time pass, the 250 ms poller interval firing on its schedule.

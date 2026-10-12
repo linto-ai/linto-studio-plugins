@@ -773,6 +773,51 @@ describe('Bot._onTrackRemoved', () => {
 
 // A Visio-like join: tracks arrive in render order (8 ms quanta), each mapped to
 // its participant by the page poller a little after it starts streaming.
+// An SFU reuses a departed participant's receiver for the next subscription:
+// the page maps the same track again (see webrtc-intercept, reused receivers).
+describe('Bot reused receiver', () => {
+  it('a participant back on their former track is joined again, which cancels the empty-meeting timer', () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const seen = []
+    bot.on('participant-joined', (p) => seen.push('join ' + p.identity))
+    bot.on('participant-left', (p) => seen.push('left ' + p.identity))
+    const map = (trackIndex, id) => bot.handleJsonMessage({ type: 'participantMapping', trackIndex, participant: { id, name: id } }, 1)
+    const left = (id) => bot.handleJsonMessage({ type: 'participantLeft', participant: { id, name: id } }, 1)
+    map(0, 'alice')
+    map(1, 'bob')
+    bot.handleAudioData(1, frame(3000), 1)
+    left('bob')
+    assert.equal(bot.trackParticipants.has('c1:1'), false, "the track is no longer Bob's")
+    assert.deepEqual(bot.audioMixer.getStats().tracks.find(t => t.id === 'c1:1').participantId, null)
+    left('alice')
+    assert.notEqual(bot.emptyMeetingTimer, null, 'the meeting looks empty')
+    for (let i = 0; i < 10; i++) bot.handleAudioData(1, frame(3000), 1) // Bob is back, on the same track
+    map(1, 'bob') // the page maps it again
+    assert.deepEqual(seen, ['join alice', 'join bob', 'left bob', 'left alice', 'join bob'])
+    assert.equal(bot.emptyMeetingTimer, null, 'no longer empty')
+    assert.deepEqual(bot.trackParticipants.get('c1:1'), { id: 'bob', name: 'bob' })
+    assert.equal(bot.audioMixer.getStats().tracks.find(t => t.id === 'c1:1').participantId, 'bob')
+    bot._cancelAudioHealthLog()
+  })
+
+  it('the track taken over by somebody else is theirs, and its former participant is not removed twice', () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const seen = []
+    bot.on('participant-joined', (p) => seen.push('join ' + p.identity))
+    bot.on('participant-left', (p) => seen.push('left ' + p.identity))
+    bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 1, participant: { id: 'bob', name: 'Bob' } }, 1)
+    // The page: Carol's mapping, then Bob's leave (same poll).
+    bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 1, participant: { id: 'carol', name: 'Carol' } }, 1)
+    bot.handleJsonMessage({ type: 'participantLeft', participant: { id: 'bob', name: 'Bob' } }, 1)
+    bot.handleJsonMessage({ type: 'trackRemoved', trackIndex: 1 }, 1)
+    assert.deepEqual(seen, ['join bob', 'join carol', 'left bob', 'left carol'])
+    bot._cancelAudioHealthLog()
+    bot._cancelEmptyMeetingTimer()
+  })
+})
+
 describe('Bot SFU join sequence (first words)', () => {
   it('a newcomer speaking before being mapped is "unknown", then theirs as soon as the mapping arrives', () => {
     const bot = makeBot('visio')

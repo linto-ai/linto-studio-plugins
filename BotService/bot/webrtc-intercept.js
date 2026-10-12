@@ -408,7 +408,14 @@ function getInterceptScript (localWsUrl, platformConfig) {
   }
 
   function handleNewTrack(track) {
-    if (!track || track.kind !== 'audio' || track.readyState === 'ended' || processedTracks.has(track.id)) return;
+    if (!track || track.kind !== 'audio' || track.readyState === 'ended') return;
+    if (processedTracks.has(track.id)) {
+      // The SFU reused the receiver for another subscription: Chromium fires
+      // 'track' again with the same MediaStreamTrack (its capture goes on), which
+      // now carries somebody else, or the same participant back: find out again.
+      forgetMapping(tracks.get(track.id));
+      return;
+    }
     processedTracks.add(track.id);
     const capture = { index: trackIndexSeq++, trackId: track.id, ended: false, sink: null, source: null, node: null, resample: null };
     captures.set(capture.index, capture);
@@ -445,14 +452,30 @@ function getInterceptScript (localWsUrl, platformConfig) {
     for (const info of tracks.values()) if (!info.participantId) return true;
     return false;
   }
+  // Map a track to the participant publishing it. A track already mapped to
+  // someone else has been reused for another subscription (SFUs recycle their
+  // receivers, MediaStreamTrack included): it is mapped again.
   function mapTrack(trackId, participant) {
     const info = tracks.get(trackId);
-    if (!info || info.participantId) return;
+    if (!info) return;
     const clean = sanitizeParticipant(participant); // strip control chars + cap length
+    if (info.participantId === clean.id) return;
     info.participantId = clean.id;
     sentMappings.set(info.index, clean); // remember for reconnect replay
     sendJson({ type: 'participantMapping', trackIndex: info.index, participant: clean });
     log('mapped track', info.index, '->', clean.name);
+  }
+  // The track no longer carries the participant it was mapped to: unmapped (so
+  // polled for fast), and never re-announced on a reconnect.
+  function forgetMapping(info) {
+    if (!info || !info.participantId) return;
+    info.participantId = null;
+    sentMappings.delete(info.index);
+  }
+  // A participant left: their tracks may be reused for someone else (or for them,
+  // back), and must be mapped again.
+  function forgetParticipant(participantId) {
+    tracks.forEach(function (info) { if (info.participantId === participantId) forgetMapping(info); });
   }
 
   // The pollers read the meeting client's state, which lives in the top-level
@@ -507,8 +530,10 @@ const SFU_MAPPING_BLOCK = `
   }
 
   // Jitsi: tracks live on window.APP.conference._room participants.
+  // Polled whatever the mappings: a receiver reused for another participant
+  // (JVB rewrites its sources onto a pool of receivers) is mapped again.
   function pollJitsi() {
-    if (tracks.size === 0 || !hasUnmappedTrack()) return;
+    if (tracks.size === 0) return;
     try {
       const room = window.APP && window.APP.conference && window.APP.conference._room;
       if (!room || !room.getParticipants) return;
@@ -601,7 +626,9 @@ const SFU_MAPPING_BLOCK = `
       livekitRoster.forEach(function (name, identity) {
         if (!seen.has(identity)) {
           log('LiveKit participant left:', name, '(' + identity + ')');
-          sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: identity, name: name }) });
+          const left = sanitizeParticipant({ id: identity, name: name });
+          sendJson({ type: 'participantLeft', participant: left });
+          forgetParticipant(left.id);
           livekitRoster.delete(identity);
         }
       });

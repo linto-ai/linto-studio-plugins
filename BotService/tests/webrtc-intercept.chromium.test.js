@@ -260,6 +260,66 @@ describe('webrtc-intercept in Chromium', function () {
     }
   })
 
+  // An SFU recycles a departed participant's receiving transceiver for the next
+  // subscription: Chromium then fires 'track' again with the same track (no
+  // 'ended' meanwhile, only 'mute'), here with a LiveKit-like Room whose roster
+  // follows. The participant coming back must be joined again.
+  it('a participant back on a recycled receiver is joined again (real transceiver reuse)', async () => {
+    const Bot = require('../bot')
+    pages.set('/reuse', page(`<script>
+      window.room = { state: 'connected', localParticipant: {}, remoteParticipants: new Map() };
+      document.body.__reactFiber$test = { memoizedProps: { room: window.room }, memoizedState: null, return: null };
+      const ac = new AudioContext();
+      const tone = (f) => { const o = ac.createOscillator(), g = ac.createGain(), d = ac.createMediaStreamDestination(); o.frequency.value = f; g.gain.value = 0.25; o.connect(g); g.connect(d); o.start(); return d.stream.getAudioTracks()[0]; };
+      const pc1 = new RTCPeerConnection(), pc2 = new RTCPeerConnection();
+      pc1.onicecandidate = (e) => { if (e.candidate) pc2.addIceCandidate(e.candidate); };
+      pc2.onicecandidate = (e) => { if (e.candidate) pc1.addIceCandidate(e.candidate); };
+      const nego = async () => {
+        await pc1.setLocalDescription(await pc1.createOffer());
+        await pc2.setRemoteDescription(pc1.localDescription);
+        await pc2.setLocalDescription(await pc2.createAnswer());
+        await pc1.setRemoteDescription(pc2.localDescription);
+      };
+      let tx;
+      const publish = () => window.room.remoteParticipants.set('idBob', { identity: 'idBob', name: 'Bob',
+        trackPublications: new Map([['a', { kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: pc2.getReceivers()[0].track } }]]) });
+      window.joinBob = async () => { tx = pc1.addTransceiver(tone(440), { direction: 'sendonly' }); await nego(); publish(); };
+      window.leaveBob = async () => { await tx.sender.replaceTrack(null); tx.direction = 'inactive'; await nego(); window.room.remoteParticipants.delete('idBob'); };
+      window.backBob = async () => { await tx.sender.replaceTrack(tone(1000)); tx.direction = 'sendonly'; await nego(); publish(); };
+    </script>`))
+    const context = await browser.newContext({ bypassCSP: true })
+    contexts.push(context)
+    const p = await context.newPage()
+    const bot = new Bot({
+      session: { id: 's' },
+      channel: { id: 'reuse' },
+      address: `${baseUrl}/reuse`,
+      botType: 'visio',
+      browserPool: { createContext: async () => ({ page: p }), destroyContext: async () => {} },
+      audioServer
+    })
+    bot.manifest.loginRules = []
+    bot.manifest.leaveRules = []
+    const seen = []
+    bot.on('participant-joined', (e) => seen.push('join ' + e.name))
+    bot.on('participant-left', (e) => seen.push('left ' + e.name))
+    try {
+      assert.strictEqual(await bot.init(), true)
+      await p.evaluate(() => window.joinBob())
+      await waitFor(() => seen.includes('join Bob'), 5000, 'Bob joined')
+      await p.evaluate(() => window.leaveBob())
+      await waitFor(() => seen.includes('left Bob'), 5000, 'Bob left')
+      assert.notStrictEqual(bot.emptyMeetingTimer, null, 'the meeting looks empty')
+      await p.evaluate(() => window.backBob())
+      await waitFor(() => seen.length === 3, 5000, 'Bob joined again')
+      assert.deepStrictEqual(seen, ['join Bob', 'left Bob', 'join Bob'])
+      assert.strictEqual(bot.emptyMeetingTimer, null, 'no longer empty')
+      assert.strictEqual(bot.audioMixer.getStats().tracks.length, 1, 'one track all along')
+    } finally {
+      await bot.dispose()
+    }
+  })
+
   // The incident path: a Teams page with two tracks at once, forwarded by the Bot.
   it('through the Bot: two simultaneous tracks become one stream at 1.0x real time, both in every frame', async () => {
     const Bot = require('../bot')

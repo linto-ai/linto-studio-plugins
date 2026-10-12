@@ -465,7 +465,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
     });
   }
 
-  function handleNewTrack(track) {
+  function handleNewTrack(track, pc) {
     if (!track || track.kind !== 'audio' || track.readyState === 'ended') return;
     if (processedTracks.has(track.id)) {
       // The SFU reused the receiver for another subscription: Chromium fires
@@ -486,7 +486,11 @@ function getInterceptScript (localWsUrl, platformConfig) {
     track.addEventListener('ended', function () {
       // Tear down first: nothing of this track is sent after its trackRemoved.
       teardownCapture(capture);
-      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: capture.index });
+      // Whether the meeting client closed the peer connection carrying it (it
+      // does when it leaves the call: the meeting ended, or the bot was removed),
+      // rather than only stopped this track (renegotiation).
+      const connectionClosed = !!pc && pc.signalingState === 'closed';
+      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: capture.index, connectionClosed: connectionClosed });
       tracks.delete(track.id);
       processedTracks.delete(track.id);
       sentMappings.delete(capture.index); // never replay the mapping of a dead track
@@ -496,7 +500,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const OriginalRTCPeerConnection = window.RTCPeerConnection;
   function PatchedRTCPeerConnection(config, constraints) {
     const pc = new OriginalRTCPeerConnection(config, constraints);
-    pc.addEventListener('track', function (event) { if (event.track) handleNewTrack(event.track); });
+    pc.addEventListener('track', function (event) { if (event.track) handleNewTrack(event.track, pc); });
     log('RTCPeerConnection intercepted');
     return pc;
   }
@@ -590,6 +594,10 @@ function getInterceptScript (localWsUrl, platformConfig) {
     intervals.forEach(clearInterval);
     if (reconnectTimer) clearTimeout(reconnectTimer);
   });
+  // The meeting page itself is going away (navigated elsewhere, e.g. to the
+  // client's "meeting ended" or logout page): tell the Node side, which cannot
+  // tell it from a dropped loopback connection otherwise.
+  if (IS_TOP) window.addEventListener('pagehide', function () { sendJson({ type: 'pageLeft' }); });
 
   // The top-level document connects at once (its pollers report participants); a
   // sub-frame only when it captures a track, so the many frames of a meeting SPA

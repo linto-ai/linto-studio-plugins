@@ -48,6 +48,7 @@ window.startLoopback = async function (freqs) {
   window.loopback = { pc1, pc2 };
 };
 window.endTrack = function (i) { window.loopback.pc2.getTransceivers()[i].stop(); };
+window.closeLoopback = function () { window.loopback.pc2.close(); };
 `
 const page = (body) => `<!doctype html><html><head><meta charset="utf-8"></head><body><script>${LOOPBACK_SCRIPT}</script>${body || ''}</body></html>`
 
@@ -190,6 +191,31 @@ describe('webrtc-intercept in Chromium', function () {
     assert.strictEqual(got.frames.filter((f) => f.trackIndex === 1 && f.seq > removed.seq).length, 0,
       'no frame of the ended track after its trackRemoved')
     assert.ok(framesOf(got, 0).length > before + 100, 'the other track keeps streaming')
+  })
+
+  // What tells a BBB bot that the meeting ended (the client closing its call,
+  // the meeting page being left) from a track stopped by renegotiation.
+  it("trackRemoved says whether the track's connection was closed: not for a stopped transceiver, yes for a close()", async () => {
+    const { page: p, got } = await openPage('closed', page())
+    await p.evaluate(() => window.startLoopback([440, 1000]))
+    await waitFor(() => framesOf(got, 0).length > 0 && framesOf(got, 1).length > 0, 10000, 'PCM of both tracks')
+    await p.evaluate(() => window.endTrack(1))
+    await waitFor(() => got.json.some((m) => m.json.type === 'trackRemoved'), 5000, 'the stopped track removed')
+    await p.evaluate(() => window.closeLoopback())
+    await waitFor(() => got.json.filter((m) => m.json.type === 'trackRemoved').length === 2, 5000, 'the other track removed')
+    const removed = got.json.filter((m) => m.json.type === 'trackRemoved').map((m) => [m.json.trackIndex, m.json.connectionClosed])
+    assert.deepStrictEqual(removed, [[1, false], [0, true]])
+  })
+
+  it('announces that the meeting page is being left when it navigates away', async () => {
+    pages.set('/elsewhere', '<!doctype html><html><body>bye</body></html>')
+    const { page: p, got } = await openPage('leaving', page())
+    await p.evaluate(() => window.startLoopback([440]))
+    await waitFor(() => framesOf(got, 0).length > 0, 10000, 'the first PCM frame')
+    const connId = got.frames[0].connId
+    await p.goto(`${baseUrl}/elsewhere`)
+    await waitFor(() => got.json.some((m) => m.json.type === 'pageLeft'), 5000, 'pageLeft')
+    assert.strictEqual(got.json.find((m) => m.json.type === 'pageLeft').connId, connId, 'from the meeting page')
   })
 
   it('sub-frames run no poller, and only those that capture a track open a socket', async () => {

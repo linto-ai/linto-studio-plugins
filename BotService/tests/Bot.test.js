@@ -1318,42 +1318,79 @@ describe('Bot admission and meeting end without a participant poller (BBB)', () 
     await bot.dispose()
   })
 
-  it('leaves (meeting-empty) once every inbound track ended, unless the audio comes back meanwhile', async () => {
+  it('leaves (meeting-empty) once the client closed the connection of its last track, unless the audio comes back', async () => {
     const { bot, pcm, json } = await joinedBbb()
     bot.emptyMeetingTimeoutMs = 40
     const events = []
     bot.on('meeting-empty', () => events.push('meeting-empty'))
     pcm(0, frame(1000), 1)
-    json({ type: 'trackRemoved', trackIndex: 0 }, 1)
+    json({ type: 'trackRemoved', trackIndex: 0, connectionClosed: true }, 1)
     assert.notEqual(bot.emptyMeetingTimer, null)
     pcm(1, frame(1000), 1) // the client reconnected its audio: a new track
     assert.equal(bot.emptyMeetingTimer, null)
     await sleep(60)
     assert.deepEqual(events, [])
-    json({ type: 'trackRemoved', trackIndex: 1 }, 1)
+    json({ type: 'trackRemoved', trackIndex: 1, connectionClosed: true }, 1)
     await sleep(60)
     assert.deepEqual(events, ['meeting-empty'])
     await bot.dispose()
   })
 
-  it('leaves once the page left the meeting (its loopback connection closed)', async () => {
-    const { bot, pcm, closed } = await joinedBbb()
+  it('leaves (meeting-empty) once the meeting page was left (pageLeft, then its connection closed)', async () => {
+    const { bot, pcm, json, closed } = await joinedBbb()
     bot.emptyMeetingTimeoutMs = 40
     const left = new Promise((resolve) => bot.on('meeting-empty', resolve))
     pcm(0, frame(1000), 1)
+    json({ type: 'pageLeft' }, 1)
     closed(1)
     await left
     await bot.dispose()
   })
 
-  it('the silence watchdog reports no dead pipe while that leave is pending', async () => {
+  it('while that leave is pending, the silence watchdog reports no dead pipe', async () => {
     const { bot, pcm, json } = await joinedBbb()
     const errors = []
     bot.on('error', (e) => errors.push(e.message))
     pcm(0, frame(1000), 1)
-    json({ type: 'trackRemoved', trackIndex: 0 }, 1)
+    json({ type: 'trackRemoved', trackIndex: 0, connectionClosed: true }, 1)
     bot._checkAudioSilence(Date.now() + 10 * 60 * 1000)
     assert.deepEqual(errors, [])
+    await bot.dispose()
+  })
+
+  // Any loss of the meeting audio used to end the session, a failure on the
+  // bot's side (listen-only not reconnected) included, with the silence
+  // watchdog neutralised: the user could not tell, nor relaunch.
+  for (const [label, lose] of [
+    ['its last track stopped without its connection closed (renegotiation)', (b) => b.json({ type: 'trackRemoved', trackIndex: 0, connectionClosed: false }, 1)],
+    ['its loopback connection dropped, the page not left', (b) => b.closed(1)]
+  ]) {
+    it(`meeting audio lost with no sign that the meeting ended (${label}): no session end, an audio-lost error`, async () => {
+      const b = await joinedBbb()
+      const { bot, pcm } = b
+      bot.emptyMeetingTimeoutMs = 40
+      const events = []
+      bot.on('meeting-empty', () => events.push('meeting-empty'))
+      bot.on('error', (e) => events.push('error ' + e.message))
+      pcm(0, frame(1000), 1)
+      lose(b)
+      await sleep(60)
+      assert.equal(bot.emptyMeetingTimer, null)
+      assert.deepEqual(events, [])
+      assert.ok(warns.some((w) => w.includes('meeting audio gone with no sign that the meeting ended')), warns.join(' | '))
+      bot._checkAudioSilence(Date.now() + 10 * 60 * 1000)
+      assert.deepEqual(events, ['error audio-lost'])
+      await bot.dispose()
+    })
+  }
+
+  it('a bot whose meeting audio still flows but whose capture stalled still reports audio-capture-dead', async () => {
+    const { bot, pcm } = await joinedBbb()
+    const errors = []
+    bot.on('error', (e) => errors.push(e.message))
+    pcm(0, frame(1000), 1)
+    bot._checkAudioSilence(Date.now() + 10 * 60 * 1000)
+    assert.deepEqual(errors, ['audio-capture-dead'])
     await bot.dispose()
   })
 

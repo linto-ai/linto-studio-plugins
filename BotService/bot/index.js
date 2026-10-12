@@ -91,6 +91,7 @@ class Bot extends EventEmitter {
     this.ignoredAudioFrames = 0 // PCM frames of removed tracks, in total
     this.participants = new Map() // participantId -> { id, name }
     this.loginComplete = false // the login rules ran to the end
+    this.pageLeft = false // the meeting page announced it is being left (pageLeft)
     // In the meeting: a participant was found (the platforms with a participant
     // poller), or the meeting audio flows after the login rules (manifest
     // admission 'audio': platforms without one, BBB).
@@ -323,6 +324,7 @@ class Bot extends EventEmitter {
       if (this.loginComplete) this._admit('meeting audio flowing after the login rules')
       return
     }
+    this.pageLeft = false // audio from a new document: that is the meeting page now
     if (this.emptyMeetingTimer) {
       logger.info(`Bot[${this.contextId}]: meeting audio back, staying`)
       this._cancelEmptyMeetingTimer()
@@ -367,7 +369,10 @@ class Bot extends EventEmitter {
       case 'trackAdded':
         break
       case 'trackRemoved':
-        this._onTrackRemoved(json.trackIndex, connId)
+        this._onTrackRemoved(json.trackIndex, connId, json.connectionClosed === true)
+        break
+      case 'pageLeft':
+        this._onPageLeft()
         break
       case 'participantMapping':
         this._onParticipantMapping(json.trackIndex, json.participant, connId)
@@ -432,13 +437,13 @@ class Bot extends EventEmitter {
     if (this.isSfu && this.audioMixer && this.audioMixer.hasTrack(key)) this.audioMixer.unmapTrack(key)
   }
 
-  _onTrackRemoved (trackIndex, connId = 0) {
+  _onTrackRemoved (trackIndex, connId = 0, connectionClosed = false) {
     const key = trackKey(connId, trackIndex)
     const removed = this.trackParticipants.get(key)
     this.trackParticipants.delete(key)
     this.removedTracks.set(key, 0)
     if (this.audioMixer) this.audioMixer.removeTrack(key)
-    this._checkMeetingAudioGone()
+    this._checkMeetingAudioGone(connectionClosed ? 'the meeting client closed its connection' : null)
     if (!this.isSfu || !removed) return
     // SFU: a participant is gone once they have no remaining mapped tracks.
     const stillPresent = [...this.trackParticipants.values()].some(p => p.id === removed.id)
@@ -484,16 +489,26 @@ class Bot extends EventEmitter {
     this._armEmptyMeetingTimer('meeting empty')
   }
 
-  // A platform admitting on audio has no roster: its meeting is over when the
-  // meeting audio is gone, every inbound track ended (the client closes its audio
-  // connection when the meeting ends or the bot is removed: measured, a local
-  // RTCPeerConnection close() ends its inbound tracks) or the page left the
-  // meeting (its loopback connection closed). The same grace as an empty meeting
-  // lets a client that reconnects its audio come back.
-  _checkMeetingAudioGone () {
+  // A platform admitting on audio has no roster: its meeting is over once the
+  // meeting audio is gone, provided there is evidence that it ended: the client
+  // closed the peer connection of the last inbound track (it does when it leaves
+  // the call; measured, a local RTCPeerConnection close() ends its inbound
+  // tracks), or the meeting page is being left (pageLeft). The session then
+  // ends, after the same grace as an empty meeting, which lets a client that
+  // reconnects its audio come back. Audio gone without such evidence (a track
+  // stopped by renegotiation and not replaced, the loopback connection dropped)
+  // may be a failure on the bot's side, not the end of the meeting: the session
+  // is not ended, the audio-silence watchdog makes the bot leave with an
+  // 'audio-lost' error unless the audio comes back.
+  _checkMeetingAudioGone (evidence) {
     if (!this.admitsOnAudio || !this.admitted || this.disposed) return
     if (this.audioMixer && this.audioMixer.trackIds().length > 0) return
-    this._armEmptyMeetingTimer('meeting audio gone (every inbound track ended, or the page left the meeting)')
+    const why = evidence || (this.pageLeft ? 'the meeting page was left' : null)
+    if (why) {
+      this._armEmptyMeetingTimer(`meeting audio gone (${why})`)
+    } else if (!this.emptyMeetingTimer) {
+      logger.warn(`Bot[${this.contextId}]: meeting audio gone with no sign that the meeting ended: leaving with an error unless it comes back within ${AUDIO_SILENCE_TIMEOUT_MS / 1000}s`)
+    }
   }
 
   _armEmptyMeetingTimer (why) {
@@ -585,10 +600,15 @@ class Bot extends EventEmitter {
     // then is no dead pipe, and the session ends cleanly at the timer.
     if (this.emptyMeetingTimer) return
     if (now - this.lastAudioAt < AUDIO_SILENCE_TIMEOUT_MS) return
-    logger.warn(`Bot[${this.contextId}]: no audio for ${AUDIO_SILENCE_TIMEOUT_MS / 1000}s after admission — capture pipe appears dead, tearing down`)
+    // A platform admitting on audio whose meeting audio is gone (no inbound track
+    // left) lost the meeting audio rather than its capture pipe.
+    const lost = this.admitsOnAudio && this.audioMixer && this.audioMixer.trackIds().length === 0
+    logger.warn(`Bot[${this.contextId}]: no audio for ${AUDIO_SILENCE_TIMEOUT_MS / 1000}s after admission — ` +
+      (lost ? 'the meeting audio is gone, with no sign that the meeting ended, tearing down' : 'capture pipe appears dead, tearing down'))
     this._cancelAudioSilenceWatchdog()
-    // surface a fatal error so the BrokerClient stops the bot instead of hanging.
-    this.emit('error', new Error('audio-capture-dead'))
+    // surface a fatal error so the BrokerClient stops the bot instead of hanging
+    // (a bot-error, not the end of the session: the user can relaunch it).
+    this.emit('error', new Error(lost ? 'audio-lost' : 'audio-capture-dead'))
   }
 
   _cancelAudioSilenceWatchdog () {
@@ -619,7 +639,16 @@ class Bot extends EventEmitter {
     for (const key of [...this.removedTracks.keys()]) {
       if (key.startsWith(prefix)) this.removedTracks.delete(key)
     }
-    this._checkMeetingAudioGone()
+    this._checkMeetingAudioGone(null)
+  }
+
+  // The top-level document is unloading: whatever audio it carried is gone with
+  // it, and that is the meeting page being left (see _checkMeetingAudioGone).
+  _onPageLeft () {
+    if (this.disposed) return
+    logger.info(`Bot[${this.contextId}]: the meeting page is being left`)
+    this.pageLeft = true
+    this._checkMeetingAudioGone(null)
   }
 
   getParticipantsList () {

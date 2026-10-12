@@ -760,6 +760,35 @@ describe('webrtc-intercept getInterceptScript()', () => {
       await flush()
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 2)
     })
+
+    // Telling a meeting that ended (the client closes its call) from a track
+    // stopped by renegotiation: only the former may end the session (BBB).
+    it("trackRemoved tells whether the track's peer connection was closed", async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'mcu' }))
+      const ws = await openLoopback(ctx)
+      const stopped = makeTrack('stopped')
+      const closed = makeTrack('closed')
+      emitTrack(ctx, stopped)
+      const pc = emitTrack(ctx, closed)
+      await flush(); await flush()
+      stopped.fire('ended')
+      pc.signalingState = 'closed'
+      closed.fire('ended')
+      const removed = jsonFrames(ws).filter((f) => f.type === 'trackRemoved').map((f) => [f.trackId, f.connectionClosed])
+      assert.deepStrictEqual(removed, [['stopped', false], ['closed', true]])
+    })
+
+    it('the top-level page announces it is being left (pagehide); a sub-frame does not', async () => {
+      const top = runScript(getInterceptScript(WS, { platformType: 'mcu' }))
+      const ws = await openLoopback(top)
+      top.fireWindow('pagehide')
+      assert.deepStrictEqual(jsonFrames(ws).map((f) => f.type), ['pageLeft'])
+      const sub = runScript(getInterceptScript(WS, { platformType: 'mcu' }), { subFrame: true })
+      emitTrack(sub, makeTrack('t'))
+      const subWs = await openLoopback(sub)
+      sub.fireWindow('pagehide')
+      assert.strictEqual(jsonFrames(subWs).filter((f) => f.type === 'pageLeft').length, 0)
+    })
   })
 
   // An ended track keeps feeding its source node in Chromium (silence, at the full

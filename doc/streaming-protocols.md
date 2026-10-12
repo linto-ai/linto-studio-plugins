@@ -41,6 +41,14 @@ GStreamer pipeline (`rtmp/streamPath.js`); anything else is refused.
 
 Pipeline: `Audio Source → [SRT|RTMP|WebSocket] → GStreamer Worker → PCM S16LE 16kHz mono → ASR Provider → MQTT`
 
+## WebSocket framing
+
+The first message is the JSON `init` (`{"type":"init","encoding":"pcm","sampleRate":16000,"diarizationMode":"asr"|"native","participants":[…]}`), in a text or binary frame. The server answers `{"type":"ack"}`, or `{"type":"error"}` and closes. After the `ack` (`Transcriber/components/StreamingServer/websocket/WebsocketServer.js`):
+
+- **Audio travels in binary frames only.** With `encoding: "pcm"` the payload is S16LE 16 kHz mono. A frame may have any length. An odd trailing byte is held back and prepended to the next audio frame of the same connection, so the stream stays aligned on 2-byte samples. On a per-stream connection every audio frame carries its own header instead (see [Per-stream ingest](#per-stream-ingest-bot-ws-only)).
+- **A text frame is never audio.** In `native` diarization mode, a JSON `speakerChanged` or `participant` message drives the channel's speaker tracker; on a per-stream connection, `participant` messages drive the tag → participant map and `speakerChanged` is consumed and ignored. Older senders may send these messages in binary frames: a binary frame counts as a control message when it starts with `{"` and parses as JSON. A binary frame that only starts with those two bytes and does not parse is PCM.
+- **Everything else that is not audio is dropped.** That covers control messages on a stream that is neither per-stream nor in `native` mode, unknown control types and text frames that are not JSON. None of them reaches the ASR. Drops are logged at `warn`, at most once a minute per connection, with a count.
+
 ## How a session ends per protocol
 
 | Aspect | SRT (UDP) | WS (TCP) | RTMP (TCP) |
@@ -104,7 +112,7 @@ Binary frames, 8-byte header, little-endian. Byte 0 is a magic that can never co
 | 4–7 | u32 | `meetingTimeMs` | the bot's meeting clock for this frame |
 | 8.. | N | PCM | s16le, 16 kHz, mono |
 
-JSON control frames (participant join / leave / rename, `speakerChanged`) travel on the same socket and are recognised by their leading `{`.
+JSON control frames (participant join / leave / rename, `speakerChanged`) travel on the same socket, in text frames (or, from older senders, binary frames starting with `{"`, see [WebSocket framing](#websocket-framing)).
 
 ### Handshake
 

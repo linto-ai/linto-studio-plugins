@@ -45,10 +45,11 @@ describe('WebsocketServer native-diarization control routing', () => {
     assert.equal(server.handleControlMessage(fd, pcm), false);
   });
 
-  it('never consumes control messages when diarizationMode is not native', () => {
+  it('drops control messages when diarizationMode is not native (never routed, never audio)', () => {
     fd.diarizationMode = 'asr';
     const msg = Buffer.from(JSON.stringify({ type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } }));
-    assert.equal(server.handleControlMessage(fd, msg), false);
+    assert.equal(server.handleControlMessage(fd, msg), true, 'consumed: must not be fed to the ASR');
+    assert.equal(tracker.currentSpeaker, null, 'not applied to the tracker outside native mode');
   });
 
   it('getSpeakerTracker returns the channel tracker, null otherwise', () => {
@@ -75,7 +76,7 @@ describe('WebsocketServer rejected control-message logging', () => {
   it('warns and drops a well-formed control message when no tracker exists', () => {
     // No tracker registered for s_c.
     const msg = Buffer.from(JSON.stringify({ type: 'speakerChanged', speaker: { id: 'u1' } }));
-    assert.equal(server.handleControlMessage(fd, msg), false);
+    assert.equal(server.handleControlMessage(fd, msg), true, 'dropped, not fed to the ASR');
     assert.equal(warns.length, 1);
     assert.ok(/no SpeakerTracker/.test(warns[0]));
   });
@@ -83,7 +84,7 @@ describe('WebsocketServer rejected control-message logging', () => {
   it('warns and drops a control message with an unknown type', () => {
     server.speakerTrackers.set('s_c', new SpeakerTracker());
     const msg = Buffer.from(JSON.stringify({ type: 'bogus' }));
-    assert.equal(server.handleControlMessage(fd, msg), false);
+    assert.equal(server.handleControlMessage(fd, msg), true, 'dropped, not fed to the ASR');
     assert.equal(warns.length, 1);
     assert.ok(/unknown type 'bogus'/.test(warns[0]));
   });

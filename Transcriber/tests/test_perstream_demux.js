@@ -237,10 +237,28 @@ describe('WebsocketServer per-stream framing', () => {
       assert.deepStrictEqual(events, [['s', 'c', 5, 'Caroline']]);
     });
 
-    it('legacy (no perStream) control routing is unchanged', () => {
+    it('legacy (no perStream, not native) drops a control message instead of feeding it as audio', () => {
       const fd = { session: { id: 's' }, channel: { id: 'c' }, diarizationMode: 'asr' };
       const msg = Buffer.from(JSON.stringify({ type: 'participant', action: 'join', participant: { id: 'u1' } }));
-      assert.strictEqual(server.handleControlMessage(fd, msg), false);
+      assert.strictEqual(server.handleControlMessage(fd, msg), true, 'consumed: never fed to the ASR');
+      assert.strictEqual(server.getStreamParticipants('s', 'c'), null, 'never routed to a participant map');
+    });
+
+    it('routes a per-stream participant/join sent in a TEXT frame (how the native bot sends control)', () => {
+      const fd = { session: { id: 's' }, channel: { id: 'c' }, perStream: true, diarizationMode: 'native' };
+      server.streamParticipants.set('s_c', new Map());
+      const join = Buffer.from(JSON.stringify({
+        type: 'participant', action: 'join', participant: { id: 'u9', name: 'Carol', tag: 5 },
+      }));
+      assert.strictEqual(server.handleControlMessage(fd, join, false), true);
+      assert.strictEqual(server.getStreamParticipants('s', 'c').get(5).name, 'Carol');
+    });
+
+    it('drops a per-stream text frame that is not JSON, and an unknown control type, never as audio', () => {
+      const fd = { session: { id: 's' }, channel: { id: 'c' }, perStream: true, diarizationMode: 'native' };
+      server.streamParticipants.set('s_c', new Map());
+      assert.strictEqual(server.handleControlMessage(fd, Buffer.from('hello'), false), true);
+      assert.strictEqual(server.handleControlMessage(fd, Buffer.from(JSON.stringify({ type: 'bogus' })), false), true);
     });
   });
 });

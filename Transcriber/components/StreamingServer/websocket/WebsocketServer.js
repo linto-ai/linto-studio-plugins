@@ -18,6 +18,12 @@ const {
 const MAGIC_TAGGED = 0x01;  // per-participant PCM (byte 1 = participant tag)
 const MAGIC_MIXED = 0x02;   // mixed recording PCM (byte 1 always 0, ignored)
 
+// Non-audio frames dropped on a connection are reported at most once per
+// interval, with a count: a client that sends JSON control messages on a
+// stream that is not in native diarization mode does so on every speaker
+// change, for the whole meeting.
+const DROPPED_FRAME_REPORT_INTERVAL_MS = 60000;
+
 // WebSocket runs over TCP. Unlike SRT (UDP) there is no inactivity sentinel:
 // the connection lifetime is governed by the TCP socket alone. ws.on('close')
 // fires when the peer sends FIN or the OS detects an RST; ws.on('error') for
@@ -243,14 +249,14 @@ class MultiplexedWebsocketServer extends EventEmitter {
           const fd = { channel, session };
           let messageCallback = null;
 
-          ws.on("message", (message) => {
+          ws.on("message", (message, isBinary) => {
               if (!messageCallback) {
                   messageCallback = this.handleInitMessage(ws, message, fd);
                   if (!messageCallback) {
                       this.cleanupWebsocket(ws);
                   }
               } else {
-                  messageCallback(message);
+                  messageCallback(message, isBinary);
               }
           });
       } finally {
@@ -383,14 +389,12 @@ class MultiplexedWebsocketServer extends EventEmitter {
           logger.error(`Connection: ${ws} --> error`);
           this.cleanupWebsocket(ws, fd);
       });
-      return (message) => {
+      return (message, isBinary) => {
           // A bot stream interleaves binary PCM with JSON control messages
-          // (speakerChanged / participant) for native diarization. Distinguish
-          // them robustly: only treat a frame as control if it both *looks* like
-          // JSON ({") and parses to a recognized control type; otherwise it is
-          // PCM (a PCM sample can coincidentally start with 0x7B 0x22, so a parse
-          // failure must fall through to audio rather than drop the frame).
-          if (this.handleControlMessage(fd, message)) return;
+          // (speakerChanged / participant) for native diarization. Only audio may
+          // reach the ASR: a control message fed as audio is heard as noise and,
+          // when its length is odd, shifts every following sample.
+          if (this.handleControlMessage(fd, message, isBinary)) return;
           if (fd.perStream) {
               // Per-stream mode: audio arrives as tagged binary frames
               // (0x01 | tag | reserved | meetingTimeMs | PCM). Demux to a
@@ -409,8 +413,26 @@ class MultiplexedWebsocketServer extends EventEmitter {
               this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag, parsed.tMs);
               return;
           }
-          this.emit('data', message, fd.session.id, fd.channel.id); // legacy 3 args, unchanged
+          const pcm = this.alignPcm(fd, message);
+          if (pcm.length > 0) this.emit('data', pcm, fd.session.id, fd.channel.id); // legacy 3 args
       };
+  }
+
+  // PCM is S16LE: the ASR and the kept audio file read the stream as 2-byte
+  // samples, so an odd-length frame would shift every following sample by one
+  // byte (noise until another odd-length frame shifts it back). Keep the stream
+  // of each connection aligned: the dangling byte is held back and prepended to
+  // the connection's next audio frame. A byte still held when the connection
+  // closes is half a sample and is dropped. Legacy (untagged) PCM only: a
+  // per-stream frame is self-delimited by its header and carries whole samples.
+  alignPcm(fd, frame) {
+      let pcm = fd.pcmRemainder ? Buffer.concat([fd.pcmRemainder, frame]) : frame;
+      fd.pcmRemainder = null;
+      if (pcm.length % 2 !== 0) {
+          fd.pcmRemainder = Buffer.from(pcm.subarray(pcm.length - 1));
+          pcm = pcm.subarray(0, pcm.length - 1);
+      }
+      return pcm;
   }
 
   // Parse a per-stream tagged audio frame. Layout (little-endian):
@@ -438,23 +460,45 @@ class MultiplexedWebsocketServer extends EventEmitter {
       return { tMs: buf.readUInt32LE(4), pcm: buf.subarray(8) };
   }
 
-  // Returns true if the message was consumed as a native-diarization control
-  // message, false if it should be treated as audio data.
-  handleControlMessage(fd, message) {
-      if (!fd.perStream && fd.diarizationMode !== 'native') return false;
-      if (!Buffer.isBuffer(message) || message.length < 2) return false;
-      if (message[0] !== 0x7B || message[1] !== 0x22) return false; // not '{"'
+  // Sorts out a frame received after `init`. Returns true when the frame is not
+  // audio and has been consumed: a control message applied to the channel's
+  // per-stream participant map or SpeakerTracker, or a frame dropped. Returns
+  // false when the frame is audio. `isBinary` is the flag ws passes with every
+  // message.
+  //   - A text frame is never audio, whatever the diarization mode.
+  //   - A binary frame is a control message (older senders) when it starts
+  //     with '{"' and parses as JSON. A PCM sample can coincidentally start
+  //     with 0x7B 0x22, so a frame that fails to parse is audio, not dropped.
+  //     A per-stream audio frame starts with its magic (0x01/0x02), never '{'.
+  //   - Control messages only apply in per-stream or native diarization mode;
+  //     on any other stream (e.g. a bot that fell back to ASR diarization) they
+  //     are dropped.
+  handleControlMessage(fd, message, isBinary = true) {
       let data;
-      try {
-          data = JSON.parse(message.toString());
-      } catch (e) {
-          // PCM that merely started with 0x7B22. Logged at debug only: this fires
-          // legitimately on audio whose first sample coincides with '{"', so it is
-          // not necessarily an error — but it is useful when localizing why a
-          // control message went missing.
-          logger.debug(`Native diarization: '{\"'-prefixed frame failed to parse as JSON, treating as PCM (session ${fd.session.id}, channel ${fd.channel.id})`);
-          return false; // PCM that merely started with 0x7B22
+      if (isBinary) {
+          if (!Buffer.isBuffer(message) || message.length < 2) return false;
+          if (message[0] !== 0x7B || message[1] !== 0x22) return false; // not '{"'
+          try {
+              data = JSON.parse(message.toString());
+          } catch (e) {
+              // PCM that merely started with 0x7B22. Logged at debug only: this fires
+              // legitimately on audio whose first sample coincides with '{"', so it is
+              // not necessarily an error — but it is useful when localizing why a
+              // control message went missing.
+              logger.debug(`'{\"'-prefixed binary frame failed to parse as JSON, treating as PCM (session ${fd.session.id}, channel ${fd.channel.id})`);
+              return false; // PCM that merely started with 0x7B22
+          }
+      } else {
+          try {
+              data = JSON.parse(message.toString());
+          } catch (e) {
+              this.reportDroppedFrame(fd, 'text frame that is not JSON');
+              return true;
+          }
       }
+      // Past this point the frame is a well-formed JSON message: it is never
+      // audio, and dropping it silently would hide a real diarization problem.
+      const type = data && data.type;
       // Per-stream (D3b late-joiner): route participant join/leave into the
       // tag->participant map so a guest who arrives after `init` still gets a
       // tag->{id,name} mapping; otherwise their lazily-created ASR would carry
@@ -462,10 +506,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
       if (fd.perStream) {
           const m = this.streamParticipants.get(`${fd.session.id}_${fd.channel.id}`);
           if (!m) {
-              logger.warn(`Per-stream: dropping control message type '${data.type}' — no participant map for session ${fd.session.id}, channel ${fd.channel.id}`);
-              return false;
+              this.reportDroppedFrame(fd, `control message type '${type}' — no per-stream participant map`);
+              return true;
           }
-          if (data.type === 'participant') {
+          if (type === 'participant') {
               // The bot nests the participant under `participant` for join/leave
               // but the rename control carries id/name/tag at the top level; read
               // both shapes so either form works.
@@ -510,27 +554,41 @@ class MultiplexedWebsocketServer extends EventEmitter {
               return true;
           }
           // speakerChanged is meaningless per-stream (the identity IS the stream); consume it.
-          if (data.type === 'speakerChanged') return true;
-          logger.warn(`Per-stream: dropping control message with unknown type '${data.type}' (session ${fd.session.id}, channel ${fd.channel.id})`);
-          return false;
+          if (type === 'speakerChanged') return true;
+          this.reportDroppedFrame(fd, `control message with unknown type '${type}' on a per-stream connection`);
+          return true;
       }
-      // Past this point the frame is a well-formed JSON control message; dropping
-      // it silently would hide a real diarization problem, so warn.
+      if (fd.diarizationMode !== 'native') {
+          this.reportDroppedFrame(fd, `control message type '${type}' on a stream that is not in native diarization mode`);
+          return true;
+      }
       const tracker = this.speakerTrackers.get(`${fd.session.id}_${fd.channel.id}`);
       if (!tracker) {
-          logger.warn(`Native diarization: dropping control message type '${data.type}' — no SpeakerTracker for session ${fd.session.id}, channel ${fd.channel.id}`);
-          return false;
+          this.reportDroppedFrame(fd, `control message type '${type}' — no SpeakerTracker`);
+          return true;
       }
-      if (data.type === 'speakerChanged') {
+      if (type === 'speakerChanged') {
           tracker.addSpeakerChange(data);
           return true;
       }
-      if (data.type === 'participant') {
+      if (type === 'participant') {
           tracker.updateParticipant(data);
           return true;
       }
-      logger.warn(`Native diarization: dropping control message with unknown type '${data.type}' (session ${fd.session.id}, channel ${fd.channel.id})`);
-      return false;
+      this.reportDroppedFrame(fd, `control message with unknown type '${type}'`);
+      return true;
+  }
+
+  // Warn about a dropped non-audio frame, at most once per
+  // DROPPED_FRAME_REPORT_INTERVAL_MS per connection; the count covers the
+  // frames dropped since the previous report, this one included.
+  reportDroppedFrame(fd, reason) {
+      fd.droppedFrames = (fd.droppedFrames || 0) + 1;
+      const now = Date.now();
+      if (fd.lastDropReportAt !== undefined && now - fd.lastDropReportAt < DROPPED_FRAME_REPORT_INTERVAL_MS) return;
+      logger.warn(`Dropping non-audio WS frame for session ${fd.session.id}, channel ${fd.channel.id}: ${reason} (${fd.droppedFrames} frame(s) dropped since the last report, reported at most every ${DROPPED_FRAME_REPORT_INTERVAL_MS / 1000}s)`);
+      fd.lastDropReportAt = now;
+      fd.droppedFrames = 0;
   }
 
   getSpeakerTracker(sessionId, channelId) {
@@ -574,7 +632,10 @@ class MultiplexedWebsocketServer extends EventEmitter {
       this.emit('session-start', fd.session, fd.channel);
       this.addRunningSession(fd.session, ws, fd, worker);
 
-      return (message) => {
+      return (message, isBinary) => {
+          // Same frame contract as the PCM path: only audio reaches the decoder.
+          // No sample alignment here: the payload is an encoded stream.
+          if (this.handleControlMessage(fd, message, isBinary)) return;
           worker.send({ type: 'buffer', chunks: Buffer.from(new Int16Array(message))});
       };
   }

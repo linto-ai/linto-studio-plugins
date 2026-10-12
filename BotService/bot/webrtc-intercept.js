@@ -426,8 +426,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function teardownCapture(capture) {
     capture.ended = true;
     captures.delete(capture.index);
+    releaseCaptureGraph(capture);
+  }
+  function releaseCaptureGraph(capture) {
     const node = capture.node, source = capture.source, sink = capture.sink;
     capture.node = capture.source = capture.sink = null;
+    capture.resample = null;
     if (node) {
       // Stop the processor (it no longer queues quanta), or the ScriptProcessor callback.
       if (node.port) node.port.postMessage('stop'); else node.onaudioprocess = null;
@@ -435,6 +439,30 @@ function getInterceptScript (localWsUrl, platformConfig) {
     }
     if (source) { try { source.disconnect(); } catch (e) {} }
     if (sink) { try { sink.pause(); sink.srcObject = null; } catch (e) {} }
+  }
+
+  // A capture that fails to set up (the AudioContext or a node that cannot be
+  // created right now) is retried CAPTURE_RETRIES times, after 1, 2, then 4 s,
+  // while the track lives. Then this track is given up and reported (the others
+  // are not affected). What was built by a failed attempt is released first.
+  var CAPTURE_RETRY_MS = 1000, CAPTURE_RETRIES = 3;
+  function startCapture(track, capture, attempt) {
+    setupTrackCapture(track, capture).then(function () {
+      if (attempt > 0 && !capture.ended) log('capture of track', capture.index, 'set up at attempt', attempt + 1);
+    }, function (e) {
+      releaseCaptureGraph(capture);
+      if (capture.ended || disposed) return;
+      if (attempt >= CAPTURE_RETRIES) {
+        teardownCapture(capture);
+        warnCaptureFailure('capture setup failed for track ' + capture.index + ' after ' + (attempt + 1) + ' attempts', e);
+        return;
+      }
+      const delay = CAPTURE_RETRY_MS * Math.pow(2, attempt);
+      log('capture setup failed for track', capture.index, '(' + (e && e.message ? e.message : 'unknown') + '), retrying in', delay, 'ms');
+      setTimeout(function () {
+        if (!capture.ended && !disposed) startCapture(track, capture, attempt + 1);
+      }, delay);
+    });
   }
 
   function handleNewTrack(track) {
@@ -454,12 +482,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
     // A sub-frame connects on its first track (announced once the socket opens).
     if (!ws) connectWs();
     sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });
-    setupTrackCapture(track, capture).catch(function (e) {
-      // This track is not captured (the others are not affected): release what
-      // was built for it, and report it.
-      teardownCapture(capture);
-      warnCaptureFailure('capture setup failed for track ' + capture.index, e);
-    });
+    startCapture(track, capture, 0);
     track.addEventListener('ended', function () {
       // Tear down first: nothing of this track is sent after its trackRemoved.
       teardownCapture(capture);

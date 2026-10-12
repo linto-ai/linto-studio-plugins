@@ -112,9 +112,11 @@ function makeAudioEnv (opts = {}) {
       }
     }
     async resume () { this.state = 'running' }
-    createMediaStreamSource () {
-      // opts.failSources: how many of the first sources fail to be created.
-      if (env.sources.length < (opts.failSources || 0)) { env.sources.push(null); throw new Error('source boom') }
+    createMediaStreamSource (stream) {
+      // opts.failSources: how many of the first sources fail to be created, or
+      // which ones (a predicate on the MediaStream).
+      const fail = typeof opts.failSources === 'function' ? opts.failSources(stream) : env.sources.length < (opts.failSources || 0)
+      if (fail) { env.sources.push(null); throw new Error('source boom') }
       const source = { disconnected: false, connect () {}, disconnect () { this.disconnected = true } }
       env.sources.push(source)
       return source
@@ -619,6 +621,11 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.strictEqual(bins[0].byteLength, 4 + 2 * 2)
     })
 
+    // Let the capture retries (after 1, 2 and 4 s) run.
+    async function runRetries (ctx) {
+      for (const ms of [1000, 2000, 4000]) { ctx.clock.advance(ms); await flush(); await flush() }
+    }
+
     it('handles AudioContext construction failure gracefully (no throw, no capture)', async () => {
       const s = getInterceptScript(WS, { platformType: 'sfu' })
       const audio = makeAudioEnv({ ctorThrows: true })
@@ -626,25 +633,58 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       assert.doesNotThrow(() => emitTrack(ctx, makeTrack('t1')))
       await flush(); await flush()
+      await runRetries(ctx)
       // trackAdded JSON still announced, but no capture node and no crash.
       assert.ok(jsonFrames(ws).some((f) => f.type === 'trackAdded'))
       assert.strictEqual(ctx.audio.workletNodes.length, 0)
       assert.strictEqual(binaryFrames(ws).length, 0)
-      assert.ok(ctx.warnings.some((w) => w.includes('capture setup failed for track 0: AudioContext boom')), ctx.warnings.join(' | '))
+      assert.ok(ctx.warnings.some((w) => w.includes('capture setup failed for track 0 after 4 attempts: AudioContext boom')), ctx.warnings.join(' | '))
+    })
+
+    // A capture that failed to set up was given up at once, the track lost to the
+    // transcript for the whole meeting, even when the failure was transient.
+    it('retries a failed capture setup: a transient failure costs the track ~1 s, not the meeting', async () => {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000, state: 'running', failSources: 1 } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t'))
+      await flush(); await flush()
+      assert.strictEqual(ctx.audio.workletNodes.length, 0)
+      assert.strictEqual(ctx.sinks[0].srcObject, null, 'the failed attempt is released')
+      ctx.clock.advance(1000); await flush(); await flush()
+      assert.deepStrictEqual(ctx.audio.workletNodes.map((n) => n.options.processorOptions.trackIndex), [0])
+      feed(ctx, 0, new Float32Array(4))
+      assert.strictEqual(binaryFrames(ws).length, 1)
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('capture setup failed')).length, 0)
+    })
+
+    it('does not retry the capture of a track that ended meanwhile', async () => {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000, state: 'running', failSources: () => true } })
+      await openLoopback(ctx)
+      const track = makeTrack('t')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      track.fire('ended')
+      await runRetries(ctx)
+      assert.strictEqual(ctx.audio.sources.length, 1, 'one attempt')
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('capture setup failed')).length, 0)
     })
 
     // Capture setup failures used to be logged in DEBUG only: a track lost to the
     // transcript left no trace in production logs.
     it('a track whose capture cannot be set up is reported, released, and does not affect the others', async () => {
       const s = getInterceptScript(WS, { platformType: 'sfu' })
-      const ctx = runScript(s, { audioOpts: { sampleRate: 16000, state: 'running', failSources: 1 } })
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000, state: 'running', failSources: (ms) => ms.tracks[0].id === 'broken' } })
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('broken'))
       await flush(); await flush()
       emitTrack(ctx, makeTrack('fine'))
       await flush(); await flush(); await flush()
-      assert.ok(ctx.warnings.some((w) => w.includes('capture setup failed for track 0: source boom')), ctx.warnings.join(' | '))
-      assert.strictEqual(ctx.sinks[0].srcObject, null, "the failed track's sink is released")
+      await runRetries(ctx)
+      assert.ok(ctx.warnings.some((w) => w.includes('capture setup failed for track 0 after 4 attempts: source boom')), ctx.warnings.join(' | '))
+      assert.strictEqual(ctx.sinks.length, 5, '4 attempts for the broken track, 1 for the fine one')
+      assert.deepStrictEqual(ctx.sinks.filter((sink) => sink.srcObject !== null).length, 1, "the failed track's sinks are released")
       assert.deepStrictEqual(ctx.audio.workletNodes.map((n) => n.options.processorOptions.trackIndex), [1])
       feed(ctx, 0, new Float32Array(4), 1, new Float32Array(4))
       assert.deepStrictEqual(binaryFrames(ws).map((f) => new DataView(f).getUint16(0, false)), [1], 'track 1 streams')
@@ -652,13 +692,15 @@ describe('webrtc-intercept getInterceptScript()', () => {
 
     it('reports capture failures at most once per 10 s, counting the ones in between', async () => {
       const s = getInterceptScript(WS, { platformType: 'sfu' })
-      const ctx = runScript(s, { audioOpts: { sampleRate: 16000, state: 'running', failSources: 4 } })
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000, state: 'running', failSources: () => true } })
       await openLoopback(ctx)
       const fail = async (id) => { emitTrack(ctx, makeTrack(id)); await flush(); await flush() }
       await fail('a'); await fail('b'); await fail('c')
+      await runRetries(ctx)
       assert.strictEqual(ctx.warnings.filter((w) => w.includes('capture setup failed')).length, 1)
       ctx.clock.advance(10000)
       await fail('d')
+      await runRetries(ctx)
       const reports = ctx.warnings.filter((w) => w.includes('capture setup failed'))
       assert.strictEqual(reports.length, 2)
       assert.ok(reports[1].includes('track 3') && reports[1].includes('(and 2 other failure(s) since the last report)'), reports[1])

@@ -255,6 +255,7 @@ class Bot extends EventEmitter {
   }
 
   handleAudioData (trackIndex, pcmBuffer, connId = 0) {
+    if (this.disposed) return
     const key = trackKey(connId, trackIndex)
     // The page tears a track's capture down when the track ends, so PCM still
     // tagged with a removed track comes from a leaked capture: an ended track
@@ -293,6 +294,9 @@ class Bot extends EventEmitter {
   }
 
   handleJsonMessage (json, connId = 0) {
+    // The page keeps reporting while the leave rules run: once disposing, its
+    // participant leaves are the bot's own departure, and must not arm timers.
+    if (this.disposed) return
     switch (json.type) {
       case 'trackAdded':
         break

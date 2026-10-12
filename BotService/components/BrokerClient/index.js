@@ -345,6 +345,10 @@ class BrokerClient extends Component {
     record.stopping = true
     if (record.reconnectTimer) { clearTimeout(record.reconnectTimer); record.reconnectTimer = null }
     logger.info(`BotService: stopping bot ${key}`)
+    // Stop bridging first: the leave rules run by dispose() take seconds, during
+    // which the page still captures, and audio for a socket we close on purpose
+    // would only fill the pre-ack buffer (and be reported as a slow ack).
+    if (record.stream) { try { record.stream.dispose() } catch (e) { /* best-effort */ } }
     if (record.ws) { try { record.ws.close() } catch (e) { /* already closing */ } }
     if (record.bot) { try { await record.bot.dispose() } catch (e) { logger.error(`BotService: dispose ${key}: ${e.message}`) } }
     this._publishStatus()

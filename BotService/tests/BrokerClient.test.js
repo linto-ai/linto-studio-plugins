@@ -285,6 +285,28 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
     assert.equal(record.reconnectTimer, null)
   })
 
+  it('stops bridging audio before the slow leave rules: nothing is buffered after an intentional stop', async () => {
+    const bot = fakeBot()
+    const record = makeRecord(bot)
+    ctx.instance.bots.set('s_c', record)
+    ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
+    const ws1 = created[0]
+    ws1.close = function () { this.closed = true; this.readyState = CLOSED; this.emit('close') } // like a real ws
+    ws1.emit('open')
+    ws1.emit('message', JSON.stringify({ type: 'ack' }))
+    bot.dispose = async () => {
+      // The leave rules take seconds while the page keeps capturing.
+      for (let i = 0; i < 1200; i++) bot.emit('audio', Buffer.alloc(640))
+      bot.emit('participant-left', { identity: 'u1', name: 'Alice' })
+    }
+    await ctx.instance.stopBot('s', 'c')
+    assert.equal(record.audioBuffer.buffered.length, 0, 'no audio buffered for the closed socket')
+    assert.equal(record.audioBuffer.droppedFrames, 0, 'so no "pre-ack buffer full" drops')
+    assert.equal(ws1.sent.filter(x => Buffer.isBuffer(x)).length, 0)
+    assert.equal(bot.listenerCount('audio'), 0, 'the stream was detached')
+    assert.equal(record.stream._disposed, true)
+  })
+
   // A diarization-degraded event reconnects the transcriber so a fresh init
   // advertises the (now ASR) diarization mode.
   it('reconnects the transcriber when the bot reports diarization degraded', async () => {

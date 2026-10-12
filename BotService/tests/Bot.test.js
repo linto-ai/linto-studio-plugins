@@ -821,6 +821,26 @@ describe('Bot audio health log', () => {
     bot._cancelAudioHealthLog()
   })
 })
+
+describe('Bot while disposing', () => {
+  it('ignores loopback messages once disposing (no empty-meeting timer outliving the bot)', async () => {
+    const { bot, page } = makeInitBot('visio')
+    await bot.init()
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' })
+    let release
+    page.locator = () => ({ click: () => new Promise((resolve) => { release = resolve }) }) // a slow leave rule
+    const disposing = bot.dispose()
+    let left = 0
+    bot.on('participant-left', () => { left++ })
+    bot.handleJsonMessage({ type: 'participantLeft', participant: { id: 'u1', name: 'A' } })
+    bot.handleAudioData(0, Buffer.alloc(640))
+    assert.equal(left, 0)
+    assert.equal(bot.emptyMeetingTimer, null)
+    release()
+    await disposing
+  })
+})
+
 describe('Bot removed tracks', () => {
   const { logger } = require('live-srt-lib')
   let warns, realWarn

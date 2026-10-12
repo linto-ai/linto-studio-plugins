@@ -208,7 +208,7 @@ class MultiplexedRTMPServer extends EventEmitter {
       worker.on('message', async (message) => {
           // Not once the stream is cleaned up: a newer stream may serve the channel.
           if (message.type === 'data' && this.workers.hasOwnProperty(nmsSessionId)) {
-              this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channel.id);
+              this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channel.id, undefined, undefined, fd);
           }
           if (message.type === 'error') {
               logger.error(`Worker ${worker.pid} error --> ${message.error}`);

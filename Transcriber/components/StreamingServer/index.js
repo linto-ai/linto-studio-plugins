@@ -26,6 +26,10 @@ const STOPPING_STREAM_SEGMENT_RESERVE = 10;
 const ORPHAN_AUDIO_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const ORPHAN_AUDIO_GRACE_MS = 60 * 60 * 1000;
 
+// Audio of a channel's older stream (another server's) is dropped, reported at
+// most once per interval per channel.
+const STALE_AUDIO_REPORT_INTERVAL_MS = 10 * 1000;
+
 // Per-stream overflow: tags beyond the per-channel ASR cap collapse onto this
 // single shared "mixed" sub-ASR. 255 is reserved by the tagged-frame protocol
 // (see WebsocketServer._parseTaggedFrame) and is never a real participant tag.
@@ -62,6 +66,8 @@ class StreamingServer extends Component {
     this.stoppingAsrs = new WeakSet();
     // Completion of each channel's latest stop (see _stopAsr).
     this.channelStops = new Map();
+    // Per channel: audio dropped from an older stream (see the 'data' handler).
+    this.staleAudio = new Map();
     this.lastOrphanAudioSweep = 0;
     this.orphanAudioGoneSince = new Map();
     this.sweepingOrphanAudio = false;
@@ -195,9 +201,9 @@ class StreamingServer extends Component {
             : null;
           const diarizationMode = speakerTracker ? 'native' : 'asr';
           if (this.ASRs.has(`${session.id}_${channel.id}`)) {
-            // Another server's stream of the channel (e.g. SRT then WS): it runs
-            // until its own stop, the channel's audio now goes to this stream.
-            logger.warn(`Session ${session.id}, channel ${channel.id}: another stream already feeds the channel, its audio is no longer transcribed`);
+            // Another server's stream of the channel (e.g. SRT then WS): its ASR
+            // runs until its own stop, but its audio is dropped from now on.
+            logger.warn(`Session ${session.id}, channel ${channel.id}: a new stream replaces the one already feeding the channel (another server's): the older stream's audio is dropped until it stops`);
           }
           const asr = this._wireAsr(session, channel, { initialSegmentId, speakerTracker, diarizationMode },
             `${session.id}_${channel.id}`, session.id, channel.id);
@@ -219,8 +225,14 @@ class StreamingServer extends Component {
         }
       });
 
-      server.on('data', (audio, sessionId, channelId, tag, meetingTimeMs) => {
+      // `stream`: the server's stream the audio comes from (last, after the
+      // per-stream tag and meeting clock). Only the channel's current stream
+      // feeds its ASR (and kept audio): an older stream of another server,
+      // still open, would interleave its audio with it. Callers that pass no
+      // stream keep the routing by channel.
+      server.on('data', (audio, sessionId, channelId, tag, meetingTimeMs, stream) => {
         try {
+          if (this._isStaleStream(sessionId, channelId, stream)) return;
           const buffer = Buffer.from(audio);
           if (tag === undefined) {
             // Legacy: single mixed ASR per channel. Unchanged.
@@ -247,8 +259,9 @@ class StreamingServer extends Component {
       // It never goes through the tag/cap/lazy-create logic — it is written
       // verbatim to the channel's single recorder ASR, whose only job is the
       // archive (recordOnly => FakeTranscriber => no ASR cost).
-      server.on('record-data', (audio, sessionId, channelId) => {
+      server.on('record-data', (audio, sessionId, channelId, stream) => {
         try {
+          if (this._isStaleStream(sessionId, channelId, stream)) return;
           const recorder = this.ASRs.get(`${sessionId}_${channelId}${RECORDER_SUFFIX}`);
           if (!recorder) {
             // Warn once per channel: this fires at frame rate otherwise.
@@ -286,6 +299,25 @@ class StreamingServer extends Component {
     } catch (error) {
       logger.error(`Error initializing ${protocol} server: ${error}`);
     }
+  }
+
+  // Whether `stream` is no longer the channel's current stream (a newer stream,
+  // e.g. another server's, took the channel over): its audio is dropped, and
+  // reported at most once per interval per channel.
+  _isStaleStream(sessionId, channelId, stream) {
+    if (stream === undefined) return false;
+    const ck = `${sessionId}_${channelId}`;
+    if (this.streamHandles.get(stream) === this.latestStreams.get(ck)) return false;
+    const report = this.staleAudio.get(ck) || { dropped: 0, reportedAt: 0 };
+    report.dropped += 1;
+    this.staleAudio.set(ck, report);
+    const now = Date.now();
+    if (now - report.reportedAt >= STALE_AUDIO_REPORT_INTERVAL_MS) {
+      logger.warn(`Session ${sessionId}, channel ${channelId}: audio of an older stream of the channel dropped (${report.dropped} chunk(s) since the last report, reported at most every ${STALE_AUDIO_REPORT_INTERVAL_MS / 1000}s)`);
+      report.dropped = 0;
+      report.reportedAt = now;
+    }
+    return true;
   }
 
   // Lazily get-or-create the per-stream ASR for (session, channel, tag).
@@ -885,6 +917,7 @@ class StreamingServer extends Component {
       return false;
     }
     this.latestStreams.delete(ck);
+    this.staleAudio.delete(ck);
     this.emit('session-stop', session, channelId);
     return true;
   }

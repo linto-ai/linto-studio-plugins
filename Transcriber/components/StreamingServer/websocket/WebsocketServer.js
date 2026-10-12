@@ -405,23 +405,26 @@ class MultiplexedWebsocketServer extends EventEmitter {
           if (fd.perStream) {
               // Per-stream mode: audio arrives as tagged binary frames
               // (0x01 | tag | reserved | meetingTimeMs | PCM). Demux to a
-              // 5-arg 'data' carrying the participant tag and the meeting clock.
+              // 'data' carrying the participant tag and the meeting clock.
               // The bot's MIXED recording flow (0x02) is a separate stream that
               // must never reach the tag/cap/lazy-create logic: it goes to
               // 'record-data' and is only ever written to the channel archive.
               if (Buffer.isBuffer(message) && message[0] === MAGIC_MIXED) {
                   const mixed = this._parseMixedFrame(message);
                   if (!mixed) return; // short/invalid frame -> drop
-                  this.emit('record-data', mixed.pcm, fd.session.id, fd.channel.id);
+                  this.emit('record-data', mixed.pcm, fd.session.id, fd.channel.id, fd);
                   return;
               }
               const parsed = this._parseTaggedFrame(message);
               if (!parsed) return; // short/invalid frame -> drop
-              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag, parsed.tMs);
+              this.emit('data', parsed.pcm, fd.session.id, fd.channel.id, parsed.tag, parsed.tMs, fd);
               return;
           }
           const pcm = this.alignPcm(fd, message);
-          if (pcm.length > 0) this.emit('data', pcm, fd.session.id, fd.channel.id); // legacy 3 args
+          // The stream object comes last: the per-stream frames carry their tag
+          // and meeting clock before it (see the 'data' handler of the
+          // StreamingServer).
+          if (pcm.length > 0) this.emit('data', pcm, fd.session.id, fd.channel.id, undefined, undefined, fd);
       };
   }
 
@@ -652,7 +655,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   handleWorkerEvents(ws, fd, worker) {
       worker.on('message', async (message) => {
           if (message.type === 'data' && !fd.stopEmitted) {
-              this.emit('data', message.buf, fd.session.id, fd.channel.id);
+              this.emit('data', message.buf, fd.session.id, fd.channel.id, undefined, undefined, fd);
           }
           if (message.type === 'error') {
               logger.error(`Worker ${worker.pid} error --> ${message.error}`);

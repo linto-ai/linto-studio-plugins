@@ -271,7 +271,7 @@ class MultiplexedSRTServer extends EventEmitter {
 
         worker.on('message', async (message) => {
             if (message.type === 'data') {
-                this.emit('data', message.buf, fd.session.id, fd.channel.id);
+                this.emit('data', message.buf, fd.session.id, fd.channel.id, undefined, undefined, fd);
             }
             if (message.type === 'error') {
                 logger.error(`Worker ${worker.pid} error --> ${message.error}`, logMeta);

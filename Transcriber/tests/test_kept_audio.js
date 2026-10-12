@@ -250,6 +250,31 @@ describe('Kept audio across stream stops and reconnects', () => {
             assert.deepStrictEqual(keptAudio(), [1, 2, 3, 4]);
         });
 
+        it('drops the audio of a stream of another server once a newer one feeds the channel', async () => {
+            const srt = {}, wsStream = {};
+            // The stream object comes last, after the per-stream tag and meeting clock.
+            const sendFrom = (stream, bytes) => ws.emit('data', Buffer.from(bytes), session.id, channel.id, undefined, undefined, stream);
+            ws.emit('session-start', session, channel, srt);
+            const first = streaming.ASRs.get('sess_7');
+            await first._transitionLock;
+            sendFrom(srt, [1, 2]);
+            ws.emit('session-start', session, channel, wsStream);
+            const second = streaming.ASRs.get('sess_7');
+            await second._transitionLock;
+            sendFrom(wsStream, [3, 4]);
+            sendFrom(srt, [9, 9]); // the older stream is still open
+            sendFrom(wsStream, [5, 6]);
+            sendFrom(srt, [9, 9]);
+            ws.emit('session-stop', session, channel.id, srt);
+            await wait(150);
+            ws.emit('session-stop', session, channel.id, wsStream);
+            await wait(150);
+            assert.deepStrictEqual(keptAudio(), [1, 2, 3, 4, 5, 6], 'nothing of the older stream interleaved');
+            const dropped = warns.filter((w) => /audio of an older stream of the channel dropped/.test(w));
+            assert.strictEqual(dropped.length, 1, 'reported once per interval');
+            assert.ok(/\(1 chunk/.test(dropped[0]), dropped[0]);
+        });
+
         it('does not wait for an earlier stop past the stop budget, and warns', async () => {
             const ORIG_FLUSH = process.env.ASR_STOP_FLUSH_TIMEOUT_MS;
             process.env.ASR_STOP_FLUSH_TIMEOUT_MS = '100';

@@ -139,7 +139,7 @@ describe('WebsocketServer per-stream frame routing', () => {
 
   it('routes a 0x02 frame to record-data and NEVER to data', () => {
     const events = [];
-    const { cb } = perStreamCallback(events, { keepAudio: true });
+    const { cb, fd } = perStreamCallback(events, { keepAudio: true });
     const pcm = Buffer.from([0xaa, 0xbb, 0xcc, 0xdd]);
 
     cb(mixedFrame(4242, pcm));
@@ -150,20 +150,22 @@ describe('WebsocketServer per-stream frame routing', () => {
     assert.deepStrictEqual(Buffer.from(audio), pcm, 'the PCM payload is forwarded, header stripped');
     assert.strictEqual(sessionId, 's');
     assert.strictEqual(channelId, 'c');
-    assert.deepStrictEqual(rest, [], 'record-data carries no tag and no meeting clock');
+    assert.strictEqual(rest.length, 1, 'record-data carries no tag and no meeting clock');
+    assert.strictEqual(rest[0], fd, '...only the stream object, for the routing by stream');
     assert.strictEqual(events.filter(e => e[0] === 'data').length, 0,
       'the mix must never enter the tag/cap/lazy-create path');
   });
 
   it('routes a 0x01 frame to a tagged data emit WITH meetingTimeMs (C2)', () => {
     const events = [];
-    const { cb } = perStreamCallback(events);
+    const { cb, fd } = perStreamCallback(events);
     const pcm = Buffer.from([1, 2, 3, 4]);
 
     cb(taggedFrame(7, 123456, pcm));
 
     assert.strictEqual(events.length, 1);
-    const [type, audio, sessionId, channelId, tag, tMs] = events[0];
+    const [type, audio, sessionId, channelId, tag, tMs, stream] = events[0];
+    assert.strictEqual(stream, fd, 'the stream object comes last');
     assert.strictEqual(type, 'data');
     assert.deepStrictEqual(Buffer.from(audio), pcm);
     assert.strictEqual(sessionId, 's');
@@ -209,8 +211,8 @@ describe('WebsocketServer per-stream frame routing', () => {
     const looksMixed = mixedFrame(1, Buffer.from([5, 6]));
     cb(looksMixed);
     assert.strictEqual(events.length, 1);
-    assert.deepStrictEqual(events[0], ['data', looksMixed, 's', 'c'],
-      'legacy stays a 3-arg emit of the untouched frame');
+    assert.deepStrictEqual(events[0], ['data', looksMixed, 's', 'c', undefined, undefined, fd],
+      'legacy stays an untagged emit of the untouched frame (the stream object last)');
   });
 });
 

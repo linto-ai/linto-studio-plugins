@@ -792,10 +792,43 @@ describe('Bot SFU join sequence (first words)', () => {
     assert.deepEqual(events, [
       ['join', 'Alice'],
       [0, 'Alice'],
-      [480, null], // Bob's first frame: no longer Alice
+      [480, null], // Bob's first frame: no longer Alice (reason 'unattributed')
       ['join', 'Bob'],
       [720, 'Bob'] // the moment the mapping arrives, Bob's join first
     ])
+  })
+})
+
+describe('Bot SFU join sequence, as the Transcriber receives it', () => {
+  const TranscriberStream = require('../bot/TranscriberStream')
+  const EventEmitter = require('events')
+
+  it("sends the unknown-speaker null with reason 'unattributed', then the newcomer at once", () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const ws = new EventEmitter()
+    ws.readyState = TranscriberStream.OPEN
+    ws.sent = []
+    ws.send = (data) => ws.sent.push(data)
+    const stream = new TranscriberStream(ws, bot)
+    ws.emit('open')
+    ws.emit('message', JSON.stringify({ type: 'ack' }))
+    const map = (trackIndex, id, name) => bot.handleJsonMessage({ type: 'participantMapping', trackIndex, participant: { id, name } })
+
+    map(0, 'u1', 'Alice')
+    for (let q = 0; q < 60; q++) bot.handleAudioData(0, frame(5000, 128))
+    for (let q = 0; q < 32; q++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(5000, 128)) }
+    map(1, 'u2', 'Bob')
+
+    const control = ws.sent.filter(x => typeof x === 'string').map(JSON.parse).filter(f => f.type !== 'init')
+    assert.deepEqual(control, [
+      { type: 'participant', action: 'join', participant: { id: 'u1', name: 'Alice' } },
+      { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } },
+      { type: 'speakerChanged', position: 480, speaker: null, reason: 'unattributed' },
+      { type: 'participant', action: 'join', participant: { id: 'u2', name: 'Bob' } },
+      { type: 'speakerChanged', position: 720, speaker: { id: 'u2', name: 'Bob' } }
+    ])
+    stream.dispose()
   })
 })
 

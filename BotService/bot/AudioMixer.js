@@ -59,9 +59,10 @@ const DEFAULTS = {
  * calls and emits frames + speaker transitions for the caller to forward.
  *
  * @emits audio          Buffer — one mixed 20 ms frame (S16LE 16 kHz mono, 640 B)
- * @emits speakerChanged {type:'speakerChanged', position:number, speaker:{id,name}|null}
- *                       — emitted ONLY on a transition (new dominant speaker, or
- *                       silence after the grace period)
+ * @emits speakerChanged {type:'speakerChanged', position:number, speaker:{id,name}|null,
+ *                       reason?:'unattributed'} — emitted ONLY on a transition (new
+ *                       dominant speaker, silence after the grace period, or a track
+ *                       not attributed yet speaking: null with reason 'unattributed')
  */
 class AudioMixer extends EventEmitter {
   constructor (options = {}) {
@@ -79,6 +80,7 @@ class AudioMixer extends EventEmitter {
     this.stalls = 0 // stalls of every track (removed ones too)
     this.currentSpeaker = null // { id, name } | null
     this._unattributedSpeaker = null // id of the unattributed track last heard speaking
+    this._lastSpeakerEvent = null // last speakerChanged: 'speaker' | 'silence' | 'unattributed'
     this._silenceMs = 0
 
     // Pre-allocated accumulators: the hot path runs 50×/s. Tracks are summed wide
@@ -294,12 +296,17 @@ class AudioMixer extends EventEmitter {
       // A track not attributed yet is speaking (its participant is not mapped
       // yet): the speaker is unknown, and keeping the previous one would put their
       // name on someone else's words. Its participant is announced as soon as the
-      // track is attributed (setTrackParticipant).
+      // track is attributed (setTrackParticipant). The reason tells this null from
+      // a silence one, after which the previous speaker may still be assumed: so
+      // it is also sent after a silence, not only over a current speaker (never
+      // before any speaker was announced, nor twice in a row).
+      // No hysteresis, as between participants: the first louder frame switches
+      // (the silence grace is the only one, and it applies here too).
       this._silenceMs = 0
       this._unattributedSpeaker = dominant.trackId
-      if (currentId !== null) {
+      if (this._lastSpeakerEvent === 'speaker' || this._lastSpeakerEvent === 'silence') {
         this.currentSpeaker = null
-        this._emitSpeaker(null)
+        this._emitSpeaker(null, 'unattributed')
       }
       return
     }
@@ -331,8 +338,11 @@ class AudioMixer extends EventEmitter {
     return ids.size
   }
 
-  _emitSpeaker (speaker) {
-    this.emit('speakerChanged', { type: 'speakerChanged', position: this.mixPosition, speaker })
+  _emitSpeaker (speaker, reason) {
+    const event = { type: 'speakerChanged', position: this.mixPosition, speaker }
+    if (reason) event.reason = reason // additive: a silence keeps the original shape
+    this._lastSpeakerEvent = speaker ? 'speaker' : (reason || 'silence')
+    this.emit('speakerChanged', event)
   }
 
   /**
@@ -428,6 +438,7 @@ class AudioMixer extends EventEmitter {
     this.stalls = 0
     this.currentSpeaker = null
     this._unattributedSpeaker = null
+    this._lastSpeakerEvent = null
     this._silenceMs = 0
   }
 }

@@ -381,7 +381,7 @@ describe('AudioMixer', () => {
       assert.equal(mixer.getCurrentSpeaker(), null)
       feed(mixer, { p1: frame(5000), p2: frame(10) })
       assert.equal(samplesOf(out.frames[1])[0], 5010, 'still mixed')
-      assert.deepEqual(out.speakers, ['p1'], 'but no longer attributed')
+      assert.deepEqual(out.speakers, ['p1', null], 'but no longer attributed: unknown, not p1 (nor whoever spoke before)')
       assert.equal(mixer.getStats().tracks.find((t) => t.id === 'p1').participantId, null)
     })
 
@@ -413,6 +413,48 @@ describe('AudioMixer', () => {
       feed(mixer, { alice: frame(0), new: frame(5000) }) // someone not mapped yet speaks
       assert.deepEqual(ev, [[0, 'alice'], [20, null]])
       assert.equal(mixer.getCurrentSpeaker(), null)
+    })
+
+    it('marks that null with reason "unattributed"; a silence null keeps its shape (no reason)', () => {
+      const m = new AudioMixer({ silenceGraceMs: 40 })
+      const raw = []
+      m.on('speakerChanged', (ev) => raw.push(ev))
+      open(m, ['alice', 'bob'])
+      open(m, ['new'], false)
+      feed(m, { alice: frame(5000), bob: frame(0), new: frame(0) })
+      feed(m, { alice: frame(0), bob: frame(0), new: frame(5000) })
+      feed(m, { alice: frame(0), bob: frame(5000), new: frame(0) })
+      for (let i = 0; i < 2; i++) feed(m, { alice: frame(0), bob: frame(0), new: frame(0) })
+      assert.deepEqual(raw, [
+        { type: 'speakerChanged', position: 0, speaker: { id: 'alice', name: 'alice' } },
+        { type: 'speakerChanged', position: 20, speaker: null, reason: 'unattributed' },
+        { type: 'speakerChanged', position: 40, speaker: { id: 'bob', name: 'bob' } },
+        { type: 'speakerChanged', position: 80, speaker: null }
+      ])
+      assert.equal('reason' in raw[3], false)
+      m.stop()
+    })
+
+    it('also after a silence null, when the previous speaker would otherwise be assumed', () => {
+      const m = new AudioMixer({ silenceGraceMs: 40 })
+      const raw = []
+      m.on('speakerChanged', (ev) => raw.push([ev.position, ev.speaker && ev.speaker.id, ev.reason]))
+      open(m, ['alice', 'bob'])
+      open(m, ['new'], false)
+      feed(m, { alice: frame(5000), bob: frame(0), new: frame(0) })
+      for (let i = 0; i < 2; i++) feed(m, { alice: frame(0), bob: frame(0), new: frame(0) }) // silence null
+      feed(m, { alice: frame(0), bob: frame(0), new: frame(5000) })
+      feed(m, { alice: frame(0), bob: frame(0), new: frame(5000) }) // not twice in a row
+      assert.deepEqual(raw, [[0, 'alice', undefined], [40, null, undefined], [60, null, 'unattributed']])
+      m.stop()
+    })
+
+    it('not before any speaker was ever announced (nothing to be mistaken for)', () => {
+      const ev = events(mixer)
+      open(mixer, ['alice'])
+      open(mixer, ['new'], false)
+      feed(mixer, { alice: frame(0), new: frame(5000) })
+      assert.deepEqual(ev, [])
     })
 
     it('keeps the current speaker while the unattributed track is quiet or quieter', () => {

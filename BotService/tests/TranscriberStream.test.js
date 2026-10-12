@@ -111,6 +111,17 @@ describe('TranscriberStream', () => {
     assert.ok(frames.some(f => f.type === 'participant' && f.action === 'leave' && f.participant.id === 'u2'))
   })
 
+  it('forwards speakerChanged untouched: its reason when it has one, no reason otherwise', () => {
+    ws.emit('open')
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 20, speaker: null, reason: 'unattributed' })
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 40, speaker: null })
+    const sent = ws.sent.filter(x => typeof x === 'string').slice(1) // after init
+    assert.deepEqual(sent, [
+      '{"type":"speakerChanged","position":20,"speaker":null,"reason":"unattributed"}',
+      '{"type":"speakerChanged","position":40,"speaker":null}'
+    ])
+  })
+
   it('sends no control frames on a socket whose init advertised another mode than native', () => {
     // BBB (asr), or the socket reopened after a Teams diarization degrade: the
     // Transcriber would feed any JSON frame to the ASR as audio.

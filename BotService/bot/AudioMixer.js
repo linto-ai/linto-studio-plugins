@@ -60,9 +60,10 @@ const DEFAULTS = {
  *
  * @emits audio          Buffer — one mixed 20 ms frame (S16LE 16 kHz mono, 640 B)
  * @emits speakerChanged {type:'speakerChanged', position:number, speaker:{id,name}|null,
- *                       reason?:'unattributed'} — emitted ONLY on a transition (new
- *                       dominant speaker, silence after the grace period, or a track
- *                       not attributed yet speaking: null with reason 'unattributed')
+ *                       reason?:'unattributed'|'mapped'} — emitted ONLY on a transition
+ *                       (new dominant speaker, silence after the grace period, a track
+ *                       not attributed yet speaking: null with reason 'unattributed', or
+ *                       that track's participant once mapped: reason 'mapped')
  */
 class AudioMixer extends EventEmitter {
   constructor (options = {}) {
@@ -349,8 +350,10 @@ class AudioMixer extends EventEmitter {
    * Attribute a track to a participant (SFU native diarization), or to nobody.
    * Unattributed tracks are mixed but never make anyone the speaker. When the
    * track is the one heard speaking, its participant becomes the speaker at once
-   * (rather than at their next loud frame), so that the segment under way can
-   * still be put on them.
+   * (rather than at their next loud frame), with reason 'mapped': the speech
+   * announced as unattributed was theirs, so the Transcriber can name the
+   * segments held unnamed meanwhile (even if the participant was already known,
+   * e.g. on another track).
    * @param {*} trackId
    * @param {{id:string, name?:string}|null} participant
    */
@@ -361,7 +364,7 @@ class AudioMixer extends EventEmitter {
       this._unattributedSpeaker = null
       this._silenceMs = 0
       this.currentSpeaker = { id: track.participant.id, name: track.participant.name }
-      this._emitSpeaker(this.currentSpeaker)
+      this._emitSpeaker(this.currentSpeaker, 'mapped')
     }
   }
 

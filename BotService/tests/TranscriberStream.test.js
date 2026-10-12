@@ -115,10 +115,12 @@ describe('TranscriberStream', () => {
     ws.emit('open')
     bot.emit('speakerChanged', { type: 'speakerChanged', position: 20, speaker: null, reason: 'unattributed' })
     bot.emit('speakerChanged', { type: 'speakerChanged', position: 40, speaker: null })
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 60, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped' })
     const sent = ws.sent.filter(x => typeof x === 'string').slice(1) // after init
     assert.deepEqual(sent, [
       '{"type":"speakerChanged","position":20,"speaker":null,"reason":"unattributed"}',
-      '{"type":"speakerChanged","position":40,"speaker":null}'
+      '{"type":"speakerChanged","position":40,"speaker":null}',
+      '{"type":"speakerChanged","position":60,"speaker":{"id":"u2","name":"Bob"},"reason":"mapped"}'
     ])
   })
 

@@ -505,6 +505,36 @@ describe('AudioMixer', () => {
       assert.equal(ev.length, 3, 'no second transition while Bob goes on')
     })
 
+    it("marks that announcement with reason 'mapped', and only that one", () => {
+      const raw = []
+      mixer.on('speakerChanged', (ev) => raw.push(ev))
+      open(mixer, ['alice'])
+      open(mixer, ['new'], false)
+      feed(mixer, { alice: frame(5000), new: frame(0) })
+      feed(mixer, { alice: frame(0), new: frame(5000) })
+      mixer.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
+      feed(mixer, { alice: frame(5000), new: frame(0) })
+      assert.deepEqual(raw, [
+        { type: 'speakerChanged', position: 0, speaker: { id: 'alice', name: 'alice' } },
+        { type: 'speakerChanged', position: 20, speaker: null, reason: 'unattributed' },
+        { type: 'speakerChanged', position: 40, speaker: { id: 'bob', name: 'Bob' }, reason: 'mapped' },
+        { type: 'speakerChanged', position: 40, speaker: { id: 'alice', name: 'alice' } }
+      ])
+    })
+
+    // Alice's screen share starts: a second track of hers, not mapped yet.
+    it("also when the mapped track belongs to a participant known already", () => {
+      const raw = []
+      mixer.on('speakerChanged', (ev) => raw.push([ev.position, ev.speaker && ev.speaker.id, ev.reason]))
+      mixer.setTrackParticipant('mic', { id: 'alice', name: 'Alice' })
+      open(mixer, ['mic'], false)
+      open(mixer, ['screen'], false)
+      feed(mixer, { mic: frame(5000), screen: frame(0) })
+      feed(mixer, { mic: frame(0), screen: frame(5000) })
+      mixer.setTrackParticipant('screen', { id: 'alice', name: 'Alice' })
+      assert.deepEqual(raw, [[0, 'alice', undefined], [20, null, 'unattributed'], [40, 'alice', 'mapped']])
+    })
+
     it('also after a pause shorter than the grace', () => {
       const m = new AudioMixer({ silenceGraceMs: 100 })
       const ev = events(m)

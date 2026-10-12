@@ -848,7 +848,7 @@ describe('Bot SFU join sequence, as the Transcriber receives it', () => {
   const TranscriberStream = require('../bot/TranscriberStream')
   const EventEmitter = require('events')
 
-  it("sends the unknown-speaker null with reason 'unattributed', then the newcomer at once", () => {
+  it("sends the unknown-speaker null with reason 'unattributed', then the newcomer at once with reason 'mapped'", () => {
     const bot = makeBot('visio')
     bot._startMixer()
     const ws = new EventEmitter()
@@ -871,7 +871,7 @@ describe('Bot SFU join sequence, as the Transcriber receives it', () => {
       { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } },
       { type: 'speakerChanged', position: 480, speaker: null, reason: 'unattributed' },
       { type: 'participant', action: 'join', participant: { id: 'u2', name: 'Bob' } },
-      { type: 'speakerChanged', position: 720, speaker: { id: 'u2', name: 'Bob' } }
+      { type: 'speakerChanged', position: 720, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped' }
     ])
     stream.dispose()
   })

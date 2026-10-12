@@ -243,16 +243,16 @@ describe('webrtc-intercept in Chromium', function () {
     let firstAudio = null
     bot.on('audio', () => { if (firstAudio === null) firstAudio = nowMs() })
     bot.on('participant-joined', (e) => events.push({ at: nowMs(), what: 'join ' + e.name }))
-    bot.on('speakerChanged', (e) => events.push({ at: nowMs(), what: 'speaker ' + (e.speaker && e.speaker.name) }))
+    bot.on('speakerChanged', (e) => events.push({ at: nowMs(), what: 'speaker ' + (e.speaker && e.speaker.name) + (e.reason ? ' ' + e.reason : '') }))
     try {
       assert.strictEqual(await bot.init(), true)
       await sleep(500) // the poller finds the Room
       await p.evaluate(() => window.joinAlice())
       const joined = nowMs()
-      await waitFor(() => events.some((e) => e.what === 'speaker Alice'), 10000, 'Alice as the speaker')
-      const named = events.find((e) => e.what === 'speaker Alice').at
+      await waitFor(() => events.some((e) => e.what === 'speaker Alice mapped'), 10000, 'Alice as the speaker')
+      const named = events.find((e) => e.what === 'speaker Alice mapped').at
       // Her first words are unattributed (null), until she is mapped and named.
-      assert.deepStrictEqual(events.map((e) => e.what), ['speaker null', 'join Alice', 'speaker Alice'])
+      assert.deepStrictEqual(events.map((e) => e.what), ['speaker null unattributed', 'join Alice', 'speaker Alice mapped'])
       assert.ok(firstAudio !== null && firstAudio <= named, 'her audio is mixed before she is mapped')
       assert.ok(named - firstAudio < 600, `named ${(named - firstAudio).toFixed(0)} ms after her first mixed frame`)
       assert.ok(named - joined < 1500, `named ${(named - joined).toFixed(0)} ms after her track was published`)

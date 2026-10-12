@@ -58,6 +58,11 @@ class BrokerClient extends Component {
     this.subs = [`botservice/in/${this.uniqueId}/#`]
     this.capabilities = CAPABILITIES
     this.bots = new Map() // `${sessionId}_${channelId}` -> { bot, ws }
+    // Bots stopped but still being disposed (leave rules, then their browser
+    // context closed): record -> promise settled once it is released. They still
+    // hold a context of the pool, so they count in the advertised load, and a new
+    // bot for the same channel waits for its predecessor's.
+    this.disposing = new Map()
     this.heartbeatTimer = null
     this.lastPublishedCount = -1
 
@@ -159,10 +164,14 @@ class BrokerClient extends Component {
     // An overload transition changes advertised capabilities, so it must always be
     // published even if the bot count did not move.
     const overloadChanged = prevOverloaded !== this.overloaded
-    if (!force && !overloadChanged && this.bots.size === this.lastPublishedCount) return
-    this.lastPublishedCount = this.bots.size
+    // Bots being disposed still hold their browser context: the load is what the
+    // pool actually holds, so that routing does not take a slot still in use for
+    // a free one.
+    const activeBots = this.bots.size + this.disposing.size
+    if (!force && !overloadChanged && activeBots === this.lastPublishedCount) return
+    this.lastPublishedCount = activeBots
     this.client.publishStatus({
-      activeBots: this.bots.size,
+      activeBots,
       // Report load so the Scheduler can weight routing by memory pressure.
       rss: mem.rss,
       heapUsed: mem.heapUsed,
@@ -194,7 +203,7 @@ class BrokerClient extends Component {
       return
     }
     logger.info(`BotService: starting bot ${key} (${botType})`)
-    await this.stopBot(session.id, channel.id) // replace any stale instance
+    await this.stopBot(session.id, channel.id) // replace any stale instance, or wait for the one leaving
 
     this.metrics.botJoinAttempts++
 
@@ -233,7 +242,8 @@ class BrokerClient extends Component {
     // would no-op on the missing key and leak the live context).
     if (this.bots.get(key) !== record) {
       logger.info(`BotService: bot ${key} was stopped during init, disposing orphan`)
-      await bot.dispose()
+      await this._dispose(key, record, () => bot.dispose())
+      this._publishStatus()
       return
     }
 
@@ -368,10 +378,28 @@ class BrokerClient extends Component {
     this.client.publish('scheduler/in/schedule/stopbot', { botId, endSession }, 1, false, true)
   }
 
+  // Run a stopped bot's teardown, counted in `disposing` until it is over.
+  async _dispose (key, record, teardown) {
+    record.key = key
+    const done = (async () => {
+      try { await teardown() } finally { this.disposing.delete(record) }
+    })()
+    this.disposing.set(record, done)
+    return done
+  }
+
+  // Settled once every bot of the channel being disposed has released its context.
+  _disposalsOf (key) {
+    return Promise.all([...this.disposing].filter(([record]) => record.key === key).map(([, done]) => done))
+  }
+
   async stopBot (sessionId, channelId) {
     const key = `${sessionId}_${channelId}`
     const record = this.bots.get(key)
-    if (!record) return
+    // Nothing running: a bot of the channel may still be leaving. Waiting for it
+    // lets a replacement (startBot stops the channel first) reuse its context
+    // rather than be refused by a full pool while it is released.
+    if (!record) return this._disposalsOf(key)
     this.bots.delete(key) // delete first to make event-driven re-entry a no-op
     // Mark intentional stop so the socket-close handler does NOT reconnect, and
     // cancel any pending reconnect from an earlier transient drop.
@@ -381,9 +409,11 @@ class BrokerClient extends Component {
     // Stop bridging first: the leave rules run by dispose() take seconds, during
     // which the page still captures, and audio for a socket we close on purpose
     // would only fill the pre-ack buffer (and be reported as a slow ack).
-    if (record.stream) { try { record.stream.dispose() } catch (e) { /* best-effort */ } }
-    if (record.ws) { try { record.ws.close() } catch (e) { /* already closing */ } }
-    if (record.bot) { try { await record.bot.dispose() } catch (e) { logger.error(`BotService: dispose ${key}: ${e.message}`) } }
+    await this._dispose(key, record, async () => {
+      if (record.stream) { try { record.stream.dispose() } catch (e) { /* best-effort */ } }
+      if (record.ws) { try { record.ws.close() } catch (e) { /* already closing */ } }
+      if (record.bot) { try { await record.bot.dispose() } catch (e) { logger.error(`BotService: dispose ${key}: ${e.message}`) } }
+    })
     this._publishStatus()
   }
 

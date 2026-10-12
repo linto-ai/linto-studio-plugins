@@ -991,15 +991,65 @@ describe('BotService BrokerClient — a bot replaced while it leaves', () => {
     const stopping = ctx.instance.stopBot('s', 'c') // runs the leave rules...
     await tick()
     assert.ok(leaving, 'the old bot is clicking leave')
-    await ctx.instance.startBot(args(2)) // ...while the new one joins
+    const starting = ctx.instance.startBot(args(2)) // ...while the new one is started
+    await tick()
+    leaving()
+    await stopping
+    await starting
     const newBot = ctx.instance.bots.get('s_c').bot
     assert.notEqual(newBot.contextId, oldBot.contextId)
     assert.notEqual(newBot.wsPath, oldBot.wsPath)
-    leaving()
-    await stopping
     assert.deepEqual(destroyed, [oldBot.contextId], "only the old bot's context is destroyed")
     assert.deepEqual([...audioServer.handlers.keys()], [newBot.wsPath], "the new bot's loopback handler is still there")
     assert.deepEqual(created, [oldBot.contextId, newBot.contextId])
+    const last = ctx.instance.stopBot('s', 'c')
+    await tick()
+    leaving()
+    await last
+  })
+
+  // The Scheduler's stopbot removed the record at once, then the leave rules ran
+  // for seconds with the context still held: a startbot for the same channel
+  // meanwhile (a replacement) found nothing to wait for, and on a full replica the
+  // pool refused its context: join-failed.
+  it('a replacement on a full replica waits for its predecessor to leave, then joins', async () => {
+    const LocalAudioServer = require('../bot/LocalAudioServer')
+    const BrowserPool = require('../bot/BrowserPool')
+    const audioServer = new LocalAudioServer()
+    audioServer.getPort = () => 1
+    ctx.instance.audioServer = audioServer
+    let leaving = null
+    const page = () => ({
+      on () {},
+      async addInitScript () {},
+      async goto () {},
+      async close () {},
+      async waitForTimeout () {},
+      locator: (selector) => ({
+        fill: async () => {},
+        click: () => selector === "[data-attr='controls-leave']" ? new Promise((resolve) => { leaving = resolve }) : Promise.resolve()
+      })
+    })
+    const pool = new BrowserPool({ maxContexts: 1 })
+    pool._ensureBrowser = async () => ({ newContext: async () => ({ close: async () => {}, newPage: async () => page() }) })
+    ctx.instance.browserPool = pool
+    ctx.instance._connectTranscriber = () => {}
+    const args = (botId) => ({ session: { id: 's' }, channel: { id: 'c' }, address: 'https://visio.example/room', botType: 'visio', websocketUrl: 'ws://t', botId })
+
+    await ctx.instance.startBot(args(1))
+    const stopping = ctx.instance.stopBot('s', 'c')
+    await tick()
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[ctx.statuses.length - 1].activeBots, 1, 'the leaving bot still holds its context')
+    const starting = ctx.instance.startBot(args(2))
+    await tick()
+    assert.equal(ctx.instance.bots.has('s_c'), false, 'not started while the context is held')
+    leaving()
+    await stopping
+    await starting
+    assert.equal(ctx.publishes.filter((p) => /bot-error/.test(p.topic)).length, 0, 'no join-failed')
+    const newBot = ctx.instance.bots.get('s_c').bot
+    assert.deepEqual([...pool.contexts.keys()], [newBot.contextId])
     const last = ctx.instance.stopBot('s', 'c')
     await tick()
     leaving()
@@ -1020,7 +1070,7 @@ describe('BotService BrokerClient — startBot lifecycle', () => {
       this.channel = channel
       this.disposeCalls = 0
       this.init = async () => (botBehaviour.init ? botBehaviour.init(this) : true)
-      this.dispose = async () => { this.disposeCalls++ }
+      this.dispose = async () => { this.disposeCalls++; if (botBehaviour.dispose) await botBehaviour.dispose(this) }
       this.getParticipantsList = () => []
       this.manifest = { diarizationMode: 'asr' }
       botInstances.push(this)
@@ -1089,6 +1139,44 @@ describe('BotService BrokerClient — startBot lifecycle', () => {
     assert.equal(botInstances[0].disposeCalls, 1, 'orphan bot disposed')
     assert.equal(ctx.instance.metrics.botJoinSuccesses, 0, 'orphan not counted as a success')
     assert.ok(ctx.logs.some(l => /disposing orphan/.test(l.msg)), 'orphan disposal logged')
+  })
+
+  it('a bot being disposed counts in activeBots until its context is released', async () => {
+    let release
+    botBehaviour.dispose = () => new Promise((resolve) => { release = resolve })
+    await ctx.instance.startBot(startArgs(1, 's1', 'c1'))
+    await ctx.instance.startBot(startArgs(2, 's2', 'c2'))
+    const stopping = ctx.instance.stopBot('s1', 'c1')
+    await tick()
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[ctx.statuses.length - 1].activeBots, 2, 'still holding two contexts')
+    release()
+    await stopping
+    assert.equal(ctx.statuses[ctx.statuses.length - 1].activeBots, 1, 'published once released')
+  })
+
+  it('an orphan disposed after a racing stop counts until released, and a new start for its channel waits for it', async () => {
+    let release
+    botBehaviour.init = (botInst) => {
+      if (botInstances.length === 1) {
+        ctx.instance.bots.delete(`${botInst.session.id}_${botInst.channel.id}`)
+        botBehaviour.dispose = () => new Promise((resolve) => { release = resolve })
+      }
+      return true
+    }
+    const orphan = ctx.instance.startBot(startArgs(1))
+    await tick()
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[ctx.statuses.length - 1].activeBots, 1)
+    botBehaviour.dispose = null
+    const next = ctx.instance.startBot(startArgs(2))
+    await tick()
+    assert.equal(botInstances.length, 1, 'waits for the orphan to be released')
+    release()
+    await orphan
+    await next
+    assert.equal(botInstances.length, 2)
+    assert.equal(ctx.instance.bots.get('s_c').bot, botInstances[1])
   })
 
   it('tracks multiple concurrent bots and removes exactly one on stop', async () => {

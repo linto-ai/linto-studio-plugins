@@ -487,6 +487,26 @@ function getInterceptScript (localWsUrl, platformConfig) {
     sendJson({ type: 'participantMapping', trackIndex: info.index, participant: clean });
     log('mapped track', info.index, '->', clean.name);
   }
+  // Map the tracks found in one poll: claims is trackId -> [participant, ...]. A
+  // track claimed by exactly one participant is theirs; one claimed by several
+  // (two publications on the same MediaStreamTrack, e.g. halfway through a
+  // handover) keeps its current mapping, rather than flipping between them at
+  // every poll. Reported once per track.
+  const ambiguousTracks = new Set();
+  function mapClaims(claims) {
+    claims.forEach(function (owners, trackId) {
+      const ids = owners.map(function (o) { return o.id; }).filter(function (id, i, all) { return all.indexOf(id) === i; });
+      if (ids.length === 1) { mapTrack(trackId, owners[0]); return; }
+      if (!tracks.has(trackId) || ambiguousTracks.has(trackId)) return;
+      ambiguousTracks.add(trackId);
+      warn('track ' + trackId + ' claimed by ' + ids.length + ' participants (' + ids.map(sanitizeText).join(', ') + '): its mapping is left as it is');
+    });
+  }
+  function claim(claims, trackId, participant) {
+    const owners = claims.get(trackId);
+    if (owners) owners.push(participant); else claims.set(trackId, [participant]);
+  }
+
   // The track no longer carries the participant it was mapped to: unmapped (so
   // polled for fast), never re-announced on a reconnect, and the Node side stops
   // attributing it at once (its participant may still be in the meeting, e.g.
@@ -562,13 +582,15 @@ const SFU_MAPPING_BLOCK = `
     try {
       const room = window.APP && window.APP.conference && window.APP.conference._room;
       if (!room || !room.getParticipants) return;
+      const claims = new Map();
       for (const p of room.getParticipants()) {
         for (const pt of (p.getTracks() || [])) {
           if (pt.getType && pt.getType() !== 'audio') continue;
           const id = pt.track && pt.track.id;
-          if (id) mapTrack(id, { id: p.getId(), name: p.getDisplayName() || p.getId() });
+          if (id) claim(claims, id, { id: p.getId(), name: p.getDisplayName() || p.getId() });
         }
       }
+      mapClaims(claims);
     } catch (e) { /* jitsi API not ready */ }
   }
 
@@ -648,6 +670,7 @@ const SFU_MAPPING_BLOCK = `
     try {
       const remotes = livekitRoom.remoteParticipants || livekitRoom.participants;
       const seen = new Set();
+      const claims = new Map();
       remotes.forEach(function (p) {
         seen.add(p.identity);
         p.trackPublications.forEach(function (pub) {
@@ -655,10 +678,11 @@ const SFU_MAPPING_BLOCK = `
           // Force subscription to every remote audio track (adaptive-stream off).
           requestSubscription(pub, now);
           if (pub.track && pub.track.mediaStreamTrack) {
-            mapTrack(pub.track.mediaStreamTrack.id, { id: p.identity, name: p.name || p.identity });
+            claim(claims, pub.track.mediaStreamTrack.id, { id: p.identity, name: p.name || p.identity });
           }
         });
       });
+      mapClaims(claims);
       // Roster diff: anyone present last poll but gone now has left the meeting.
       livekitRoster.forEach(function (name, identity) {
         if (!seen.has(identity)) {

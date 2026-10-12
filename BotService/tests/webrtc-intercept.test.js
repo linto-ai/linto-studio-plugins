@@ -1344,6 +1344,35 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'trackUnmapped:0', 'participantMapping:bob'])
     })
 
+    // Two publications on the same MediaStreamTrack (halfway through a handover)
+    // used to flip the mapping at every poll.
+    it('a track claimed by two participants in a poll keeps its mapping (reported once)', async () => {
+      const lk = room([lkPart('alice', 'Alice', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      poll(ctx)
+      lk.r.remoteParticipants = [lkPart('alice', 'Alice', 'rx'), lkPart('bob', 'Bob', 'rx')]
+      for (let i = 0; i < 12; i++) poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:alice'])
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('claimed by 2 participants (alice, bob)')).length, 1)
+      lk.r.remoteParticipants = [lkPart('alice', 'Alice', 'none'), lkPart('bob', 'Bob', 'rx')] // handover done
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'participantMapping:bob'])
+    })
+
+    it('Jitsi: a track claimed by two participants in a poll is not mapped to either', async () => {
+      const jt = (id) => ({ getType: () => 'audio', track: { id } })
+      const parts = ['p1', 'p2'].map((id) => ({ getId: () => id, getDisplayName: () => id, getTracks: () => [jt('rx')] }))
+      const ctx = runScript(s, { APP: { conference: { _room: { getParticipants: () => parts } } } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      for (let i = 0; i < 6; i++) poll(ctx)
+      assert.deepStrictEqual(sent(ws), [])
+    })
+
     it('a reconnect does not re-announce the mapping of a participant who left', async () => {
       const lk = room([lkPart('bob', 'Bob', 'rx')])
       const ctx = runScript(s, { elements: lk.elements })

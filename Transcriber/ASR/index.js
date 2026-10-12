@@ -21,6 +21,10 @@ const audioFilesInUse = new Set();
 // holding no audio on this error (see hasAudio).
 const NO_AUDIO_FRAME = /Failed to read frame size|Invalid data found when processing input/;
 const HEADERS_ONLY_MAX_BYTES = 4096;
+// Longest wait for a provider's start() (init, resume): a provider that never
+// settles must not hold the ASR's later transitions (pause, the stop's flush,
+// dispose) for good. Its stop() waits at most ASR_STOP_FLUSH_TIMEOUT_MS.
+const DEFAULT_PROVIDER_START_TIMEOUT_MS = 15000;
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 // Transient kept-audio files: a stream's raw file and a save's temporary
@@ -171,7 +175,7 @@ class ASR extends eventEmitter {
       if (this.timeline) this.timeline.pendingMs = 0;
       if (this.provider && (this.state === ASR.states.READY || this.state === ASR.states.TRANSCRIBING || this.state === ASR.states.CONNECTING)) {
         try {
-          await this.provider.stop();
+          await this._bounded(this.provider.stop(), this._stopTimeoutMs(), 'ASR pause: provider.stop()');
         } catch (e) {
           this.logger.warn(`ASR pause: provider.stop() error: ${e.message}`);
         }
@@ -208,7 +212,7 @@ class ASR extends eventEmitter {
       this.state = ASR.states.CONNECTING;
       if (this.provider) {
         try {
-          await this.provider.start();
+          await this._bounded(this.provider.start(), this._startTimeoutMs(), 'ASR resume: provider.start()');
         } catch (e) {
           this.logger.error(`ASR resume: provider.start() error: ${e.message}`);
           this.state = ASR.states.ERROR;
@@ -255,7 +259,7 @@ class ASR extends eventEmitter {
       }
       this.state = ASR.states.CONNECTING;
       this.handleASREvents();
-      await this.provider.start();
+      await this._bounded(this.provider.start(), this._startTimeoutMs(), 'ASR init: provider.start()');
     } catch (error) {
       this.logger.error(this._redactSecrets(error));
       this.state = ASR.states.ERROR;
@@ -664,6 +668,32 @@ class ASR extends eventEmitter {
   // the broker BEFORE the end-of-stream bot marker (streamStopped). Chained on
   // the transition lock so it never interleaves with pause()/resume(), and
   // bounded so a hung provider can never delay the marker indefinitely.
+  _stopTimeoutMs() {
+    return parseInt(process.env.ASR_STOP_FLUSH_TIMEOUT_MS, 10) || 3000;
+  }
+
+  _startTimeoutMs() {
+    return parseInt(process.env.ASR_PROVIDER_START_TIMEOUT_MS, 10) || DEFAULT_PROVIDER_START_TIMEOUT_MS;
+  }
+
+  // Waits for a provider call, at most `timeoutMs`: past it, logs and goes on
+  // (resolves false). A rejection before then propagates.
+  async _bounded(call, timeoutMs, what) {
+    const settling = Promise.resolve(call);
+    settling.catch(() => {}); // a late rejection, once given up on
+    let timer;
+    try {
+      const settled = await Promise.race([
+        settling.then(() => true),
+        new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
+      ]);
+      if (!settled) this.logger.warn(`${what} did not settle within ${timeoutMs} ms, going on`);
+      return settled;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async flushFinals() {
     return this._chainTransition(async () => {
       if (this._flushed || !this.provider || this.paused) return;
@@ -787,18 +817,45 @@ class ASR extends eventEmitter {
 
   // Takes this stream's place in the channel's saves now, when its stop
   // starts: streams stopped in a row (a client reconnecting at once) are
-  // appended in stream order, whichever flush ends first. dispose() runs the
-  // save once the raw file is closed.
-  reserveAudioSave() {
+  // appended in stream order, whichever flush ends first. The save runs once
+  // releaseAudioSave() closed the raw file. A stop stuck before that (a
+  // provider that never settles) gives its place up at `giveUpAt`: its own
+  // audio is not saved, and the channel's later saves are not held.
+  reserveAudioSave(giveUpAt = Infinity) {
     if (!this.channel.keepAudio || this._reservedAudioSave) return;
-    let release;
-    const ready = new Promise((resolve) => { release = resolve; });
-    this._reservedAudioSave = { release, save: this.saveAudio(ready) };
+    let resolveReady;
+    const ready = new Promise((resolve) => { resolveReady = resolve; });
+    const timer = Number.isFinite(giveUpAt) ? setTimeout(() => {
+      this._audioSaveGivenUp = true;
+      this.logger.error(`Kept audio of this stream not saved: its stop did not get to it in time, the channel's next saves go first; its raw audio is left in ${this.audioPcmPath}`);
+      resolveReady();
+    }, Math.max(0, giveUpAt - Date.now())) : null;
+    const release = (closed) => {
+      clearTimeout(timer);
+      resolveReady(closed);
+    };
+    this._reservedAudioSave = { release, released: false, save: this.saveAudio(ready) };
     this._reservedAudioSave.save.catch(() => {}); // awaited, and reported, by dispose()
   }
 
+  // The stream is over (its last finals flushed): close its raw file and let
+  // its reserved save run in its turn.
+  releaseAudioSave() {
+    const reserved = this._reservedAudioSave;
+    if (!reserved || reserved.released) return;
+    reserved.released = true;
+    if (this.audioFile) {
+      // The last writes must reach the raw file before it is transcoded.
+      reserved.release(this._closeAudioFile());
+    } else {
+      // No raw file (init failed): nothing to save, free the channel's saves.
+      this._noAudioToSave = true;
+      reserved.release();
+    }
+  }
+
   async _saveAudio() {
-    if (this._noAudioToSave) return;
+    if (this._noAudioToSave || this._audioSaveGivenUp) return;
     const fileExtension = this.channel.compressAudio ? '.mp3' : '.wav';
     const transcodeFn = this.channel.compressAudio ? this.transcodeToMp3.bind(this) : this.transcodeToWav.bind(this);
     const pcmFilePath = this.audioPcmPath;
@@ -952,30 +1009,22 @@ class ASR extends eventEmitter {
   async dispose() {
     try {
       await this._transitionLock;
-      if (this.audioFile) {
+      if (this._reservedAudioSave) {
+        this.releaseAudioSave();
+        await this._reservedAudioSave.save;
+      } else if (this.audioFile) {
         // The last writes must reach the raw file before it is transcoded. A
         // stream that received no audio (K2: nobody ever spoke on a per-stream
         // channel, so its recorder's mixed flow stayed empty) appends nothing,
         // see _saveAudio.
-        const closed = this._closeAudioFile();
-        if (this._reservedAudioSave) {
-          this._reservedAudioSave.release(closed);
-          await this._reservedAudioSave.save;
-        } else {
-          await this.saveAudio(closed);
-        }
-      } else if (this._reservedAudioSave) {
-        // No raw file (init failed): nothing to save, free the channel's saves.
-        this._noAudioToSave = true;
-        this._reservedAudioSave.release();
-        await this._reservedAudioSave.save;
+        await this.saveAudio(this._closeAudioFile());
       }
       if (this.provider) {
         this.provider.removeAllListeners();
         // flushFinals() already stopped the provider (with listeners attached,
         // so its in-flight finals were published); skip the redundant stop.
         if (!this._flushed) {
-          await this.provider.stop();
+          await this._bounded(this.provider.stop(), this._stopTimeoutMs(), 'ASR dispose: provider.stop()');
         }
       }
     } catch (error) {

@@ -503,6 +503,7 @@ describe('StreamingServer per-stream demux', () => {
       reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
       useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
       reserveAudioSave() {},
+      releaseAudioSave() {},
       async flushFinals() { this.flushed = true; },
       streamStopped() { this.marked = true; },
       removeAllListeners() { this.detached = true; },

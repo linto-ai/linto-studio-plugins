@@ -407,6 +407,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
       reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
       useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
       reserveAudioSave() {},
+      releaseAudioSave() {},
       async flushFinals() {
         if (delayMs) await sleep(delayMs);
         this.flushed = true;

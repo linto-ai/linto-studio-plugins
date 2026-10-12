@@ -220,10 +220,17 @@ describe('Kept audio across stream stops and reconnects', () => {
             send([3, 4]);
             ws.emit('session-stop', session, channel.id);
             await wait(400);
-            assert.deepStrictEqual(events, [
-                'final older flushed', 'marker', 'transcode start 1,2', 'transcode end', // the older stream's stop
-                'marker', 'transcode start 3,4', 'transcode end', 'inactive', // then the newer one's
+            // The older stream's last final and marker, then the newer one's
+            // marker, the channel's deactivation last.
+            assert.deepStrictEqual(events.filter((e) => !e.startsWith('transcode')), [
+                'final older flushed', 'marker', 'marker', 'inactive',
             ]);
+            // The audio in stream order, both saved before the deactivation.
+            assert.deepStrictEqual(events.filter((e) => e.startsWith('transcode')), [
+                'transcode start 1,2', 'transcode end', 'transcode start 3,4', 'transcode end',
+            ]);
+            assert.strictEqual(events[events.length - 1], 'inactive');
+            assert.ok(events.indexOf('transcode start 1,2') > events.indexOf('final older flushed'), 'the older raw file saved once flushed');
             assert.deepStrictEqual(keptAudio(), [1, 2, 3, 4]);
         });
 
@@ -273,6 +280,94 @@ describe('Kept audio across stream stops and reconnects', () => {
             const dropped = warns.filter((w) => /audio of an older stream of the channel dropped/.test(w));
             assert.strictEqual(dropped.length, 1, 'reported once per interval');
             assert.ok(/\(1 chunk/.test(dropped[0]), dropped[0]);
+        });
+
+        // The ASR wrapper logs through its channel logger.
+        function channelLogs(logs) {
+            const origChannelLogger = mockLogger.getChannelLogger;
+            mockLogger.getChannelLogger = () => ({
+                info() {}, debug() {}, log() {},
+                warn: (msg) => logs.push(String(msg)),
+                error: (msg) => logs.push(String(msg)),
+            });
+            return () => { mockLogger.getChannelLogger = origChannelLogger; };
+        }
+
+        it('is not held by a provider whose stop never settles, paused before the stop', async () => {
+            const ORIG_FLUSH = process.env.ASR_STOP_FLUSH_TIMEOUT_MS;
+            process.env.ASR_STOP_FLUSH_TIMEOUT_MS = '100';
+            const asrLogs = [];
+            const restoreLogger = channelLogs(asrLogs);
+            try {
+                await start();
+                const stuck = streaming.ASRs.get('sess_7');
+                send([1, 2]);
+                stuck.provider.stop = () => new Promise(() => {}); // e.g. Microsoft's stop, no error callback
+                stuck.pause(); // the session is paused
+                ws.emit('session-stop', session, channel.id);
+                await start(); // the client reconnects
+                send([3, 4]);
+                ws.emit('session-stop', session, channel.id);
+                await wait(600);
+                await start(); // and once more, later
+                send([5, 6]);
+                ws.emit('session-stop', session, channel.id);
+                await wait(300);
+                assert.deepStrictEqual(keptAudio(), [1, 2, 3, 4, 5, 6]);
+                assert.deepStrictEqual(events.filter((e) => e === 'inactive'), ['inactive', 'inactive']);
+                assert.ok(asrLogs.some((w) => /ASR pause: provider.stop\(\) did not settle within 100 ms/.test(w)), asrLogs.join(' | '));
+            } finally {
+                restoreLogger();
+                if (ORIG_FLUSH === undefined) delete process.env.ASR_STOP_FLUSH_TIMEOUT_MS; else process.env.ASR_STOP_FLUSH_TIMEOUT_MS = ORIG_FLUSH;
+            }
+        });
+
+        it('is not held by a provider whose start never settles on resume', async () => {
+            const ORIG_START = process.env.ASR_PROVIDER_START_TIMEOUT_MS;
+            process.env.ASR_PROVIDER_START_TIMEOUT_MS = '100';
+            try {
+                await start();
+                const asr = streaming.ASRs.get('sess_7');
+                send([1, 2]);
+                await asr.pause();
+                asr.provider.start = () => new Promise(() => {});
+                asr.resume();
+                ws.emit('session-stop', session, channel.id);
+                await wait(400);
+                assert.deepStrictEqual(events.filter((e) => e === 'inactive'), ['inactive']);
+                assert.deepStrictEqual(keptAudio(), [1, 2]);
+            } finally {
+                if (ORIG_START === undefined) delete process.env.ASR_PROVIDER_START_TIMEOUT_MS; else process.env.ASR_PROVIDER_START_TIMEOUT_MS = ORIG_START;
+            }
+        });
+
+        it('gives up the save of a stream whose stop is stuck at its deadline: only its own audio is lost', async () => {
+            const ORIG_FLUSH = process.env.ASR_STOP_FLUSH_TIMEOUT_MS;
+            process.env.ASR_STOP_FLUSH_TIMEOUT_MS = '100';
+            process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS = '100'; // budget: 100 + 20 + 100 ms
+            const errors = [];
+            const restoreLogger = channelLogs(errors);
+            try {
+                await start();
+                const stuck = streaming.ASRs.get('sess_7');
+                send([1, 2]);
+                stuck.flushFinals = () => new Promise(() => {}); // its stop never gets past the flush
+                ws.emit('session-stop', session, channel.id);
+                await start();
+                send([3, 4]);
+                ws.emit('session-stop', session, channel.id);
+                await wait(500);
+                await start();
+                send([5, 6]);
+                ws.emit('session-stop', session, channel.id);
+                await wait(300);
+                assert.deepStrictEqual(keptAudio(), [3, 4, 5, 6], 'the later streams are saved');
+                assert.strictEqual(rawFiles().length, 1, 'the stuck stream\'s raw audio is left');
+                assert.ok(errors.some((e) => /Kept audio of this stream not saved/.test(e)), errors.join(' | '));
+            } finally {
+                restoreLogger();
+                if (ORIG_FLUSH === undefined) delete process.env.ASR_STOP_FLUSH_TIMEOUT_MS; else process.env.ASR_STOP_FLUSH_TIMEOUT_MS = ORIG_FLUSH;
+            }
         });
 
         it('does not wait for an earlier stop past the stop budget, and warns', async () => {

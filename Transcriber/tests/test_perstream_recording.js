@@ -497,6 +497,7 @@ describe('K2 per-stream recording split', () => {
         reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
         useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
         reserveAudioSave() {},
+        releaseAudioSave() {},
         async flushFinals() { this.flushCount += 1; log.push(`flush:${name}`); },
         streamStopped() { this.markerCount += 1; log.push(`marker:${name}`); },
         removeAllListeners() { this.detached = true; },

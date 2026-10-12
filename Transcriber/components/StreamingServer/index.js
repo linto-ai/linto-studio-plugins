@@ -644,11 +644,14 @@ class StreamingServer extends Component {
     // stream from this cursor while this ASR still flushes its last finals.
     const reservedUpTo = asr.reserveSegmentIds(STOPPING_STREAM_SEGMENT_RESERVE);
     this.lastSegmentIds.set(ck, Math.max(this.lastSegmentIds.get(ck) || 1, reservedUpTo));
-    asr.reserveAudioSave();
+    asr.reserveAudioSave(deadline);
     const stop = this._enterChannelStops(ck);
     let disposed = false;
     try {
       await asr.flushFinals();
+      // No more audio: its save may run as soon as its turn comes, whether or
+      // not the earlier stops are over.
+      asr.releaseAudioSave();
       if (stop.earlier) await this._awaitEarlierStops(stop.earlier, deadline, session, channelId);
       asr.streamStopped();
       // No newer stream took the cursor: give back the ids this ASR did not
@@ -729,9 +732,9 @@ class StreamingServer extends Component {
     // Before the first await: a client that reconnects at once starts a newer
     // stream on this channel while these sub-ASR still flush their last finals.
     const reservation = this._reservePerStreamSegmentIds(ctx, asrs);
-    for (const recorder of recorders) recorder.reserveAudioSave();
     const channel = ctx ? ctx.channel : (asrs[0] || recorders[0]).channel;
     const deadline = Date.now() + this._stopBudgetMs(channel);
+    for (const recorder of recorders) recorder.reserveAudioSave(deadline);
     const stop = this._enterChannelStops(ck);
     let disposed = false;
     try {
@@ -754,6 +757,9 @@ class StreamingServer extends Component {
           logger.error(`Error flushing a sub-ASR of ${ck} on stop: ${result.reason}`);
         }
       }
+      // No more audio once the sub-ASR are flushed: the recorder's save may run
+      // as soon as its turn comes, whether or not the earlier stops are over.
+      for (const recorder of recorders) recorder.releaseAudioSave();
       if (stop.earlier) await this._awaitEarlierStops(stop.earlier, deadline, session, channelId);
       // Nobody ever spoke (only the recorder was created, or no ASR at all, the
       // D3a lazy hole): emit NO marker — a marker here would store a new blank

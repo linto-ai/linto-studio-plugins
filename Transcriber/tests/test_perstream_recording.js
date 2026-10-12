@@ -225,7 +225,14 @@ describe('K2 per-stream recording split', () => {
   }
 
   const listFiles = () => fs.readdirSync(storageDir).sort();
-  const pcmOf = (session) => path.join(storageDir, `${session.id}-chan.pcm`);
+  // Each stream writes its own raw file, <session>-<channel>-<uuid>.pcm (a
+  // reconnect must never truncate the previous stream's): the session's raw
+  // file on disk, or a path that does not exist once it is gone.
+  const pcmOf = (session) => {
+    const raw = fs.readdirSync(storageDir).filter(f => f.startsWith(`${session.id}-chan-`) && f.endsWith('.pcm'));
+    assert.ok(raw.length <= 1, `at most one raw file per session here, got ${raw}`);
+    return path.join(storageDir, raw[0] || `${session.id}-chan-gone.pcm`);
+  };
   const wavOf = (session) => path.join(storageDir, `${session.id}-chan.wav`);
 
   // 'error' is emitted by ASR.dispose() on failure, but _stopAsr detaches every
@@ -270,7 +277,8 @@ describe('K2 per-stream recording split', () => {
       assert.strictEqual(recorder.record, true);
       await settleAll(inst);
       assert.ok(recorder.audioFile, 'the recorder opened the single channel .pcm');
-      assert.deepStrictEqual(listFiles(), [`${session.id}-chan.pcm`], 'exactly one file so far');
+      const rawFile = recorder.audioPcmPath;
+      assert.deepStrictEqual(listFiles(), [path.basename(rawFile)], 'exactly one file so far');
 
       // N tagged participant flows, then the bot's mixed flow.
       for (const tag of [0, 1, 2]) {
@@ -294,15 +302,15 @@ describe('K2 per-stream recording split', () => {
           `${key} must never open the channel archive`);
         assert.strictEqual(inst.ASRs.get(key).record, false);
       }
-      assert.deepStrictEqual(listFiles(), [`${session.id}-chan.pcm`], 'still exactly one .pcm');
+      assert.deepStrictEqual(listFiles(), [path.basename(rawFile)], 'still exactly one .pcm');
 
       await inst._stopAsr(session, 'chan');
-      assert.ok(await waitFor(() => fs.existsSync(wavOf(session)) && !fs.existsSync(pcmOf(session))),
+      assert.ok(await waitFor(() => fs.existsSync(wavOf(session)) && !fs.existsSync(rawFile)),
         'the archive is transcoded and the .pcm removed');
 
       assert.deepStrictEqual(listFiles(), [`${session.id}-chan.wav`], 'exactly one output file remains');
       assert.deepStrictEqual(ffmpegCalls.map(c => c.op), ['transcode'], 'saveAudio ran exactly once');
-      assert.deepStrictEqual(ffmpegCalls[0].inputs, [pcmOf(session)]);
+      assert.deepStrictEqual(ffmpegCalls[0].inputs, [rawFile]);
       // The archive holds the MIXED flow only — no participant audio leaked in.
       const archived = fs.readFileSync(wavOf(session));
       assert.strictEqual(archived.length, 16, '4 mixed frames of 4 bytes');
@@ -366,7 +374,7 @@ describe('K2 per-stream recording split', () => {
       assert.ok(fs.existsSync(pcmOf(session)), 'the channel archive still exists (no unlink)');
       assert.strictEqual(fs.statSync(pcmOf(session)).size, sizeBefore, 'the archive is byte-for-byte intact');
       assert.deepStrictEqual(ffmpegCalls, [], 'a participant leave runs no transcode/concat');
-      assert.deepStrictEqual(listFiles(), [`${session.id}-chan.pcm`], 'no stray output file');
+      assert.deepStrictEqual(listFiles(), [path.basename(pcmOf(session))], 'no stray output file');
 
       // Siblings keep streaming, and the recorder keeps appending.
       const sibling = inst.ASRs.get(`${ck}#0`);
@@ -528,7 +536,8 @@ describe('K2 per-stream recording split', () => {
       server.emit('session-start', session, makeChannel());
       await settleAll(inst);
       const errors = watchAll(inst, []);
-      assert.deepStrictEqual(listFiles(), [`${session.id}-chan.pcm`], 'the recorder opened its file');
+      const rawFile = inst.ASRs.get(`${session.id}_chan#rec`).audioPcmPath;
+      assert.deepStrictEqual(listFiles(), [path.basename(rawFile)], 'the recorder opened its file');
       // No tagged frame and no mixed frame: only the recorder exists.
       assert.strictEqual(inst.ASRs.size, 1);
 
@@ -539,7 +548,7 @@ describe('K2 per-stream recording split', () => {
       assert.strictEqual(blankFinals.length, 0, 'no blank caption row for a channel nobody spoke on');
       assert.strictEqual(inst.emitted.filter(e => e[0] === 'session-stop').length, 1,
         'the deactivate is still published, the session is not stuck');
-      assert.ok(await waitFor(() => !fs.existsSync(pcmOf(session))), 'the 0-byte .pcm is dropped');
+      assert.ok(await waitFor(() => !fs.existsSync(rawFile)), 'the 0-byte .pcm is dropped');
       assert.deepStrictEqual(listFiles(), [], 'ffmpeg is never run on an empty input');
       assert.deepStrictEqual(ffmpegCalls, []);
       assert.deepStrictEqual(errors, []);
@@ -565,6 +574,7 @@ describe('K2 per-stream recording split', () => {
       const stuck = new EventEmitter();
       stuck.bytesWritten = 0;
       stuck.end = () => { /* never calls back */ };
+      stuck.close = () => { /* never calls back either: the raw file is closed with close(cb) */ };
       asr.audioFile = stuck;
 
       const disposed = asr.dispose();
@@ -820,20 +830,21 @@ describe('K2 per-stream recording split', () => {
       assert.strictEqual(asr.recordOnly, false);
       const errors = watchAll(inst, []);
       await settleAll(inst);
-      assert.ok(asr.audioFile, 'it opened the .pcm itself, exactly as before');
+      assert.ok(asr.audioFile, 'it opened its own .pcm itself, exactly as before');
+      const rawFile = asr.audioPcmPath;
 
       // Legacy 3-arg data emits (SRT/RTMP/mixed WS all use this shape).
       for (let i = 0; i < 3; i++) server.emit('data', Buffer.from([1, 2, 3, 4]), session.id, 'chan');
       await settleAll(inst);
-      assert.deepStrictEqual(listFiles(), [`${session.id}-chan.pcm`]);
+      assert.deepStrictEqual(listFiles(), [path.basename(rawFile)]);
 
       const ret = await inst._stopAsr(session, 'chan');
       assert.strictEqual(ret, true);
-      assert.ok(await waitFor(() => fs.existsSync(wavOf(session)) && !fs.existsSync(pcmOf(session))));
+      assert.ok(await waitFor(() => fs.existsSync(wavOf(session)) && !fs.existsSync(rawFile)));
 
       assert.deepStrictEqual(listFiles(), [`${session.id}-chan.wav`]);
       assert.deepStrictEqual(ffmpegCalls.map(c => c.op), ['transcode'], 'first run: a plain transcode');
-      assert.deepStrictEqual(ffmpegCalls[0].inputs, [pcmOf(session)]);
+      assert.deepStrictEqual(ffmpegCalls[0].inputs, [rawFile]);
       assert.deepStrictEqual(ffmpegCalls[0].output, wavOf(session));
       const blankFinals = inst.emitted.filter(e => e[0] === 'final' && e[1].text === '');
       assert.strictEqual(blankFinals.length, 1, 'the legacy end-of-stream marker is unchanged');
@@ -844,13 +855,13 @@ describe('K2 per-stream recording split', () => {
       const { inst, server } = await wire(null);
       const session = makeSession();
       const wav = wavOf(session);
-      const pcm = pcmOf(session);
       // A first stream of this channel already produced an archive.
       fs.writeFileSync(wav, Buffer.from([1, 1, 1, 1]));
 
       server.emit('session-start', session, makeChannel());
       const asr = inst.ASRs.get(`${session.id}_chan`);
       await settleAll(inst);
+      const pcm = asr.audioPcmPath;
       for (let i = 0; i < 2; i++) server.emit('data', Buffer.from([2, 2]), session.id, 'chan');
       await settleAll(inst);
 

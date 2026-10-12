@@ -136,7 +136,7 @@ fd.mixedRecording = fd.perStream && needsRecording;
 
 with `perStreamEnv = TRANSCRIBER_PERSTREAM_DIARIZATION === 'true'` and `needsRecording = channel.keepAudio` (exactly `ASR.init()`'s own gate).
 
-**Fail closed on the archive.** N sub-ASR cannot each own the single per-channel `.pcm`, so per-stream is granted on a channel that must be archived **only** when the bot can supply the `0x02` mixed flow. An older bot that cannot is **demoted to the legacy mixed path** — a correct archive with degraded speaker attribution, never a corrupted one. Both sides log a loud WARN on that demotion; without it the demotion gets diagnosed as "per-stream broke".
+**Fail closed on the archive.** N sub-ASR cannot each own the channel's single archive, so per-stream is granted on a channel that must be archived **only** when the bot can supply the `0x02` mixed flow. An older bot that cannot is **demoted to the legacy mixed path** — a correct archive with degraded speaker attribution, never a corrupted one. Both sides log a loud WARN on that demotion; without it the demotion gets diagnosed as "per-stream broke".
 
 | `perStream` requested | `TRANSCRIBER_PERSTREAM_DIARIZATION` | `channel.keepAudio` | bot advertises `mixedRecording` | Granted |
 |---|---|---|---|---|
@@ -152,7 +152,7 @@ A caption's position on the channel timeline is `astart + start`, where `astart`
 
 `meetingTimeMs` is **not** a second time base. The bot VAD-gates each participant's track, so a sub-ASR only ever receives speech bursts spliced end to end and the provider would report the second burst as if it started right after the first. The Transcriber therefore builds a piecewise audio-clock → meeting-clock map from the per-frame `meetingTimeMs` (`Transcriber/ASR/index.js`, `_noteMeetingTime` / `_applyTimeline`) and **adds the elided silence back** into `start`/`end` at publication time. The origin is untouched, so `astart + start` stays a real instant and every existing timeline consumer keeps working. A `meetingTimeMs` that goes backwards (bot restart, u32 wrap) abandons the map — once, with a WARN — and falls back to identity timestamps.
 
-The mixed `0x02` flow is used **only** to write the channel's `.pcm` archive; it never reaches an ASR.
+The mixed `0x02` flow is used **only** to write the channel's archive (through the recorder's raw `.pcm` file); it never reaches an ASR.
 
 ## Implications for pause / resume
 

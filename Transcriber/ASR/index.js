@@ -1,4 +1,5 @@
 const eventEmitter = require('eventemitter3');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { CircularBuffer } = require("live-srt-lib");
@@ -8,6 +9,9 @@ const ASR_ERROR = require('./error.js');
 const FakeTranscriber = require('./fake/index.js');
 const { Security } = require("live-srt-lib");
 const REDACTED = '[REDACTED]';
+
+// Kept-audio saves in progress, per `${sessionId}-${channelId}` (see saveAudio).
+const audioSaves = new Map();
 
 
 function loadAsr(provider) {
@@ -212,11 +216,14 @@ class ASR extends eventEmitter {
     try {
       const channel = this.channel
 
-      // K2: only a recording-owning ASR opens the (single, per-channel) .pcm —
-      // legacy ASR keep record=true so this is the original gate.
+      // K2: only a recording-owning ASR opens a raw file — legacy ASR keep
+      // record=true so this is the original gate. One raw file per stream: a
+      // stream that starts while the channel's previous one is still being
+      // saved (immediate reconnect) must neither truncate that stream's audio
+      // nor have its own deleted by that save.
       if (channel.keepAudio && this.record) {
-        const audioFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
-        this.audioFile = fs.createWriteStream(audioFilePath);
+        this.audioPcmPath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}-${crypto.randomUUID()}.pcm`);
+        this.audioFile = fs.createWriteStream(this.audioPcmPath);
       }
       // C8: keep the buffer allocated by the constructor (it may already hold
       // the first frames); only (re)allocate if something cleared it.
@@ -719,10 +726,28 @@ class ASR extends eventEmitter {
     });
   }
 
-  async saveAudio() {
+  // Save this stream's raw audio into the channel's audio file once `ready`
+  // settles. The saves of a channel run one at a time, in the order they are
+  // requested (stream order): each appends to the same file through the same
+  // temporary files, and two streams of a channel overlap here when a client
+  // reconnects at once.
+  saveAudio(ready = Promise.resolve()) {
+    const key = `${this.session.id}-${this.channel.id}`;
+    const save = (audioSaves.get(key) || Promise.resolve())
+      .catch(() => {})
+      .then(() => ready)
+      .then(() => this._saveAudio());
+    audioSaves.set(key, save);
+    save.catch(() => {}).then(() => {
+      if (audioSaves.get(key) === save) audioSaves.delete(key);
+    });
+    return save;
+  }
+
+  async _saveAudio() {
     const fileExtension = this.channel.compressAudio ? '.mp3' : '.wav';
     const transcodeFn = this.channel.compressAudio ? this.transcodeToMp3.bind(this) : this.transcodeToWav.bind(this);
-    const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
+    const pcmFilePath = this.audioPcmPath;
     let outFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}`) + fileExtension;
 
     if (fs.existsSync(outFilePath)) {
@@ -740,45 +765,48 @@ class ASR extends eventEmitter {
     fs.unlinkSync(pcmFilePath);
   }
 
+  // Close this stream's raw file: resolves once it is closed, its last writes
+  // on disk, so ffmpeg can never read a short file. Node documents a stream's
+  // close/end callback as possibly never called once the stream errored
+  // (ENOSPC, EACCES on AUDIO_STORAGE_PATH): that promise could then never
+  // settle and dispose() would hang forever, leaking this ASR, its provider and
+  // its listeners for the process lifetime. Race the close against the
+  // stream's own 'error' so the teardown always completes; a failed write is
+  // then reported by saveAudio()/ffmpeg, as for any unreadable file. The
+  // 'error' listener is deliberately left attached: removing it would make a
+  // later error on the same stream unhandled, which a Node stream turns into
+  // an uncaught exception.
+  _closeAudioFile() {
+    const file = this.audioFile;
+    return new Promise((resolve) => {
+      file.once('error', () => resolve());
+      file.close(() => resolve());
+    });
+  }
+
   async dispose() {
     try {
       await this._transitionLock;
       if (this.audioFile) {
+        // The last writes must reach the raw file before it is transcoded.
+        const closed = this._closeAudioFile();
         if (this.recordOnly) {
-          // K2 (ii): end() flushes AND waits for the OS write to land, so ffmpeg
-          // can never read a short file (close() + immediate saveAudio() races).
-          // Legacy keeps its exact close-then-save ordering below.
-          // Node documents writable.end(cb) as "if an error occurs, the callback
-          // MAY OR MAY NOT be called": on a stream that errored (ENOSPC, EACCES
-          // on AUDIO_STORAGE_PATH) that promise can never settle and dispose()
-          // then hangs forever, leaking this ASR, its provider and its listeners
-          // for the process lifetime. Race the finish against the stream's own
-          // 'error' so the teardown always completes; a failed write is then
-          // reported by saveAudio()/ffmpeg below, as for any unreadable file.
-          // The 'error' listener is deliberately left attached: removing it
-          // would make a later error on the same stream unhandled, which a Node
-          // stream turns into an uncaught exception.
-          await new Promise(resolve => {
-            this.audioFile.once('error', resolve);
-            this.audioFile.end(resolve);
-          });
+          await closed;
           // K2 (i): nobody ever spoke on this channel -> a 0-byte .pcm. ffmpeg
           // fails on an empty input, so drop the file and skip saveAudio()
           // entirely; any pre-existing .wav/.mp3 of the channel is left alone.
           if (this.audioFile.bytesWritten > 0) {
             await this.saveAudio();
           } else {
-            const pcmFilePath = path.join(process.env.AUDIO_STORAGE_PATH, `${this.session.id}-${this.channel.id}.pcm`);
             try {
-              fs.unlinkSync(pcmFilePath);
+              fs.unlinkSync(this.audioPcmPath);
             } catch (error) {
-              this.logger.warn(`Could not remove the empty recording ${pcmFilePath}: ${error.message}`);
+              this.logger.warn(`Could not remove the empty recording ${this.audioPcmPath}: ${error.message}`);
             }
             this.logger.info(`Mixed recording is empty (no audio received), skipping transcode for session=${this.session.id} channel=${this.channel.id}`);
           }
         } else {
-          this.audioFile.close();
-          await this.saveAudio();
+          await this.saveAudio(closed);
         }
       }
       if (this.provider) {

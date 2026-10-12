@@ -308,6 +308,12 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
     const init = ws2.sent.filter(x => typeof x === 'string').map(JSON.parse).find(f => f.type === 'init')
     assert.ok(init, 'init re-sent on the new socket')
     assert.equal(init.diarizationMode, 'asr', 'reconnected init advertises ASR diarization')
+    // The ASR-mode Transcriber would read JSON control frames as audio.
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    bot.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'm1', name: 'Carol' } })
+    bot.emit('participant-left', { identity: 'm1', name: 'Carol' })
+    assert.deepEqual(ws2.sent.filter(x => typeof x === 'string').map(f => JSON.parse(f).type), ['init'],
+      'no control frame on the ASR-mode socket')
   })
 
   // A transcriber-error from the stream watchdog is at least observable.

@@ -111,6 +111,39 @@ describe('TranscriberStream', () => {
     assert.ok(frames.some(f => f.type === 'participant' && f.action === 'leave' && f.participant.id === 'u2'))
   })
 
+  it('sends no control frames on a socket whose init advertised another mode than native', () => {
+    // BBB (asr), or the socket reopened after a Teams diarization degrade: the
+    // Transcriber would feed any JSON frame to the ASR as audio.
+    const ws2 = new FakeWs(); const bot2 = fakeBot()
+    bot2.manifest.diarizationMode = 'asr'
+    new TranscriberStream(ws2, bot2)
+    ws2.emit('open')
+    ws2.emit('message', JSON.stringify({ type: 'ack' }))
+    bot2.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } })
+    bot2.emit('participant-joined', { identity: 'u2', name: 'Bob' })
+    bot2.emit('participant-left', { identity: 'u2', name: 'Bob' })
+    bot2.emit('audio', Buffer.from([1, 2]))
+    assert.deepEqual(jsonFrames(ws2).map(f => f.type), ['init'])
+    assert.equal(audioFrames(ws2).length, 1, 'audio still flows')
+  })
+
+  it('decides from what the init of the socket said, not from the current manifest', () => {
+    const ws2 = new FakeWs(); const bot2 = fakeBot() // native
+    new TranscriberStream(ws2, bot2)
+    ws2.emit('open')
+    bot2.manifest.diarizationMode = 'asr' // degraded later: a new socket will say so
+    bot2.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } })
+    assert.deepEqual(jsonFrames(ws2).map(f => f.type), ['init', 'speakerChanged'], 'this socket was told native')
+
+    const ws3 = new FakeWs(); const bot3 = fakeBot()
+    bot3.manifest = null // no manifest: init advertises asr
+    bot3.getParticipantsList = () => []
+    new TranscriberStream(ws3, bot3)
+    ws3.emit('open')
+    bot3.emit('participant-joined', { identity: 'u2', name: 'Bob' })
+    assert.deepEqual(jsonFrames(ws3).map(f => [f.type, f.diarizationMode]), [['init', 'asr']])
+  })
+
   it('does not send control before the socket is open', () => {
     bot.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'u1', name: 'Alice' } })
     // ws starts OPEN in the fake; simulate a not-yet-open socket explicitly.

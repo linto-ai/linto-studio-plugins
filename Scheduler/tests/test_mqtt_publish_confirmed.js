@@ -1,7 +1,7 @@
 const assert = require('assert');
 const path = require('path');
 const EventEmitter = require('events');
-const { describe, it, before, after } = require('mocha');
+const { describe, it, before, after, beforeEach, afterEach } = require('mocha');
 
 // lib's MqttClient.publishConfirmed(): resolves once the broker acknowledged
 // the message, rejects instead of dropping it silently (publish() does while
@@ -86,5 +86,106 @@ describe('MqttClient.publishConfirmed()', () => {
         const c = client();
         await c.publishConfirmed('status', {});
         assert.strictEqual(connection.published[0].topic, 'scheduler/status');
+    });
+});
+
+// The real mqtt.js client, over an in-memory fake broker. mqtt.js keeps a QoS 1
+// message it had no acknowledgment for in its outgoing store and sends it again
+// on its next connection (clean session or not). Once publishConfirmed() gave
+// up on it, the caller retries the publication itself: mqtt.js must not send
+// it again too.
+describe('MqttClient.publishConfirmed() with mqtt.js', () => {
+    const { Duplex } = require('stream');
+    const RealMqtt = require(mqttPackagePath);
+    const mqttPacket = require(require.resolve('mqtt-packet', { paths: [path.dirname(mqttPackagePath)] }));
+    let MqttClient;
+    let origMqtt;
+    let broker;
+    let clients;
+
+    // Accepts connections, records the publications, acknowledges them only
+    // when `acknowledges` is set.
+    function fakeBroker() {
+        const state = { publishes: [], acknowledges: true, connections: [] };
+        state.streamBuilder = () => {
+            const parser = mqttPacket.parser();
+            const stream = new Duplex({
+                read() {},
+                write(chunk, encoding, cb) { parser.parse(chunk); cb(); },
+            });
+            const send = (packet) => { if (!stream.destroyed) stream.push(mqttPacket.generate(packet)); };
+            parser.on('packet', (packet) => {
+                if (packet.cmd === 'connect') send({ cmd: 'connack', returnCode: 0, sessionPresent: false });
+                if (packet.cmd === 'publish') {
+                    state.publishes.push({ topic: packet.topic, dup: packet.dup });
+                    if (packet.qos > 0 && state.acknowledges) send({ cmd: 'puback', messageId: packet.messageId });
+                }
+            });
+            state.connections.push(stream);
+            return stream;
+        };
+        return state;
+    }
+
+    before(() => {
+        origMqtt = require.cache[mqttPackagePath];
+        require.cache[mqttPackagePath] = {
+            id: mqttPackagePath, filename: mqttPackagePath, loaded: true,
+            exports: {
+                connect: (options) => new RealMqtt.MqttClient(broker.streamBuilder, { ...options, keepalive: 0, reconnectPeriod: 20 }),
+            },
+        };
+        delete require.cache[libMqttPath];
+        MqttClient = require(libMqttPath);
+    });
+
+    after(() => {
+        if (origMqtt) require.cache[mqttPackagePath] = origMqtt; else delete require.cache[mqttPackagePath];
+        delete require.cache[libMqttPath];
+    });
+
+    beforeEach(() => {
+        broker = fakeBroker();
+        clients = [];
+    });
+
+    afterEach(() => clients.forEach((c) => c.client.end(true)));
+
+    async function connected() {
+        const c = new MqttClient({ pub: 'scheduler', uniqueId: 'scheduler', subs: [] });
+        clients.push(c);
+        await new Promise((resolve) => c.once('ready', resolve));
+        return c;
+    }
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const ended = () => broker.publishes.filter((p) => p.topic === 'system/out/sessions/ended');
+
+    it('resolves on the broker\'s acknowledgment', async () => {
+        const c = await connected();
+        await c.publishConfirmed('system/out/sessions/ended', { id: 's1' }, 1, false, 500);
+        assert.strictEqual(ended().length, 1);
+    });
+
+    it('is not sent again by mqtt.js on reconnect once it timed out', async () => {
+        const c = await connected();
+        broker.acknowledges = false; // e.g. the acknowledgment is lost
+        await assert.rejects(c.publishConfirmed('system/out/sessions/ended', { id: 's1' }, 1, false, 50), /no acknowledgment/);
+        assert.strictEqual(ended().length, 1);
+        broker.acknowledges = true;
+        broker.connections[0].destroy(); // the connection drops: mqtt.js reconnects
+        await wait(200);
+        assert.ok(broker.connections.length >= 2, 'reconnected');
+        assert.deepStrictEqual(ended().length, 1, 'mqtt.js did not send it again: the caller\'s retry is the only one');
+    });
+
+    it('is sent again by mqtt.js on reconnect while still waiting for the acknowledgment', async () => {
+        const c = await connected();
+        broker.acknowledges = false;
+        const publishing = c.publishConfirmed('system/out/sessions/ended', { id: 's1' }, 1, false, 2000);
+        await wait(20);
+        broker.acknowledges = true;
+        broker.connections[0].destroy();
+        await publishing; // acknowledged once sent again
+        assert.strictEqual(ended().length, 2, 'sent, then sent again by mqtt.js');
     });
 });

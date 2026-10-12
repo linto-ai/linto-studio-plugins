@@ -41,23 +41,24 @@ describe('BotService BrokerClient', () => {
     assert.deepEqual(s.metrics, { botJoinAttempts: 0, botJoinSuccesses: 0, botJoinFailures: 0, participantChurn: 0 })
   })
 
-  it('heartbeat also reports the RSS of the whole process tree (Node + Chromium)', () => {
-    ctx.instance.readProcessTree = () => ({ rss: 900 * 1024 * 1024, processes: 7 })
+  it('heartbeat also reports what the memory ceiling applies to; rss keeps its meaning', () => {
+    const MB = 1024 * 1024
+    ctx.instance.readCgroupMemory = () => ({ version: 2, used: 3000 * MB, limit: 4096 * MB })
     ctx.instance._publishStatus(true)
-    assert.equal(ctx.statuses[0].treeRss, 900 * 1024 * 1024)
-    assert.equal(ctx.statuses[0].treeProcesses, 7)
-    assert.ok(ctx.statuses[0].rss < ctx.statuses[0].treeRss, 'rss keeps its meaning: the Node process')
-    ctx.instance.readProcessTree = () => null // no /proc
-    ctx.instance._publishStatus(true)
-    assert.equal(ctx.statuses[1].treeRss, null)
-    assert.equal(ctx.statuses[1].treeProcesses, null)
+    const s = ctx.statuses[0]
+    assert.equal(s.memoryUsed, 3000 * MB)
+    assert.equal(s.memorySource, 'cgroup')
+    assert.equal(s.memoryLimit, 4096 * MB)
+    assert.equal(s.memoryCeiling, Math.round(4096 * MB * 0.85))
+    assert.ok(s.rss > 0 && s.rss < s.memoryUsed, 'rss is still the Node process')
   })
 
   if (process.platform === 'linux') {
-    it('reads the process tree from /proc by default', () => {
+    it('reads the real cgroup and /proc by default', () => {
       ctx.instance._publishStatus(true)
-      assert.ok(ctx.statuses[0].treeRss > 0)
-      assert.ok(ctx.statuses[0].treeProcesses >= 1)
+      const s = ctx.statuses[0]
+      assert.ok(s.memoryUsed > 0)
+      assert.ok(['cgroup', 'pss', 'rss'].includes(s.memorySource))
     })
   }
 
@@ -93,12 +94,14 @@ describe('BotService BrokerClient — memory ceiling + backpressure', () => {
   const MB = 1024 * 1024
   let ctx
 
-  // Force a low ceiling and a high process-tree rss so the instance is over it.
+  // Force a low ceiling and a high process-tree PSS (no cgroup limit) so the
+  // instance is over it.
   beforeEach(() => {
     process.env.BOTSERVICE_MAX_RSS_MB = '100'
     process.memoryUsage = () => ({ rss: 50 * MB, heapUsed: 20 * MB, heapTotal: 0, external: 0, arrayBuffers: 0 })
     ctx = loadBrokerClient()
-    ctx.instance.readProcessTree = () => ({ rss: 500 * MB, processes: 6 })
+    ctx.instance.readCgroupMemory = () => ({ version: 2, used: 9000 * MB, limit: null })
+    ctx.instance.readProcessTree = () => ({ rss: 900 * MB, pss: 500 * MB, processes: 6 })
   })
   afterEach(() => {
     if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
@@ -112,19 +115,22 @@ describe('BotService BrokerClient — memory ceiling + backpressure', () => {
     assert.deepEqual(ctx.statuses[0].capabilities, [], 'no capabilities advertised while overloaded')
     assert.equal(ctx.instance.overloaded, true)
     // Drop back under the ceiling.
-    ctx.instance.readProcessTree = () => ({ rss: 90 * MB, processes: 6 })
+    ctx.instance.readProcessTree = () => ({ rss: 900 * MB, pss: 90 * MB, processes: 6 })
     ctx.instance._publishStatus(true)
     assert.deepEqual(ctx.statuses[1].capabilities, ['jitsi', 'bigbluebutton', 'teams', 'visio'])
     assert.equal(ctx.instance.overloaded, false)
   })
 
   // Chromium runs in child processes: the Node process alone (50 MB here) never
-  // reached the ceiling, whatever the meeting pages used.
-  it('applies the ceiling to the whole process tree, not to the Node process alone', () => {
+  // reached the ceiling, whatever the meeting pages used. Without a memory limit
+  // the tree's PSS counts its shared pages once, unlike the sum of its RSS.
+  it('without a memory limit, applies the ceiling to the PSS of the whole process tree', () => {
     ctx.instance._publishStatus(true)
     assert.equal(ctx.statuses[0].rss, 50 * MB)
+    assert.equal(ctx.statuses[0].memoryUsed, 500 * MB)
+    assert.equal(ctx.statuses[0].memorySource, 'pss')
     assert.equal(ctx.instance.overloaded, true)
-    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('process-tree rss 500MB >= 100MB')))
+    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('(process-tree PSS 500MB >= 100MB)')), JSON.stringify(ctx.logs))
   })
 
   it('falls back to the Node process rss where the process tree cannot be measured', () => {
@@ -134,7 +140,25 @@ describe('BotService BrokerClient — memory ceiling + backpressure', () => {
     process.memoryUsage = () => ({ rss: 500 * MB, heapUsed: 20 * MB, heapTotal: 0, external: 0, arrayBuffers: 0 })
     ctx.instance._publishStatus(true)
     assert.equal(ctx.instance.overloaded, true)
-    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('(rss 500MB >= 100MB)')))
+    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('(Node rss 500MB >= 100MB)')))
+  })
+
+  it('under a memory limit, applies an explicit ceiling to the container working set', () => {
+    ctx.instance.readCgroupMemory = () => ({ version: 2, used: 150 * MB, limit: 4096 * MB })
+    ctx.instance.readProcessTree = () => { throw new Error('the tree must not be read under a limit') }
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.instance.overloaded, true)
+    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('(container working set 150MB >= 100MB, limit 4096MB)')))
+  })
+
+  it('measures afresh at startBot: a burst between two heartbeats is refused once over the ceiling', async () => {
+    ctx.instance.readProcessTree = () => ({ rss: 900 * MB, pss: 90 * MB, processes: 6 })
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.instance.overloaded, false)
+    ctx.instance.readProcessTree = () => ({ rss: 900 * MB, pss: 120 * MB, processes: 6 }) // a bot just joined
+    await ctx.instance.startBot({ session: { id: 's' }, channel: { id: 'c' }, botType: 'visio', websocketUrl: 'ws://t', botId: 98 })
+    assert.equal(ctx.instance.bots.size, 0, 'refused without waiting for the next heartbeat')
+    assert.deepEqual(ctx.statuses[ctx.statuses.length - 1].capabilities, [], 'and the Scheduler is told at once')
   })
 
   it('refuses a new startBot while over the ceiling and publishes a bot-error', async () => {
@@ -825,7 +849,7 @@ describe('BotService BrokerClient — _evaluatePressure / _publishStatus boundar
     const ctx = loadBrokerClient()
     try {
       const logsBefore = ctx.logs.length
-      ctx.instance._evaluatePressure({ rss: 999 * 1024 * 1024 })
+      ctx.instance._evaluatePressure(ctx.instance._memoryBudget({ rss: 999 * 1024 * 1024 }))
       assert.equal(ctx.instance.overloaded, false, 'overloaded never set when ceiling disabled')
       assert.equal(ctx.logs.length, logsBefore, 'no logging when ceiling disabled')
     } finally {
@@ -833,14 +857,68 @@ describe('BotService BrokerClient — _evaluatePressure / _publishStatus boundar
     }
   })
 
-  it('flips overloaded exactly at the threshold (rssMb === MAX_RSS_MB, >= comparison)', () => {
+  it('flips overloaded exactly at the threshold (used === ceiling, >= comparison)', () => {
     process.env.BOTSERVICE_MAX_RSS_MB = '100'
     const ctx = loadBrokerClient()
-    ctx.instance.readProcessTree = () => ({ rss: 100 * 1024 * 1024, processes: 1 })
+    ctx.instance.readCgroupMemory = () => null
+    ctx.instance.readProcessTree = () => ({ rss: 200 * 1024 * 1024, pss: 100 * 1024 * 1024, processes: 1 })
     try {
       ctx.instance._publishStatus(true)
       assert.equal(ctx.instance.overloaded, true, 'rss exactly at the ceiling is overloaded (>=)')
       assert.deepEqual(ctx.statuses[0].capabilities, [], 'empty capabilities at the threshold')
+    } finally {
+      if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    }
+  })
+
+  // Default (BOTSERVICE_MAX_RSS_MB unset): derived from the memory limit.
+  it('unset, under a memory limit: 85% of the limit, against the container working set', () => {
+    const MB = 1024 * 1024
+    const ctx = loadBrokerClient()
+    try {
+      let used = 3400 * MB
+      ctx.instance.readCgroupMemory = () => ({ version: 2, used, limit: 4096 * MB })
+      ctx.instance._publishStatus(true)
+      assert.equal(ctx.statuses[0].memoryCeiling, Math.round(4096 * MB * 0.85)) // 3481.6 MB
+      assert.equal(ctx.instance.overloaded, false)
+      used = 3500 * MB
+      ctx.instance._publishStatus(true)
+      assert.equal(ctx.instance.overloaded, true)
+      assert.deepEqual(ctx.statuses[1].capabilities, [])
+    } finally {
+      if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    }
+  })
+
+  it('unset, without a memory limit: the former 2048 MB against the Node process rss (no change)', () => {
+    const MB = 1024 * 1024
+    const ctx = loadBrokerClient()
+    try {
+      ctx.instance.readCgroupMemory = () => ({ version: 2, used: 9000 * MB, limit: null })
+      ctx.instance.readProcessTree = () => { throw new Error('not read for the former behaviour') }
+      process.memoryUsage = () => ({ rss: 2000 * MB, heapUsed: 1, heapTotal: 0, external: 0, arrayBuffers: 0 })
+      ctx.instance._publishStatus(true)
+      assert.equal(ctx.instance.overloaded, false)
+      assert.equal(ctx.statuses[0].memorySource, 'rss')
+      assert.equal(ctx.statuses[0].memoryCeiling, 2048 * MB)
+      process.memoryUsage = () => ({ rss: 2100 * MB, heapUsed: 1, heapTotal: 0, external: 0, arrayBuffers: 0 })
+      ctx.instance._publishStatus(true)
+      assert.equal(ctx.instance.overloaded, true)
+    } finally {
+      if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    }
+  })
+
+  it('BOTSERVICE_MAX_RSS_MB=0 disables the ceiling, even under a limit', () => {
+    process.env.BOTSERVICE_MAX_RSS_MB = '0'
+    const MB = 1024 * 1024
+    const ctx = loadBrokerClient()
+    try {
+      ctx.instance.readCgroupMemory = () => ({ version: 2, used: 4000 * MB, limit: 4096 * MB })
+      ctx.instance._publishStatus(true)
+      assert.equal(ctx.instance.overloaded, false)
+      assert.equal(ctx.statuses[0].memoryCeiling, null)
+      assert.equal(ctx.statuses[0].memoryUsed, 4000 * MB)
     } finally {
       if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
     }

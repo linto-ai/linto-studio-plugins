@@ -6,6 +6,7 @@ const BrowserPool = require('../../bot/BrowserPool')
 const LocalAudioServer = require('../../bot/LocalAudioServer')
 const TranscriberStream = require('../../bot/TranscriberStream')
 const { processTreeMemory } = require('./processTree')
+const { readCgroupMemory, memoryBudget } = require('./memory')
 
 const HEARTBEAT_MS = 15000
 // ACK-gated audio buffer: the Transcriber WS sends 'ack' after init; until then
@@ -19,13 +20,20 @@ const MAX_AUDIO_BUFFER_CHUNKS = 500
 const RECONNECT_MAX_RETRIES = parseInt(process.env.BOTSERVICE_WS_RECONNECT_RETRIES || '3', 10)
 const RECONNECT_BASE_MS = parseInt(process.env.BOTSERVICE_WS_RECONNECT_BASE_MS || '1000', 10)
 
-// Memory ceiling: when the RSS of the replica (the Node process and its Chromium
-// processes) crosses this, the replica advertises EMPTY capabilities (so the
-// Scheduler routes elsewhere) and refuses new startBot. 0 disables it.
+// Memory ceiling in MB: when the replica's memory crosses it, the replica
+// advertises EMPTY capabilities (so the Scheduler routes elsewhere) and refuses
+// new startBot. null when unset: derived from the memory limit (see memory.js).
+// 0 (or a malformed value) disables it.
 const MAX_RSS_MB = (() => {
-  const v = parseInt(process.env.BOTSERVICE_MAX_RSS_MB || '2048', 10)
+  const raw = process.env.BOTSERVICE_MAX_RSS_MB
+  if (raw === undefined || raw === '') return null
+  const v = parseInt(raw, 10)
   return Number.isFinite(v) && v > 0 ? v : 0
 })()
+
+const MB = 1024 * 1024
+// How each memory figure is called in the logs.
+const MEMORY_SOURCES = { cgroup: 'container working set', pss: 'process-tree PSS', rss: 'Node rss' }
 
 const CAPABILITIES = (process.env.BOT_CAPABILITIES || Bot.KNOWN_BOT_TYPES.join(','))
   .split(',').map(s => s.trim()).filter(Boolean)
@@ -56,7 +64,9 @@ class BrokerClient extends Component {
     // Under-pressure flag: when true the heartbeat advertises EMPTY capabilities
     // and startBot is refused. Recovers once memory drops back under the ceiling.
     this.overloaded = false
-    this.readProcessTree = processTreeMemory // () => {rss, processes}|null
+    // Memory readers (replaced in tests).
+    this.readCgroupMemory = readCgroupMemory // () => {version, used, limit}|null
+    this.readProcessTree = processTreeMemory // () => {rss, pss, processes}|null
 
     // Cumulative lifecycle counters, exposed in the heartbeat `metrics` object.
     this.metrics = {
@@ -115,18 +125,27 @@ class BrokerClient extends Component {
     })
   }
 
+  // The memory figure the ceiling applies to, and the ceiling (memory.js): the
+  // container's working set under a memory limit, where the meeting pages
+  // (Chromium renderers) are counted as the OOM killer counts them.
+  _memoryBudget (mem) {
+    return memoryBudget(MAX_RSS_MB, { cgroup: this.readCgroupMemory(), readTree: () => this.readProcessTree(), nodeRss: mem.rss })
+  }
+
   // Re-evaluate the memory ceiling; sets/clears this.overloaded and logs on edges.
-  // mem: { rss } in bytes, `tree` when it covers the whole process tree.
-  _evaluatePressure (mem) {
-    if (!MAX_RSS_MB) return
-    const rssMb = mem.rss / (1024 * 1024)
-    const what = mem.tree ? 'process-tree rss' : 'rss'
+  // budget: { used, source, limit, ceiling } in bytes (_memoryBudget).
+  _evaluatePressure (budget) {
+    if (!budget.ceiling) return
+    const usedMb = (budget.used / MB).toFixed(0)
+    const ceilingMb = (budget.ceiling / MB).toFixed(0)
+    const of = `${MEMORY_SOURCES[budget.source]} ${usedMb}MB`
+    const limit = budget.limit ? `, limit ${(budget.limit / MB).toFixed(0)}MB` : ''
     const wasOverloaded = this.overloaded
-    this.overloaded = rssMb >= MAX_RSS_MB
+    this.overloaded = budget.used >= budget.ceiling
     if (this.overloaded && !wasOverloaded) {
-      logger.warn(`BotService: memory ceiling reached (${what} ${rssMb.toFixed(0)}MB >= ${MAX_RSS_MB}MB) — advertising no capabilities, refusing new bots`)
+      logger.warn(`BotService: memory ceiling reached (${of} >= ${ceilingMb}MB${limit}) — advertising no capabilities, refusing new bots`)
     } else if (!this.overloaded && wasOverloaded) {
-      logger.info(`BotService: memory back under ceiling (${what} ${rssMb.toFixed(0)}MB < ${MAX_RSS_MB}MB) — capabilities restored`)
+      logger.info(`BotService: memory back under ceiling (${of} < ${ceilingMb}MB${limit}) — capabilities restored`)
     }
   }
 
@@ -134,12 +153,9 @@ class BrokerClient extends Component {
     // Memory must be re-checked on every heartbeat regardless of the dedup below,
     // so backpressure transitions are not swallowed when activeBots is unchanged.
     const mem = process.memoryUsage()
-    // The ceiling applies to the whole process tree, where the meeting pages live
-    // (Chromium renderers), and falls back to the Node process where /proc cannot
-    // be read.
-    const tree = this.readProcessTree()
+    const budget = this._memoryBudget(mem)
     const prevOverloaded = this.overloaded
-    this._evaluatePressure(tree ? { rss: tree.rss, tree: true } : { rss: mem.rss })
+    this._evaluatePressure(budget)
     // An overload transition changes advertised capabilities, so it must always be
     // published even if the bot count did not move.
     const overloadChanged = prevOverloaded !== this.overloaded
@@ -150,9 +166,12 @@ class BrokerClient extends Component {
       // Report load so the Scheduler can weight routing by memory pressure.
       rss: mem.rss,
       heapUsed: mem.heapUsed,
-      // The whole process tree, Chromium included (null where not measurable).
-      treeRss: tree ? tree.rss : null,
-      treeProcesses: tree ? tree.processes : null,
+      // What the memory ceiling applies to (bytes; limit and ceiling null if none):
+      // 'cgroup' (container working set), 'pss' (process tree) or 'rss' (Node).
+      memoryUsed: budget.used,
+      memorySource: budget.source,
+      memoryLimit: budget.limit,
+      memoryCeiling: budget.ceiling,
       metrics: { ...this.metrics },
       // Advertise no capabilities while overloaded so we are skipped.
       capabilities: this.overloaded ? [] : this.capabilities
@@ -167,6 +186,8 @@ class BrokerClient extends Component {
     const key = `${session.id}_${channel.id}`
     // Refuse new work while over the memory ceiling (a startbot may already have
     // been in flight when we crossed it, despite advertising no capabilities).
+    // Measured afresh: startbots can come in bursts between two heartbeats.
+    this._publishStatus()
     if (this.overloaded) {
       logger.warn(`BotService: refusing startBot ${key} — over memory ceiling (backpressure)`)
       this._publishBotError(botId, 'botservice-overloaded')

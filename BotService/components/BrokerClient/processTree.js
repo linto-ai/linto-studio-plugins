@@ -1,17 +1,18 @@
 const fs = require('fs')
 
 /**
- * Resident memory of a process and all its descendants, read from Linux /proc.
- * The BotService's Chromium (browser, GPU and utility processes, one renderer per
+ * Memory of a process and all its descendants, read from Linux /proc. The
+ * BotService's Chromium (browser, GPU and utility processes, one renderer per
  * meeting page) runs in child processes, which the Node process' own RSS leaves
- * out. Pages shared between processes (libraries, shared memory) count once per
- * process that maps them, so the sum errs on the high side: the safe side for a
- * memory ceiling.
+ * out. RSS counts the pages shared between processes (libraries, shared memory)
+ * once per process that maps them, which overstates Chromium a lot; PSS
+ * (smaps_rollup) splits them between the sharers, so its sum is what the tree
+ * actually uses. A process whose smaps_rollup cannot be read counts its RSS.
  *
  * @param {number} [rootPid] root of the tree (default: this process)
  * @param {string} [procDir] procfs mount point (overridable for tests)
- * @returns {{rss:number, processes:number}|null} RSS in bytes and process count,
- *   or null where /proc cannot be read (not Linux, restricted sandbox)
+ * @returns {{rss:number, pss:number, processes:number}|null} bytes and process
+ *   count, or null where /proc cannot be read (not Linux, restricted sandbox)
  */
 function processTreeMemory (rootPid = process.pid, procDir = '/proc') {
   let entries
@@ -41,17 +42,32 @@ function processTreeMemory (rootPid = process.pid, procDir = '/proc') {
   }
   if (!rssKb.has(rootPid)) return null
 
-  let kb = 0
+  let rss = 0
+  let pss = 0
   const seen = new Set() // a pid reused during the scan must not loop
   const pending = [rootPid]
   while (pending.length > 0) {
     const pid = pending.pop()
     if (seen.has(pid)) continue
     seen.add(pid)
-    kb += rssKb.get(pid) || 0
+    const kb = rssKb.get(pid) || 0
+    rss += kb
+    pss += pssKb(`${procDir}/${pid}/smaps_rollup`) ?? kb
     for (const child of children.get(pid) || []) pending.push(child)
   }
-  return { rss: kb * 1024, processes: seen.size }
+  return { rss: rss * 1024, pss: pss * 1024, processes: seen.size }
+}
+
+// Pss of a process in kB, from its smaps_rollup (Linux >= 4.14), or null.
+function pssKb (file) {
+  let rollup
+  try {
+    rollup = fs.readFileSync(file, 'utf8')
+  } catch (e) {
+    return null
+  }
+  const pss = /^Pss:\s*(\d+) kB/m.exec(rollup)
+  return pss ? Number(pss[1]) : null
 }
 
 module.exports = { processTreeMemory }

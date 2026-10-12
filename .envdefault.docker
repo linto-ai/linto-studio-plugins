@@ -20,7 +20,7 @@ BOTSERVICE_HEALTHCHECK_HTTP=8080
 # JOIN_TIMEOUT_SECONDS=120 # leave if no participant is seen this long after join
 # AUDIO_SILENCE_TIMEOUT_SECONDS=30 # tear down if no PCM for this long after admission (0 = disabled)
 # TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init ack before failing the handshake
-# BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling of the Node process + its Chromium processes: above it advertise capabilities=[] and refuse bots (0 = disabled)
+# BOTSERVICE_MAX_RSS_MB= # memory ceiling (MB): above it the replica advertises capabilities=[] and refuses bots (0 = disabled). It counts the container working set under a memory limit, else the process tree's PSS. Unset: 85% of the memory limit; without a limit, 2048 MB of the Node process RSS (former behaviour)
 # BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up
 # BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
 # ⚠ BOT_CAPABILITIES is read by BOTH bot services (web BotService and

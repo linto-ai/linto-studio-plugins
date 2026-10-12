@@ -481,9 +481,18 @@ function getInterceptScript (localWsUrl, platformConfig) {
 // Emitted only for platformType === 'sfu'. Relies on shared helpers
 // (tracks, hasUnmappedTrack, mapTrack, sendJson, intervals, log).
 const SFU_MAPPING_BLOCK = `
+  // Polling starts with the page. While a captured track waits for its
+  // participant, poll fast: its words are only attributed from the mapping on.
+  // Otherwise poll at the normal cadence, for subscriptions and leaves. Finding
+  // the LiveKit Room walks the React fiber tree of the whole DOM, which is
+  // expensive: at most once per SFU_POLL_MS, and no more once found (the Room
+  // object is kept).
+  var SFU_FAST_POLL_MS = 250, SFU_POLL_MS = 1500;
+  var lastSfuPoll = -Infinity, lastRoomSearch = -Infinity; // the first ones run at once
+
   // If neither the Jitsi conference nor the LiveKit Room internal is ever found,
   // no track is subscribed/mapped and the bot captures nothing. Count consecutive
-  // polls with no Room/conference and warn once after the limit so the failure
+  // searches with no Room/conference and warn once after the limit so the failure
   // (page structure changed / never joined) is visible.
   var sfuNotFoundPolls = 0, sfuNotFoundWarned = false;
   var SFU_NOT_FOUND_LIMIT = 20;
@@ -493,7 +502,7 @@ const SFU_MAPPING_BLOCK = `
     sfuNotFoundPolls++;
     if (sfuNotFoundPolls >= SFU_NOT_FOUND_LIMIT) {
       sfuNotFoundWarned = true;
-      warn('SFU Room/conference internal never found after ' + sfuNotFoundPolls + ' polls — no audio tracks will be captured');
+      warn('SFU Room/conference internal never found after ' + sfuNotFoundPolls + ' searches — no audio tracks will be captured');
     }
   }
 
@@ -555,14 +564,23 @@ const SFU_MAPPING_BLOCK = `
     } catch (e) { /* ignore */ }
     return null;
   }
-  function pollLivekit() {
+  function pollLivekit(now) {
     // Runs unconditionally (NOT gated on tracks) so it can find the Room and
     // FORCE subscription: a headless bot has no UI, so adaptive-stream never
     // subscribes on its own and no inbound tracks would ever arrive.
     if (window.APP && window.APP.conference) { noteSfuInternal(true); return; } // Jitsi handles its own mapping
-    if (!livekitRoom) { livekitRoom = findLivekitRoom(); if (!livekitRoom) { noteSfuInternal(false); return; } log('LiveKit Room found'); }
+    // A disconnected Room was left, or is not connected yet, or was replaced by a
+    // new one: search again. A connecting / reconnecting one is kept.
+    if (livekitRoom && livekitRoom.state === 'disconnected') livekitRoom = null;
+    if (!livekitRoom) {
+      if (now - lastRoomSearch < SFU_POLL_MS) return;
+      lastRoomSearch = now;
+      livekitRoom = findLivekitRoom();
+      if (!livekitRoom) { noteSfuInternal(false); return; }
+      log('LiveKit Room found');
+    }
     noteSfuInternal(true);
-    if (livekitRoom.state && livekitRoom.state !== 'connected') { livekitRoom = null; return; }
+    if (livekitRoom.state && livekitRoom.state !== 'connected') return;
     try {
       const remotes = livekitRoom.remoteParticipants || livekitRoom.participants;
       const seen = new Set();
@@ -590,7 +608,14 @@ const SFU_MAPPING_BLOCK = `
       remotes.forEach(function (p) { livekitRoster.set(p.identity, p.name || p.identity); });
     } catch (e) { /* ignore */ }
   }
-  setTimeout(function () { intervals.push(setInterval(pollJitsi, 2000)); intervals.push(setInterval(pollLivekit, 1500)); }, 3000);
+  function pollSfu() {
+    const now = Date.now();
+    if (!hasUnmappedTrack() && now - lastSfuPoll < SFU_POLL_MS) return;
+    lastSfuPoll = now;
+    pollJitsi();
+    pollLivekit(now);
+  }
+  intervals.push(setInterval(pollSfu, SFU_FAST_POLL_MS));
 `
 
 // ── Teams speaker detection (MCU: one mixed track, speaker from page state) ──

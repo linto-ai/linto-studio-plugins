@@ -194,7 +194,11 @@ function runScript (script, opts = {}) {
       if (tag === 'audio') sinks.push(el)
       return el
     },
-    querySelectorAll () { return elements }
+    // opts.elements: the page's elements, or a function returning them (as of now).
+    querySelectorAll () {
+      if (opts.onQuerySelectorAll) opts.onQuerySelectorAll()
+      return typeof elements === 'function' ? elements() : elements
+    }
   }
   const fakeNavigator = {
     mediaDevices: opts.noMediaDevices ? undefined : {
@@ -1178,12 +1182,12 @@ describe('webrtc-intercept getInterceptScript()', () => {
       ctx.clock.tickIntervals() // poll 1: Alice present -> mapped, recorded in roster
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantLeft').length, 0, 'no leave while present')
       roster.length = 0 // Alice leaves the meeting
-      ctx.clock.tickIntervals() // poll 2: roster diff -> Alice is gone
+      ctx.clock.advance(1500); ctx.clock.tickIntervals() // poll 2 (normal cadence): roster diff -> Alice is gone
       const left = jsonFrames(ws).filter((f) => f.type === 'participantLeft')
       assert.strictEqual(left.length, 1, 'exactly one participantLeft')
       assert.strictEqual(left[0].participant.id, 'idAlice')
       assert.strictEqual(left[0].participant.name, 'Alice')
-      ctx.clock.tickIntervals() // poll 3: already removed -> not re-emitted
+      ctx.clock.advance(1500); ctx.clock.tickIntervals() // poll 3: already removed -> not re-emitted
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantLeft').length, 1, 'leave emitted once')
     })
 
@@ -1201,32 +1205,133 @@ describe('webrtc-intercept getInterceptScript()', () => {
       ctx.clock.advance(3000)
       ctx.clock.tickIntervals() // both present
       roster.splice(0, 1) // Alice leaves, Bob stays
-      ctx.clock.tickIntervals()
+      ctx.clock.advance(1500); ctx.clock.tickIntervals()
       const left = jsonFrames(ws).filter((f) => f.type === 'participantLeft')
       assert.strictEqual(left.length, 1)
       assert.strictEqual(left[0].participant.id, 'idA')
     })
   })
 
-  describe('SFU polling lifecycle (behavioral)', () => {
-    it('after the 3000ms startup delay both Jitsi and LiveKit pollers are active', async () => {
-      const s = getInterceptScript(WS, { platformType: 'sfu' })
+  // The pollers used to start 3 s after the page and then poll every 1.5-2 s:
+  // a track was mapped up to ~4.5 s after the join, or 1.5 s after it started
+  // streaming, and its words meanwhile were attributed to nobody (or to the
+  // previous speaker).
+  describe('SFU polling cadence (behavioral)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    // Let `ms` of time pass, the 250 ms poller interval firing on its schedule.
+    function runFor (ctx, ms) {
+      for (let t = 0; t < ms; t += 250) { ctx.clock.advance(250); ctx.clock.tickIntervals() }
+    }
+    // A LiveKit Room reachable through a React fiber (once rendered), counting the
+    // DOM walks and the polls of its participant. Pass { elements, onQuerySelectorAll }
+    // to runScript.
+    function lkSetup (opts = {}) {
+      const stats = { walks: 0, polls: 0 }
+      const pubs = []
+      let rendered = !opts.hidden
+      const bob = { identity: 'idBob', name: 'Bob', trackPublications: { forEach (f) { stats.polls++; pubs.forEach(f) } } }
+      const room = { state: opts.state || 'connected', localParticipant: {}, remoteParticipants: [bob] }
+      const el = { __reactFiber$x: { memoizedProps: { room }, memoizedState: null, return: null } }
+      return {
+        stats,
+        room,
+        pubs,
+        render: () => { rendered = true },
+        page: { elements: () => (rendered ? [el] : []), onQuerySelectorAll: () => { stats.walks++ } }
+      }
+    }
+    const subscribed = (id) => ({ kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: { id } } })
+
+    it('starts at once, as a single interval', () => {
       const ctx = runScript(s)
+      assert.deepStrictEqual([...ctx.clock.intervals.values()].map((i) => i.every), [250])
+    })
+
+    it('a track is mapped at the first poll after it starts streaming (within 250 ms)', async () => {
+      const lk = lkSetup()
+      const ctx = runScript(s, lk.page)
+      const ws = await openLoopback(ctx)
+      runFor(ctx, 500) // the page joins, the Room is found
+      lk.pubs.push(subscribed('bob-t'))
+      emitTrack(ctx, makeTrack('bob-t'))
+      await flush(); await flush()
+      runFor(ctx, 250)
+      const maps = jsonFrames(ws).filter((f) => f.type === 'participantMapping')
+      assert.deepStrictEqual(maps.map((m) => m.participant.name), ['Bob'])
+    })
+
+    it('polls fast only while a track waits for its participant, at the normal cadence otherwise', async () => {
+      const lk = lkSetup()
+      const ctx = runScript(s, lk.page)
       await openLoopback(ctx)
-      assert.strictEqual(ctx.clock.intervals.size, 0, 'no pollers before the delay')
-      ctx.clock.advance(3000)
-      assert.strictEqual(ctx.clock.intervals.size, 2, 'two pollers after the delay')
+      runFor(ctx, 3000)
+      assert.strictEqual(lk.stats.polls, 2, 'nothing to map: every 1.5 s')
+      emitTrack(ctx, makeTrack('stray-t')) // a track no participant publishes (yet)
+      lk.stats.polls = 0
+      runFor(ctx, 3000)
+      assert.strictEqual(lk.stats.polls, 12, 'a track waits: every 250 ms')
+      lk.pubs.push(subscribed('stray-t'))
+      runFor(ctx, 250) // mapped
+      lk.stats.polls = 0
+      runFor(ctx, 3000)
+      assert.strictEqual(lk.stats.polls, 2, 'back to every 1.5 s')
+    })
+
+    it('walks the DOM for the Room at most every 1.5 s, and never again once found', async () => {
+      const lk = lkSetup({ hidden: true }) // the meeting client has not rendered it yet
+      const ctx = runScript(s, lk.page)
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t')) // fast polling...
+      runFor(ctx, 3000)
+      assert.strictEqual(lk.stats.walks, 2, '...but not a walk per poll: 2 in 3 s')
+      lk.render()
+      runFor(ctx, 1500)
+      assert.strictEqual(lk.stats.walks, 3, 'found at the next search')
+      runFor(ctx, 30000)
+      assert.strictEqual(lk.stats.walks, 3, 'and never walked again')
+    })
+
+    it('keeps a found Room, connecting or connected, without walking the DOM again', async () => {
+      const lk = lkSetup({ state: 'connecting' })
+      const ctx = runScript(s, lk.page)
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('bob-t'))
+      runFor(ctx, 250)
+      assert.strictEqual(lk.stats.walks, 1)
+      runFor(ctx, 3000) // still connecting
+      lk.room.state = 'connected'
+      lk.pubs.push(subscribed('bob-t'))
+      runFor(ctx, 30000)
+      assert.strictEqual(lk.stats.walks, 1, 'one walk in 33 s')
+    })
+
+    it('searches again (at most every 1.5 s) when the Room is disconnected: left, or replaced', async () => {
+      const lk = lkSetup()
+      const ctx = runScript(s, lk.page)
+      await openLoopback(ctx)
+      runFor(ctx, 250)
+      assert.strictEqual(lk.stats.walks, 1)
+      lk.room.state = 'disconnected'
+      emitTrack(ctx, makeTrack('t'))
+      runFor(ctx, 3000)
+      assert.strictEqual(lk.stats.walks, 3)
+    })
+
+    it('warns that no Room was found after 20 searches (~30 s), not after 20 fast polls', async () => {
+      const lk = lkSetup({ hidden: true })
+      const ctx = runScript(s, lk.page)
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t'))
+      runFor(ctx, 15000)
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('never found')).length, 0)
+      runFor(ctx, 15000)
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('never found after 20 searches')).length, 1)
     })
 
     it('all interval ids are stored so beforeunload can clear them', () => {
-      // The intervals array (in source) holds every setInterval id; our clock tracks
-      // the same ids. Assert each stored id is clearable.
-      const s = getInterceptScript(WS, { platformType: 'sfu' })
       const ctx = runScript(s)
-      ctx.clock.advance(3000)
-      const ids = [...ctx.clock.intervals.keys()]
-      assert.strictEqual(ids.length, 2)
-      ids.forEach((id) => ctx.clock.clearInterval(id))
+      assert.strictEqual(ctx.clock.intervals.size, 1)
+      ctx.fireWindow('beforeunload')
       assert.strictEqual(ctx.clock.intervals.size, 0)
     })
   })

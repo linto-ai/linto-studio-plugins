@@ -211,6 +211,55 @@ describe('webrtc-intercept in Chromium', function () {
       'the sub-frame announces its track and nothing else')
   })
 
+  // A Visio-like join: the meeting client's LiveKit Room, reached through React's
+  // fiber as the SFU poller expects, is connected before any track; a participant
+  // then publishes a track (here the loopback one) and speaks from the start.
+  it('Visio-like join: a participant speaking from their first frame is named within ~0.5 s', async () => {
+    const Bot = require('../bot')
+    pages.set('/visio', page(`<script>
+      window.room = { state: 'connected', localParticipant: {}, remoteParticipants: new Map() };
+      document.body.__reactFiber$test = { memoizedProps: { room: window.room }, memoizedState: null, return: null };
+      window.joinAlice = async function () {
+        await window.startLoopback([440]);
+        const track = window.loopback.pc2.getReceivers()[0].track;
+        window.room.remoteParticipants.set('idAlice', { identity: 'idAlice', name: 'Alice',
+          trackPublications: new Map([['a', { kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: track } }]]) });
+      };
+    </script>`))
+    const context = await browser.newContext({ bypassCSP: true })
+    contexts.push(context)
+    const p = await context.newPage()
+    const bot = new Bot({
+      session: { id: 's' },
+      channel: { id: 'visio' },
+      address: `${baseUrl}/visio`,
+      botType: 'visio',
+      browserPool: { createContext: async () => ({ page: p }), destroyContext: async () => {} },
+      audioServer
+    })
+    bot.manifest.loginRules = []
+    bot.manifest.leaveRules = []
+    const events = []
+    let firstAudio = null
+    bot.on('audio', () => { if (firstAudio === null) firstAudio = nowMs() })
+    bot.on('participant-joined', (e) => events.push({ at: nowMs(), what: 'join ' + e.name }))
+    bot.on('speakerChanged', (e) => events.push({ at: nowMs(), what: 'speaker ' + (e.speaker && e.speaker.name) }))
+    try {
+      assert.strictEqual(await bot.init(), true)
+      await sleep(500) // the poller finds the Room
+      await p.evaluate(() => window.joinAlice())
+      const joined = nowMs()
+      await waitFor(() => events.some((e) => e.what === 'speaker Alice'), 10000, 'Alice as the speaker')
+      const named = events.find((e) => e.what === 'speaker Alice').at
+      assert.deepStrictEqual(events.map((e) => e.what), ['join Alice', 'speaker Alice'])
+      assert.ok(firstAudio !== null && firstAudio <= named, 'her audio is mixed before she is mapped')
+      assert.ok(named - firstAudio < 600, `named ${(named - firstAudio).toFixed(0)} ms after her first mixed frame`)
+      assert.ok(named - joined < 1500, `named ${(named - joined).toFixed(0)} ms after her track was published`)
+    } finally {
+      await bot.dispose()
+    }
+  })
+
   // The incident path: a Teams page with two tracks at once, forwarded by the Bot.
   it('through the Bot: two simultaneous tracks become one stream at 1.0x real time, both in every frame', async () => {
     const Bot = require('../bot')

@@ -5,6 +5,7 @@ const Bot = require('../../bot')
 const BrowserPool = require('../../bot/BrowserPool')
 const LocalAudioServer = require('../../bot/LocalAudioServer')
 const TranscriberStream = require('../../bot/TranscriberStream')
+const { processTreeMemory } = require('./processTree')
 
 const HEARTBEAT_MS = 15000
 // ACK-gated audio buffer: the Transcriber WS sends 'ack' after init; until then
@@ -18,8 +19,9 @@ const MAX_AUDIO_BUFFER_CHUNKS = 500
 const RECONNECT_MAX_RETRIES = parseInt(process.env.BOTSERVICE_WS_RECONNECT_RETRIES || '3', 10)
 const RECONNECT_BASE_MS = parseInt(process.env.BOTSERVICE_WS_RECONNECT_BASE_MS || '1000', 10)
 
-// Memory ceiling: when rss crosses this the replica advertises EMPTY capabilities
-// (so the Scheduler routes elsewhere) and refuses new startBot. 0 disables it.
+// Memory ceiling: when the RSS of the replica (the Node process and its Chromium
+// processes) crosses this, the replica advertises EMPTY capabilities (so the
+// Scheduler routes elsewhere) and refuses new startBot. 0 disables it.
 const MAX_RSS_MB = (() => {
   const v = parseInt(process.env.BOTSERVICE_MAX_RSS_MB || '2048', 10)
   return Number.isFinite(v) && v > 0 ? v : 0
@@ -54,6 +56,7 @@ class BrokerClient extends Component {
     // Under-pressure flag: when true the heartbeat advertises EMPTY capabilities
     // and startBot is refused. Recovers once memory drops back under the ceiling.
     this.overloaded = false
+    this.readProcessTree = processTreeMemory // () => {rss, processes}|null
 
     // Cumulative lifecycle counters, exposed in the heartbeat `metrics` object.
     this.metrics = {
@@ -113,15 +116,17 @@ class BrokerClient extends Component {
   }
 
   // Re-evaluate the memory ceiling; sets/clears this.overloaded and logs on edges.
+  // mem: { rss } in bytes, `tree` when it covers the whole process tree.
   _evaluatePressure (mem) {
     if (!MAX_RSS_MB) return
     const rssMb = mem.rss / (1024 * 1024)
+    const what = mem.tree ? 'process-tree rss' : 'rss'
     const wasOverloaded = this.overloaded
     this.overloaded = rssMb >= MAX_RSS_MB
     if (this.overloaded && !wasOverloaded) {
-      logger.warn(`BotService: memory ceiling reached (rss ${rssMb.toFixed(0)}MB >= ${MAX_RSS_MB}MB) — advertising no capabilities, refusing new bots`)
+      logger.warn(`BotService: memory ceiling reached (${what} ${rssMb.toFixed(0)}MB >= ${MAX_RSS_MB}MB) — advertising no capabilities, refusing new bots`)
     } else if (!this.overloaded && wasOverloaded) {
-      logger.info(`BotService: memory back under ceiling (rss ${rssMb.toFixed(0)}MB < ${MAX_RSS_MB}MB) — capabilities restored`)
+      logger.info(`BotService: memory back under ceiling (${what} ${rssMb.toFixed(0)}MB < ${MAX_RSS_MB}MB) — capabilities restored`)
     }
   }
 
@@ -129,8 +134,12 @@ class BrokerClient extends Component {
     // Memory must be re-checked on every heartbeat regardless of the dedup below,
     // so backpressure transitions are not swallowed when activeBots is unchanged.
     const mem = process.memoryUsage()
+    // The ceiling applies to the whole process tree, where the meeting pages live
+    // (Chromium renderers), and falls back to the Node process where /proc cannot
+    // be read.
+    const tree = this.readProcessTree()
     const prevOverloaded = this.overloaded
-    this._evaluatePressure(mem)
+    this._evaluatePressure(tree ? { rss: tree.rss, tree: true } : { rss: mem.rss })
     // An overload transition changes advertised capabilities, so it must always be
     // published even if the bot count did not move.
     const overloadChanged = prevOverloaded !== this.overloaded
@@ -141,6 +150,9 @@ class BrokerClient extends Component {
       // Report load so the Scheduler can weight routing by memory pressure.
       rss: mem.rss,
       heapUsed: mem.heapUsed,
+      // The whole process tree, Chromium included (null where not measurable).
+      treeRss: tree ? tree.rss : null,
+      treeProcesses: tree ? tree.processes : null,
       metrics: { ...this.metrics },
       // Advertise no capabilities while overloaded so we are skipped.
       capabilities: this.overloaded ? [] : this.capabilities

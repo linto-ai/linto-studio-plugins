@@ -41,6 +41,26 @@ describe('BotService BrokerClient', () => {
     assert.deepEqual(s.metrics, { botJoinAttempts: 0, botJoinSuccesses: 0, botJoinFailures: 0, participantChurn: 0 })
   })
 
+  it('heartbeat also reports the RSS of the whole process tree (Node + Chromium)', () => {
+    ctx.instance.readProcessTree = () => ({ rss: 900 * 1024 * 1024, processes: 7 })
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[0].treeRss, 900 * 1024 * 1024)
+    assert.equal(ctx.statuses[0].treeProcesses, 7)
+    assert.ok(ctx.statuses[0].rss < ctx.statuses[0].treeRss, 'rss keeps its meaning: the Node process')
+    ctx.instance.readProcessTree = () => null // no /proc
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[1].treeRss, null)
+    assert.equal(ctx.statuses[1].treeProcesses, null)
+  })
+
+  if (process.platform === 'linux') {
+    it('reads the process tree from /proc by default', () => {
+      ctx.instance._publishStatus(true)
+      assert.ok(ctx.statuses[0].treeRss > 0)
+      assert.ok(ctx.statuses[0].treeProcesses >= 1)
+    })
+  }
+
   it('on broker ready: starts infra, publishes status, arms a heartbeat', async () => {
     ctx.mqttClient.emit('ready')
     await tick()
@@ -70,13 +90,15 @@ describe('BotService BrokerClient', () => {
 
 describe('BotService BrokerClient — memory ceiling + backpressure', () => {
   const realMemoryUsage = process.memoryUsage
+  const MB = 1024 * 1024
   let ctx
 
-  // Force a low ceiling and a high rss so the instance is over the ceiling.
+  // Force a low ceiling and a high process-tree rss so the instance is over it.
   beforeEach(() => {
     process.env.BOTSERVICE_MAX_RSS_MB = '100'
-    process.memoryUsage = () => ({ rss: 500 * 1024 * 1024, heapUsed: 200 * 1024 * 1024, heapTotal: 0, external: 0, arrayBuffers: 0 })
+    process.memoryUsage = () => ({ rss: 50 * MB, heapUsed: 20 * MB, heapTotal: 0, external: 0, arrayBuffers: 0 })
     ctx = loadBrokerClient()
+    ctx.instance.readProcessTree = () => ({ rss: 500 * MB, processes: 6 })
   })
   afterEach(() => {
     if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
@@ -90,10 +112,29 @@ describe('BotService BrokerClient — memory ceiling + backpressure', () => {
     assert.deepEqual(ctx.statuses[0].capabilities, [], 'no capabilities advertised while overloaded')
     assert.equal(ctx.instance.overloaded, true)
     // Drop back under the ceiling.
-    process.memoryUsage = () => ({ rss: 10 * 1024 * 1024, heapUsed: 5 * 1024 * 1024, heapTotal: 0, external: 0, arrayBuffers: 0 })
+    ctx.instance.readProcessTree = () => ({ rss: 90 * MB, processes: 6 })
     ctx.instance._publishStatus(true)
     assert.deepEqual(ctx.statuses[1].capabilities, ['jitsi', 'bigbluebutton', 'teams', 'visio'])
     assert.equal(ctx.instance.overloaded, false)
+  })
+
+  // Chromium runs in child processes: the Node process alone (50 MB here) never
+  // reached the ceiling, whatever the meeting pages used.
+  it('applies the ceiling to the whole process tree, not to the Node process alone', () => {
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[0].rss, 50 * MB)
+    assert.equal(ctx.instance.overloaded, true)
+    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('process-tree rss 500MB >= 100MB')))
+  })
+
+  it('falls back to the Node process rss where the process tree cannot be measured', () => {
+    ctx.instance.readProcessTree = () => null
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.instance.overloaded, false, '50 MB of Node rss')
+    process.memoryUsage = () => ({ rss: 500 * MB, heapUsed: 20 * MB, heapTotal: 0, external: 0, arrayBuffers: 0 })
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.instance.overloaded, true)
+    assert.ok(ctx.logs.some(l => l.level === 'warn' && l.msg.includes('(rss 500MB >= 100MB)')))
   })
 
   it('refuses a new startBot while over the ceiling and publishes a bot-error', async () => {
@@ -794,8 +835,8 @@ describe('BotService BrokerClient — _evaluatePressure / _publishStatus boundar
 
   it('flips overloaded exactly at the threshold (rssMb === MAX_RSS_MB, >= comparison)', () => {
     process.env.BOTSERVICE_MAX_RSS_MB = '100'
-    process.memoryUsage = () => ({ rss: 100 * 1024 * 1024, heapUsed: 1, heapTotal: 0, external: 0, arrayBuffers: 0 })
     const ctx = loadBrokerClient()
+    ctx.instance.readProcessTree = () => ({ rss: 100 * 1024 * 1024, processes: 1 })
     try {
       ctx.instance._publishStatus(true)
       assert.equal(ctx.instance.overloaded, true, 'rss exactly at the ceiling is overloaded (>=)')

@@ -38,7 +38,7 @@ STREAMING_WS_BOT_HOST=transcriber
 # JOIN_TIMEOUT_SECONDS=120 # leave if no participant is seen this long after join (absolute watchdog)
 # AUDIO_SILENCE_TIMEOUT_SECONDS=30 # tear down if no PCM arrives for this long after admission (0 = disabled)
 # TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init {type:ack} before failing the handshake
-# BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling: above it the replica advertises capabilities=[] and refuses bots (0 = disabled)
+# BOTSERVICE_MAX_RSS_MB=2048 # RSS ceiling of the Node process + its Chromium processes: above it the replica advertises capabilities=[] and refuses bots (0 = disabled)
 # BOTSERVICE_WS_RECONNECT_RETRIES=3 # max Transcriber WS reconnection attempts before giving up (fatal)
 # BOTSERVICE_WS_RECONNECT_BASE_MS=1000 # base delay (ms) for the exponential WS reconnection backoff
 

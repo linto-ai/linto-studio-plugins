@@ -939,6 +939,62 @@ describe('BotService BrokerClient — _evaluatePressure / _publishStatus boundar
 
 // startBot lifecycle. We stub the `Bot` module in the require cache so no real
 // browser launches; the fake Bot's init()/dispose() are driven from the test.
+// stopbot then startbot on the same channel: the new bot joins while the old one
+// still runs its leave rules (seconds). With the same browser context id and
+// loopback path for both, the old one's teardown unregistered the new one's
+// loopback handler and destroyed its browser context.
+describe('BotService BrokerClient — a bot replaced while it leaves', () => {
+  let ctx
+  beforeEach(() => { ctx = loadBrokerClient() })
+  afterEach(() => {
+    if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
+    uninstallMocks()
+  })
+
+  it("the old bot's teardown leaves the new bot's loopback handler and browser context alone", async () => {
+    const LocalAudioServer = require('../bot/LocalAudioServer')
+    const audioServer = new LocalAudioServer() // registry only, not listening
+    audioServer.getPort = () => 1
+    ctx.instance.audioServer = audioServer
+    let leaving = null // resolves the old bot's slow leave click
+    const page = () => ({
+      on () {},
+      async addInitScript () {},
+      async goto () {},
+      async waitForTimeout () {},
+      locator: (selector) => ({
+        fill: async () => {},
+        click: () => selector === "[data-attr='controls-leave']" ? new Promise((resolve) => { leaving = resolve }) : Promise.resolve()
+      })
+    })
+    const created = []
+    const destroyed = []
+    ctx.instance.browserPool.createContext = async (id) => { created.push(id); return { page: page() } }
+    ctx.instance.browserPool.destroyContext = async (id) => { destroyed.push(id) }
+    ctx.instance._connectTranscriber = () => {}
+    const args = (botId) => ({ session: { id: 's' }, channel: { id: 'c' }, address: 'https://visio.example/room', botType: 'visio', websocketUrl: 'ws://t', botId })
+
+    await ctx.instance.startBot(args(1))
+    const oldBot = ctx.instance.bots.get('s_c').bot
+    const stopping = ctx.instance.stopBot('s', 'c') // runs the leave rules...
+    await tick()
+    assert.ok(leaving, 'the old bot is clicking leave')
+    await ctx.instance.startBot(args(2)) // ...while the new one joins
+    const newBot = ctx.instance.bots.get('s_c').bot
+    assert.notEqual(newBot.contextId, oldBot.contextId)
+    assert.notEqual(newBot.wsPath, oldBot.wsPath)
+    leaving()
+    await stopping
+    assert.deepEqual(destroyed, [oldBot.contextId], "only the old bot's context is destroyed")
+    assert.deepEqual([...audioServer.handlers.keys()], [newBot.wsPath], "the new bot's loopback handler is still there")
+    assert.deepEqual(created, [oldBot.contextId, newBot.contextId])
+    const last = ctx.instance.stopBot('s', 'c')
+    await tick()
+    leaving()
+    await last
+  })
+})
+
 describe('BotService BrokerClient — startBot lifecycle', () => {
   const botPath = require.resolve('../bot')
   let realBotCacheEntry

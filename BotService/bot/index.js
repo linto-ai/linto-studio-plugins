@@ -40,6 +40,9 @@ function trackKey (connId, trackIndex) {
   return `c${connId}:${trackIndex}`
 }
 
+// Bots created by this process: numbers each instance (see Bot.contextId).
+let instanceSeq = 0
+
 // Page-console noise from meeting SPAs we never want in our logs.
 const IGNORED_CONSOLE = [
   'Content Security Policy', 'ERR_UNKNOWN_URL_SCHEME', 'net::ERR_', 'Failed to load resource',
@@ -63,7 +66,11 @@ class Bot extends EventEmitter {
     this.audioServer = audioServer
     this.page = null
     this.audioMixer = null
-    this.contextId = `${session.id}_${channel.id}`
+    // Its own browser context and loopback path, even for the same session and
+    // channel: a bot replacing another one (stopbot then startbot) joins while
+    // the previous one may still run its leave rules, and that one's teardown
+    // (unregistering its path, destroying its context) must not hit the new one.
+    this.contextId = `${session.id}_${channel.id}_${++instanceSeq}`
     this.wsPath = `/bot-${this.contextId}`
     this.botName = process.env.BOT_DISPLAY_NAME || 'LinTO Bot'
     this.emptyMeetingTimeoutMs = envTimeoutMs('EMPTY_MEETING_TIMEOUT_SECONDS', 60)

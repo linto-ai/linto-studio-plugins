@@ -904,13 +904,14 @@ describe('Bot audio health log', () => {
     // One second of two tracks, delivered as the page does (8 ms quanta in render order).
     for (let i = 0; i < 125; i++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(100, 128)) }
     bot._logAudioHealth(t0 + 1000)
-    assert.equal(healthLines()[0], 'Bot[s_c]: audio health over 1s: output 16000 samples/s (x1.00 real time), ' +
+    assert.equal(healthLines()[0], `Bot[${bot.contextId}]: audio health over 1s: output 16000 samples/s (x1.00 real time), ` +
       '2/2 tracks flowing [c0:0 16000/s, c0:1 16000/s], 0 samples dropped, 0 stalls, 0 frames of removed tracks ignored')
+    assert.match(bot.contextId, /^s_c_\d+$/)
     // The next window only counts what happened since.
     bot.handleJsonMessage({ type: 'trackRemoved', trackIndex: 0 })
     for (let i = 0; i < 50; i++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(100, 128)) }
     bot._logAudioHealth(t0 + 2000)
-    assert.equal(healthLines()[1], 'Bot[s_c]: audio health over 1s: output 6400 samples/s (x0.40 real time), ' +
+    assert.equal(healthLines()[1], `Bot[${bot.contextId}]: audio health over 1s: output 6400 samples/s (x0.40 real time), ` +
       '1/1 tracks flowing [c0:1 6400/s], 0 samples dropped, 0 stalls, 50 frames of removed tracks ignored')
     bot._cancelAudioHealthLog()
   })

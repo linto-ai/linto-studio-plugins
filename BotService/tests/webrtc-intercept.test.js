@@ -75,19 +75,25 @@ function makeFakeWS (clock) {
 }
 
 // A fake AudioContext/MediaStream graph. Records nodes/sinks; the test triggers
-// worklet/scriptprocessor callbacks to feed PCM through the pipeline.
+// worklet/scriptprocessor callbacks to feed PCM through the pipeline. By default a
+// context runs at opts.sampleRate whatever rate is asked for (the JS resampling
+// path); opts.honorsRate grants a requested rate like Chromium does, and
+// opts.rateRefused makes asking for one throw.
 function makeAudioEnv (opts = {}) {
-  const env = { workletNodes: [], scriptProcessors: [], sources: [], sampleRate: opts.sampleRate || 48000 }
+  const env = { workletNodes: [], scriptProcessors: [], sources: [], contextOptions: [], sampleRate: opts.sampleRate || 48000 }
   class FakeAudioWorkletNode {
     constructor () { this.port = { onmessage: null }; this.connected = []; this.disconnected = false; env.workletNodes.push(this) }
     connect (n) { this.connected.push(n) }
     disconnect () { this.disconnected = true }
   }
   class FakeAudioContext {
-    constructor () {
+    constructor (ctxOpts) {
       if (opts.ctorThrows) throw new Error('AudioContext boom')
+      const requested = ctxOpts && ctxOpts.sampleRate
+      if (requested && opts.rateRefused) throw new Error('sample rate not supported')
+      env.contextOptions.push(ctxOpts)
       this.state = opts.state || 'suspended'
-      this.sampleRate = env.sampleRate
+      this.sampleRate = requested && opts.honorsRate ? requested : env.sampleRate
       this.destination = { id: 'dest' }
       this.audioWorklet = {
         // opts.addModule lets a test hold the module load pending.
@@ -329,50 +335,85 @@ describe('webrtc-intercept getInterceptScript()', () => {
     return pc
   }
 
-  describe('resample() (behavioral)', () => {
-    const resample = extractFn(getInterceptScript(WS, { platformType: 'sfu' }), 'resample',
-      'const TARGET_SAMPLE_RATE = 16000;')
+  // The JS resampler only runs when the browser refuses a 16 kHz AudioContext. The
+  // one it replaces was stateless per chunk and floored each chunk's output length
+  // (128 frames at 44.1 kHz -> 46 samples instead of 46.44): ~15850 samples/s
+  // instead of 16000, a discontinuity at every chunk boundary and no anti-aliasing.
+  describe('createResampler() (behavioral)', () => {
+    const script = getInterceptScript(WS, { platformType: 'sfu' })
+    const createResampler = extractFn(script, 'createResampler',
+      script.match(/const TARGET_SAMPLE_RATE = \d+;/)[0] + script.match(/const ANTI_ALIAS_HZ = \d+;/)[0])
 
-    it('returns the input unchanged when already at 16kHz', () => {
-      const input = Float32Array.from([0.1, 0.2, 0.3])
-      assert.strictEqual(resample(input, 16000), input)
+    const tone = (freq, rate, n) => Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin(2 * Math.PI * freq * i / rate))
+    // Deterministic pseudo-random generator (LCG) in [0, 1).
+    function lcg (seed) { let x = seed; return () => { x = (x * 1103515245 + 12345) % 2147483648; return x / 2147483648 } }
+    // Feed `input` to a fresh resampler in chunks of chunkLen() samples; return the
+    // concatenated output.
+    function run (rate, input, chunkLen) {
+      const resample = createResampler(rate)
+      const parts = []
+      let total = 0
+      for (let i = 0; i < input.length;) {
+        const n = Math.min(chunkLen(), input.length - i)
+        const out = Float32Array.from(resample(input.subarray(i, i + n)))
+        parts.push(out)
+        total += out.length
+        i += n
+      }
+      const all = new Float32Array(total)
+      let offset = 0
+      for (const part of parts) { all.set(part, offset); offset += part.length }
+      return all
+    }
+    const dbRms = (a, from, ref) => {
+      let sum = 0
+      for (let i = from; i < a.length; i++) sum += a[i] * a[i]
+      return 20 * Math.log10(Math.sqrt(sum / (a.length - from)) / ref)
+    }
+
+    it('yields exactly 16000 samples per second of input, whatever the chunking (no drift)', () => {
+      for (const rate of [44100, 48000, 22050, 8000]) {
+        const n = rate * 60 // one minute
+        const rnd = lcg(rate)
+        const out = run(rate, new Float32Array(n), () => 1 + Math.floor(rnd() * 600))
+        // Output sample k sits at input position k*rate/16000 and is interpolated
+        // towards the next input sample, so it exists once that one was received.
+        assert.strictEqual(out.length, Math.ceil((n - 1) * 16000 / rate), rate + ' Hz')
+      }
     })
 
-    it('halves the sample count when downsampling 48kHz -> 16kHz (3:1)', () => {
-      const input = Float32Array.from([0, 0.3, 0.6, 0.9, 1.2, 1.5])
-      const out = resample(input, 48000)
-      assert.strictEqual(out.length, 2) // floor(6 / 3)
-      // idx 0 -> input[0]; idx 1 -> i*ratio = 3 -> input[3]
-      assert.ok(Math.abs(out[0] - 0) < 1e-6)
-      assert.ok(Math.abs(out[1] - 0.9) < 1e-6)
+    it('does not depend on the chunk boundaries (bit-identical to a single pass)', () => {
+      const input = tone(440, 44100, 44100 * 2)
+      const whole = run(44100, input, () => input.length)
+      const rnd = lcg(7)
+      const chunked = run(44100, input, () => 1 + Math.floor(rnd() * 300))
+      assert.deepStrictEqual(chunked, whole)
     })
 
-    it('linearly interpolates when downsampling 44.1kHz -> 16kHz', () => {
-      const input = Float32Array.from([0, 1, 2, 3, 4, 5, 6])
-      const out = resample(input, 44100)
-      const ratio = 44100 / 16000
-      assert.strictEqual(out.length, Math.floor(input.length / ratio))
-      // sample 1: idx = ratio (~2.756) -> lerp(input[2], input[3], .756) = 2.756
-      const idx = ratio
-      const lo = Math.floor(idx); const frac = idx - lo
-      const expected = input[lo] * (1 - frac) + input[lo + 1] * frac
-      assert.ok(Math.abs(out[1] - expected) < 1e-6)
+    it('passes the speech band and attenuates what would alias by more than 30 dB', () => {
+      const ref = 0.5 / Math.SQRT2 // RMS of the input tones
+      const settle = 1600 // output samples skipped while the filter settles
+      for (const rate of [44100, 48000]) {
+        const pass = run(rate, tone(1000, rate, rate), () => 128)
+        assert.ok(Math.abs(dbRms(pass, settle, ref)) < 0.5, rate + ' Hz: 1 kHz within 0.5 dB')
+        // 12 kHz folds down to 4 kHz at a 16 kHz output rate.
+        const alias = run(rate, tone(12000, rate, rate), () => 128)
+        assert.ok(dbRms(alias, settle, ref) < -30, rate + ' Hz: 12 kHz down by more than 30 dB')
+      }
     })
 
-    it('upsamples 8kHz -> 16kHz, doubling the sample count', () => {
-      const input = Float32Array.from([0, 1, 2])
-      const out = resample(input, 8000)
-      assert.strictEqual(out.length, Math.floor(input.length / (8000 / 16000))) // 6
-      // ratio 0.5: idx 1 -> 0.5 -> lerp(0,1,.5)=0.5
-      assert.ok(Math.abs(out[1] - 0.5) < 1e-6)
-      assert.ok(Math.abs(out[2] - 1) < 1e-6)
+    it('decimates 48 kHz by exactly 3 (no interpolation needed)', () => {
+      const resample = createResampler(48000)
+      assert.strictEqual(resample(new Float32Array(6)).length, 2)
+      assert.strictEqual(resample(new Float32Array(48)).length, 16)
     })
 
-    it('clamps the high index at the last sample (no out-of-bounds read)', () => {
-      const input = Float32Array.from([0, 10])
-      const out = resample(input, 8000) // ratio 0.5, outLen 4
-      // last out idx 3 -> 1.5 -> lerp(input[1], input[1], .5) since hi clamps to len-1
-      assert.ok(out.every((v) => Number.isFinite(v)))
+    it('upsamples 8 kHz without filtering, interpolating between samples', () => {
+      const resample = createResampler(8000)
+      const out = resample(Float32Array.from([0, 1, 2]))
+      assert.deepStrictEqual(Array.from(out), [0, 0.5, 1, 1.5])
+      // The next chunk continues where the previous one stopped (2 -> 3).
+      assert.deepStrictEqual(Array.from(resample(Float32Array.from([3]))), [2, 2.5])
     })
   })
 
@@ -402,6 +443,60 @@ describe('webrtc-intercept getInterceptScript()', () => {
       // Positive scales by 32767, negative by 32768; Int16Array assignment truncates.
       assert.strictEqual(out[0], Math.trunc(0.5 * 32767))
       assert.strictEqual(out[1], Math.trunc(-0.5 * 32768))
+    })
+  })
+
+  describe('16 kHz capture (behavioral)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    const pcmSamples = (frames) => frames.reduce((n, f) => n + (f.byteLength - 4) / 2, 0)
+
+    it('asks for a 16 kHz AudioContext and sends its samples as they are when granted', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 48000, honorsRate: true } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t16'))
+      await flush(); await flush()
+      assert.ok(ctx.audio.contextOptions.some((o) => o && o.sampleRate === 16000), 'context requested at 16 kHz')
+      ctx.audio.workletNodes[0].port.onmessage({ data: Float32Array.from([0.5, -0.5, 0.25]) })
+      const bin = binaryFrames(ws)[0]
+      const view = new DataView(bin)
+      assert.strictEqual(bin.byteLength, 4 + 3 * 2, 'no resampling at 16 kHz')
+      assert.strictEqual(view.getInt16(4, true), Math.trunc(0.5 * 32767))
+      assert.strictEqual(view.getInt16(6, true), Math.trunc(-0.5 * 32768))
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('16 kHz AudioContext')).length, 0)
+    })
+
+    it('falls back to the default rate and the JS resampler when 16 kHz is refused (warned)', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 48000, rateRefused: true } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t48'))
+      await flush(); await flush()
+      assert.ok(ctx.warnings.some((w) => w.includes('16 kHz AudioContext unavailable')))
+      ctx.audio.workletNodes[0].port.onmessage({ data: new Float32Array(48) })
+      assert.strictEqual(pcmSamples(binaryFrames(ws)), 16)
+    })
+
+    it('carries the resampling phase across chunks: 44.1 kHz in 128-frame chunks gives exactly 16000/s', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 44100 } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t44'))
+      await flush(); await flush()
+      const node = ctx.audio.workletNodes[0]
+      // One second of render quanta (the last one partial).
+      for (let sent = 0; sent < 44100; sent += 128) node.port.onmessage({ data: new Float32Array(Math.min(128, 44100 - sent)) })
+      assert.strictEqual(pcmSamples(binaryFrames(ws)), Math.ceil(44099 * 16000 / 44100)) // 16000, not 344 * 46
+    })
+
+    it('the ScriptProcessor fallback resamples with the same stateful resampler', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 44100, workletThrows: true } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('tsp'))
+      await flush(); await flush()
+      const proc = ctx.audio.scriptProcessors[0]
+      for (let sent = 0; sent < 44100 * 2; sent += 4096) {
+        const n = Math.min(4096, 44100 * 2 - sent)
+        proc.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(n) } })
+      }
+      assert.strictEqual(pcmSamples(binaryFrames(ws)), Math.ceil((44100 * 2 - 1) * 16000 / 44100)) // 32000
     })
   })
 
@@ -772,10 +867,9 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.strictEqual(bin.byteLength, 4 + 10 * 2)
     })
 
-    it('an empty PCM payload still produces a frame (header only) — no crash', async () => {
-      // Note: the current source does NOT special-case empty PCM in sendBinary; the
-      // worklet processor guards (c.length>0) upstream, but a direct empty payload
-      // yields a 4-byte header-only frame. Asserting CURRENT behaviour.
+    it('sends no frame for a chunk that yields no PCM', async () => {
+      // An empty chunk, or one too short to complete a resampled sample, would
+      // only produce a header-only frame, which the Node side drops anyway.
       const s = getInterceptScript(WS, { platformType: 'sfu' })
       const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
       const ws = await openLoopback(ctx)
@@ -783,8 +877,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       await flush(); await flush()
       const node = ctx.audio.workletNodes[0]
       node.port.onmessage({ data: new Float32Array(0) })
-      const bin = binaryFrames(ws)[0]
-      assert.strictEqual(bin.byteLength, 4, 'header-only frame for empty PCM')
+      assert.strictEqual(binaryFrames(ws).length, 0)
     })
 
     it('sendBinary is a no-op while the loopback WS is not OPEN', async () => {

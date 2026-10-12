@@ -4,7 +4,7 @@
  * Produces a self-contained JavaScript string injected into the meeting page via
  * page.addInitScript(). It runs entirely in the browser and:
  *   1. patches RTCPeerConnection to capture every inbound audio track;
- *   2. resamples each track to 16 kHz S16LE in-page (AudioWorklet, ScriptProcessor
+ *   2. captures each track at 16 kHz S16LE in-page (AudioWorklet, ScriptProcessor
  *      fallback) and streams it as binary frames to the loopback LocalAudioServer;
  *   3. maps tracks to participants per platform so the Node side can do native
  *      diarization (SFU) or forward server-side speaker info (Teams).
@@ -83,6 +83,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
     }
   } catch (e) {}
   const TARGET_SAMPLE_RATE = 16000;
+  // Cut-off of the anti-aliasing low-pass of the JS resampler: below the 8 kHz
+  // Nyquist of the output, above the band that matters to speech recognition.
+  const ANTI_ALIAS_HZ = 7000;
   const MAX_RECONNECT_RETRIES = 10;
   const RECONNECT_DELAY_MS = 1000;
   const intervals = [];
@@ -183,21 +186,57 @@ function getInterceptScript (localWsUrl, platformConfig) {
   }
 
   // ── PCM conversion ────────────────────────────────────────────────────────
-  // Linear-interpolation resample (no anti-alias filter). Adequate for speech
-  // ASR at v1; revisit if downsampling artefacts hurt accuracy.
-  function resample(input, sourceRate) {
-    if (sourceRate === TARGET_SAMPLE_RATE) return input;
-    const ratio = sourceRate / TARGET_SAMPLE_RATE;
-    const outLen = Math.floor(input.length / ratio);
-    const out = new Float32Array(outLen);
-    for (let i = 0; i < outLen; i++) {
-      const idx = i * ratio;
-      const lo = Math.floor(idx);
-      const hi = Math.min(lo + 1, input.length - 1);
-      const frac = idx - lo;
-      out[i] = input[lo] * (1 - frac) + input[hi] * frac;
+  // Resampler from 'sourceRate' to 16 kHz for one track, only used when the
+  // AudioContext could not be created at 16 kHz. It is stateful, fed the track's
+  // chunks in order: filter state, the last sample and the read position carry
+  // over from one chunk to the next, so the output does not depend on how the
+  // input was chunked. The position is an exact integer phase (input sample +
+  // remainder in 1/16000ths), so 'sourceRate' input samples always yield exactly
+  // 16000 output samples: no drift, whatever the chunk lengths. Downsampling first
+  // runs an 8th-order Butterworth low-pass at ANTI_ALIAS_HZ (four biquads) so what
+  // lies above the output Nyquist does not alias into the speech band; output
+  // samples are then linearly interpolated.
+  function createResampler(sourceRate) {
+    const sections = [];
+    if (sourceRate > TARGET_SAMPLE_RATE) {
+      const w0 = 2 * Math.PI * ANTI_ALIAS_HZ / sourceRate, cosW0 = Math.cos(w0);
+      for (let k = 1; k <= 4; k++) {
+        const q = 1 / (2 * Math.sin((2 * k - 1) * Math.PI / 16)); // Butterworth poles
+        const alpha = Math.sin(w0) / (2 * q), a0 = 1 + alpha;
+        sections.push({
+          b0: (1 - cosW0) / 2 / a0, b1: (1 - cosW0) / a0, b2: (1 - cosW0) / 2 / a0,
+          a1: -2 * cosW0 / a0, a2: (1 - alpha) / a0, x1: 0, x2: 0, y1: 0, y2: 0
+        });
+      }
     }
-    return out;
+    let prev = 0; // last (filtered) input sample of the previous chunk
+    let pos = 0; // input index of the next output sample, -1 meaning 'prev'
+    let rem = 0; // and its fraction, in 1/TARGET_SAMPLE_RATE of an input sample
+    return function (input) {
+      const n = input.length;
+      const x = sections.length > 0 ? new Float32Array(n) : input;
+      for (let s = 0; s < sections.length; s++) {
+        const f = sections[s], from = s === 0 ? input : x;
+        for (let i = 0; i < n; i++) {
+          const v = from[i];
+          const y = f.b0 * v + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+          f.x2 = f.x1; f.x1 = v; f.y2 = f.y1; f.y1 = y;
+          x[i] = y;
+        }
+      }
+      const out = new Float32Array(Math.ceil(n * TARGET_SAMPLE_RATE / sourceRate) + 1);
+      let count = 0;
+      while (pos < n - 1) {
+        const a = pos < 0 ? prev : x[pos];
+        out[count++] = a + (x[pos + 1] - a) * (rem / TARGET_SAMPLE_RATE);
+        rem += sourceRate;
+        pos += Math.floor(rem / TARGET_SAMPLE_RATE);
+        rem %= TARGET_SAMPLE_RATE;
+      }
+      pos -= n;
+      if (n > 0) prev = x[n - 1];
+      return out.subarray(0, count);
+    };
   }
 
   function float32ToInt16(f32) {
@@ -214,22 +253,42 @@ function getInterceptScript (localWsUrl, platformConfig) {
   let trackIndexSeq = 0;
   const tracks = new Map(); // trackId -> { index, participantId }
   const processedTracks = new Set();
-  // trackIndex -> capture graph of a live track: { index, ended, sink, source, node },
+  // trackIndex -> capture graph of a live track: { index, ended, sink, source, node, resample },
   // filled in as setupTrackCapture() progresses. Also what keeps the sink element
   // referenced (and playing) for as long as the track is captured.
   const captures = new Map();
   let sharedCtx = null, workletReady = false;
 
+  // One AudioContext for every track of the document, created at 16 kHz: Chromium
+  // then resamples each MediaStream source itself (band-limited sinc resampler)
+  // and the context clock yields exactly 16000 samples per second. Should that
+  // rate be refused, capture at the default rate and resample in JS.
+  function getSharedContext() {
+    if (sharedCtx) return sharedCtx;
+    try {
+      sharedCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    } catch (e) {
+      warn('16 kHz AudioContext unavailable, resampling in JS: ' + (e && e.message ? e.message : 'unknown'));
+      sharedCtx = new AudioContext();
+    }
+    return sharedCtx;
+  }
+
+  // Convert and send a chunk of a track's audio, at the context rate.
+  function sendPcm(capture, samples) {
+    const pcm = capture.resample ? capture.resample(samples) : samples;
+    if (pcm.length > 0) sendBinary(capture.index, float32ToInt16(pcm));
+  }
+
   async function setupTrackCapture(track, capture) {
-    if (!sharedCtx) sharedCtx = new AudioContext();
-    const ctx = sharedCtx;
+    const ctx = getSharedContext();
     // Headless Chromium starts the AudioContext suspended (no audio output to
     // drive it); without resuming, the AudioWorklet never pulls samples and no
     // PCM is ever captured.
     try { if (ctx.state !== 'running') await ctx.resume(); } catch (e) {}
     // The track may have ended while we waited: build nothing for it.
     if (capture.ended) return;
-    const sourceRate = ctx.sampleRate;
+    if (ctx.sampleRate !== TARGET_SAMPLE_RATE) capture.resample = createResampler(ctx.sampleRate);
     const ms = new MediaStream([track]);
     // Chrome quirk: a remote WebRTC audio track does NOT feed a
     // MediaStreamAudioSourceNode unless it is ALSO attached to a playing
@@ -256,7 +315,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
       capture.node = node;
       capture.source.connect(node);
       node.connect(ctx.destination); // keeps the graph pulling
-      node.port.onmessage = function (e) { sendBinary(capture.index, float32ToInt16(resample(e.data, sourceRate))); };
+      node.port.onmessage = function (e) { sendPcm(capture, e.data); };
       log('AudioWorklet capture for track', capture.index);
     } catch (e) {
       if (capture.ended) { teardownCapture(capture); return; }
@@ -267,9 +326,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
       capture.node = proc;
       capture.source.connect(proc);
       proc.connect(ctx.destination);
-      proc.onaudioprocess = function (ev) {
-        sendBinary(capture.index, float32ToInt16(resample(ev.inputBuffer.getChannelData(0), sourceRate)));
-      };
+      proc.onaudioprocess = function (ev) { sendPcm(capture, ev.inputBuffer.getChannelData(0)); };
     }
   }
 
@@ -292,7 +349,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function handleNewTrack(track) {
     if (!track || track.kind !== 'audio' || track.readyState === 'ended' || processedTracks.has(track.id)) return;
     processedTracks.add(track.id);
-    const capture = { index: trackIndexSeq++, ended: false, sink: null, source: null, node: null };
+    const capture = { index: trackIndexSeq++, ended: false, sink: null, source: null, node: null, resample: null };
     captures.set(capture.index, capture);
     tracks.set(track.id, { index: capture.index, participantId: null });
     sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });

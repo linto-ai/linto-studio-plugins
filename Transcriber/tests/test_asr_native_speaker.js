@@ -503,6 +503,40 @@ describe('ASR native diarization + secret redaction', () => {
                 'secondary final inherits the primary segment speaker');
             assert.strictEqual(finals[1].segmentId, seg);
         });
+
+        it('secondary inherits the speaker of a segment that started unattributed, once named', async () => {
+            const SpeakerTracker = require('../components/StreamingServer/SpeakerTracker');
+            const clock = { now: 1000 };
+            const tracker = new SpeakerTracker();
+            tracker._now = () => clock.now;
+            let assigns = 0;
+            const assign = tracker.assignSpeakerToSegment.bind(tracker);
+            tracker.assignSpeakerToSegment = (segmentId) => { assigns += 1; assign(segmentId); };
+            tracker.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
+            const asr = await makeAsr({ diarizationMode: 'native', speakerTracker: tracker });
+            const seg = asr.segmentId;
+            const partials = [];
+            const finals = [];
+            asr.on('partial', (t) => partials.push(t));
+            asr.on('final', (t) => finals.push(t));
+
+            clock.now = 2000; // a newcomer the bot cannot name yet starts speaking
+            tracker.addSpeakerChange({ position: 1000, speaker: null, reason: 'unattributed' });
+            asr.provider.emit('transcribing', { text: 'hi', isPrimary: true });
+            asr.provider.emit('transcribing', { text: 'salut', isPrimary: false });
+            assert.strictEqual(partials[0].locutor, undefined, 'not the previous speaker');
+            assert.strictEqual(partials[1].locutor, undefined, 'the secondary reads the same pending segment');
+
+            clock.now = 2300; // mapped within the window
+            tracker.addSpeakerChange({ position: 1300, speaker: { id: 'u2', name: 'Bob' } });
+            asr.provider.emit('transcribed', { text: 'hi there', isPrimary: true });
+            asr.provider.emit('transcribed', { text: 'salut toi', isPrimary: false });
+
+            assert.strictEqual(finals[0].locutor, 'Bob');
+            assert.strictEqual(finals[1].locutor, 'Bob', 'secondary final inherits the named primary segment');
+            assert.strictEqual(finals[1].segmentId, seg);
+            assert.strictEqual(assigns, 2, 'only the primary partial and final call assign (no-op once set)');
+        });
     });
 
     // -------- speaker persistence / bounded memory across boundaries -----

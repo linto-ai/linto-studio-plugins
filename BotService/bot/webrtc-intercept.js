@@ -690,10 +690,12 @@ const SFU_MAPPING_BLOCK = `
   // setSubscribed(true) sends the SFU a subscription update: once, then again for
   // a publication that stays unsubscribed only after SUBSCRIBE_RETRY_MS, doubling
   // up to SUBSCRIBE_RETRY_MAX_MS (the fast poll must not flood the signalling).
-  // A publication its owner did not allow us to subscribe to is asked again as
-  // soon as it is allowed (its permissionStatus, read at each poll), whatever the
-  // backoff. The cap bounds the wait when nothing tells why a subscription does
-  // not happen: one small signalling message per 8 s per audio publication.
+  // A publication its owner did not allow us to subscribe to is asked once (the
+  // SFU then knows we want it), not again while it stays 'not_allowed', and
+  // again as soon as it is allowed (its permissionStatus, read at each poll),
+  // whatever the backoff. The cap bounds the wait when nothing tells why a
+  // subscription does not happen (status unknown, or allowed but not subscribed
+  // yet): one small signalling message per 8 s per audio publication.
   var SUBSCRIBE_RETRY_MS = 2000, SUBSCRIBE_RETRY_MAX_MS = 8000;
   const subscribeRequests = new WeakMap(); // publication -> { next, delay, permission }
   function requestSubscription(pub, now) {
@@ -703,7 +705,7 @@ const SFU_MAPPING_BLOCK = `
     try { permission = pub.permissionStatus; } catch (e) { /* not exposed */ }
     let previous = subscribeRequests.get(pub);
     if (previous && previous.permission === 'not_allowed' && permission === 'allowed') previous = null;
-    if (previous && now < previous.next) { previous.permission = permission; return; }
+    if (previous && (permission === 'not_allowed' || now < previous.next)) { previous.permission = permission; return; }
     const delay = previous ? Math.min(previous.delay * 2, SUBSCRIBE_RETRY_MAX_MS) : SUBSCRIBE_RETRY_MS;
     subscribeRequests.set(pub, { next: now + delay, delay: delay, permission: permission });
     try { pub.setSubscribed(true); } catch (e) { /* ignore */ }

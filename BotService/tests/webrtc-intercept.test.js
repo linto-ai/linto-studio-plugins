@@ -1728,16 +1728,31 @@ describe('webrtc-intercept getInterceptScript()', () => {
       })
 
       it('asks again at once when its owner allows it, whatever the backoff', async () => {
-        const pub = unsubscribed('not_allowed')
+        const pub = unsubscribed(undefined)
         const { ctx, speak } = await setup(pub)
         pub.clock = ctx.clock
         speak(15000) // asked at 0, 2, 6, 14 s
+        pub.permissionStatus = 'not_allowed'
+        speak(250)
         pub.permissionStatus = 'allowed'
         const before = pub.at.length
         speak(250)
         assert.strictEqual(pub.at.length, before + 1)
         speak(1000)
         assert.strictEqual(pub.at.length, before + 1, 'then the backoff starts over')
+      })
+
+      // A refused publication was asked again every 8 s for as long as it stayed
+      // refused: requests the SFU can only turn down.
+      it('asks once while its owner does not allow it, then waits for the permission', async () => {
+        const pub = unsubscribed('not_allowed')
+        const { ctx, speak } = await setup(pub)
+        pub.clock = ctx.clock
+        speak(40000)
+        assert.strictEqual(pub.at.length, 1, 'once, not every 8 s')
+        pub.permissionStatus = 'allowed'
+        speak(250)
+        assert.strictEqual(pub.at.length, 2, 'at once when allowed')
       })
     })
 

@@ -611,8 +611,11 @@ const TEAMS_SPEAKER_BLOCK = `
   // Detect a prolonged disappearance of the (undocumented) callingDebug API and
   // signal a degrade so the Node side can fall back to ASR diarization. 200ms
   // poll → 25 consecutive misses ≈ 5s. Warnings are throttled and the degrade is
-  // signalled once.
-  let missCount = 0, degradeSignalled = false, lastWarnAt = 0;
+  // signalled once. Misses only count once the call has been seen: before that
+  // the bot is on the prejoin screen or in the lobby, where there is no call yet,
+  // and a slow admission must not degrade the whole session. (If the API is gone
+  // from the start, no participant is ever seen and the join watchdog fires.)
+  let missCount = 0, degradeSignalled = false, lastWarnAt = 0, callSeen = false;
   const NATIVE_DIAR_MISS_LIMIT = 25;
   const WARN_THROTTLE_MS = 5000;
   function warnTeams(message) {
@@ -640,19 +643,22 @@ const TEAMS_SPEAKER_BLOCK = `
       call = window.callingDebug && window.callingDebug.observableCall;
     } catch (e) {
       // The undocumented API threw (e.g. it was replaced/removed by an update).
-      noteCallingDebugMissing('threw: ' + (e && e.message ? e.message : 'unknown error'));
+      if (callSeen) noteCallingDebugMissing('threw: ' + (e && e.message ? e.message : 'unknown error'));
       return;
     }
     try {
       if (!call || !call.participants) {
-        // No live call yet OR the API surface vanished. Tear down known
-        // participants; count it toward the degrade detector.
+        // Not in the call yet: nobody is known, nothing is missing.
+        if (!callSeen) return;
+        // The call or the API surface vanished. Tear down known participants;
+        // count it toward the degrade detector.
         known.forEach(function (v, mri) { sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: mri, name: v.name }) }); });
         known.clear();
         noteCallingDebugMissing(window.callingDebug ? 'present but no observable call' : 'absent');
         return;
       }
-      // API is back / available again: reset the degrade detector.
+      // In the call, or the API is back: reset the degrade detector.
+      callSeen = true;
       missCount = 0;
       const seen = new Set();
       // Pick the LOUDEST speaker, not the first one in iteration order. With

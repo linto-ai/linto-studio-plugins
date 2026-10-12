@@ -1370,14 +1370,23 @@ describe('webrtc-intercept getInterceptScript()', () => {
   })
 
   describe('Teams degrade / throttle (behavioral)', () => {
-    it('warnTeams throttles repeated messages to once per 5000ms', async () => {
-      // callingDebug absent -> every poll calls noteCallingDebugMissing -> warnTeams.
-      const s = getInterceptScript(WS, { platformType: 'teams' })
-      const ctx = runScript(s, { callingDebug: undefined })
-      await openLoopback(ctx)
+    const inCall = (...names) => ({ participants: { forEach (cb) { names.forEach((n) => cb({ mri: n, displayName: n, voiceLevel: 0 })) } } })
+    // A Teams page whose call was seen once (the bot was admitted).
+    async function admitted (callingDebug) {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }), { callingDebug })
+      const ws = await openLoopback(ctx)
       ctx.clock.advance(3000)
-      ctx.clock.tickIntervals() // poll 1 -> warns (lastWarnAt set)
+      ctx.clock.tickIntervals()
+      return { ctx, ws }
+    }
+
+    it('warnTeams throttles repeated messages to once per 5000ms', async () => {
+      const { ctx } = await admitted({ observableCall: inCall('m1') })
+      ctx.clock.advance(5000) // the fake clock starts near 0: get past a first throttle window
+      ctx.fakeWindow.callingDebug = undefined // every poll now misses -> warnTeams
+      ctx.clock.advance(200); ctx.clock.tickIntervals() // warns (lastWarnAt set)
       const after1 = ctx.warnings.length
+      assert.ok(after1 > 0)
       ctx.clock.advance(200); ctx.clock.tickIntervals() // within throttle -> no new warn
       ctx.clock.advance(200); ctx.clock.tickIntervals()
       assert.strictEqual(ctx.warnings.length, after1, 'throttled within 5s')
@@ -1386,33 +1395,57 @@ describe('webrtc-intercept getInterceptScript()', () => {
     })
 
     it('missCount increments per miss and resets when callingDebug recovers', async () => {
-      const cd = { observableCall: null }
-      const s = getInterceptScript(WS, { platformType: 'teams' })
-      const ctx = runScript(s, { callingDebug: cd })
-      const ws = await openLoopback(ctx)
-      ctx.clock.advance(3000)
-      // 3 misses (observableCall null), spaced past the warn throttle to observe count.
-      ctx.clock.tickIntervals()
+      const cd = { observableCall: inCall('m1') }
+      const { ctx, ws } = await admitted(cd)
+      cd.observableCall = null
+      // 3 misses, spaced past the warn throttle to observe the count.
+      ctx.clock.advance(200); ctx.clock.tickIntervals()
       ctx.clock.advance(5000); ctx.clock.tickIntervals()
       ctx.clock.advance(5000); ctx.clock.tickIntervals()
       const missWarns = ctx.warnings.filter((w) => /miss \d+\/25/.test(w))
-      assert.ok(missWarns.length >= 1)
-      assert.ok(/miss 3\/25/.test(missWarns[missWarns.length - 1]) || missWarns.length >= 1)
+      assert.ok(/miss 3\/25/.test(missWarns[missWarns.length - 1]), missWarns.join(' | '))
       // API recovers -> a poll with a live call resets missCount (no degrade later).
-      cd.observableCall = { participants: { forEach () {} } }
+      cd.observableCall = inCall('m1')
       ctx.clock.advance(5000); ctx.clock.tickIntervals()
-      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 0)
+      cd.observableCall = null
+      for (let i = 0; i < 24; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 0, '24 misses after the reset')
     })
 
-    it('signals diarizationDegraded exactly once at the 25th consecutive miss', async () => {
-      const s = getInterceptScript(WS, { platformType: 'teams' })
-      const ctx = runScript(s, { callingDebug: undefined }) // absent every poll
-      const ws = await openLoopback(ctx)
-      ctx.clock.advance(3000)
-      for (let i = 0; i < 30; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) }
+    it('signals diarizationDegraded exactly once at the 25th consecutive miss after the call was seen', async () => {
+      const { ctx, ws } = await admitted({ observableCall: inCall('m1', 'm2') })
+      ctx.fakeWindow.callingDebug = undefined // the API vanishes mid-call
+      for (let i = 0; i < 24; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 0)
+      for (let i = 0; i < 10; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
       const degraded = jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded')
       assert.strictEqual(degraded.length, 1, 'degrade signalled exactly once')
       assert.strictEqual(degraded[0].mode, 'asr')
+      assert.deepStrictEqual(jsonFrames(ws).filter((f) => f.type === 'participantLeft').map((f) => f.participant.id), ['m1', 'm2'],
+        'everyone known left once the call vanished')
+    })
+
+    it('a throwing callingDebug counts as a miss once the call was seen', async () => {
+      const { ctx, ws } = await admitted({ observableCall: inCall('m1') })
+      Object.defineProperty(ctx.fakeWindow, 'callingDebug', { get () { throw new Error('gone') } })
+      for (let i = 0; i < 25; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 1)
+    })
+
+    // A bot waiting more than ~5 s on the prejoin screen or in the lobby (no call
+    // yet) used to degrade the whole session to ASR diarization.
+    it('a long prejoin/lobby (no call yet) is not a miss: no degrade, no warning, no participantLeft', async () => {
+      const cd = { observableCall: null }
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }), { callingDebug: cd })
+      const ws = await openLoopback(ctx)
+      ctx.clock.advance(3000)
+      for (let i = 0; i < 300; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) } // a minute in the lobby
+      Object.defineProperty(cd, 'observableCall', { get () { throw new Error('not ready') }, configurable: true })
+      for (let i = 0; i < 50; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) }
+      Object.defineProperty(cd, 'observableCall', { value: inCall('m1'), writable: true, configurable: true }) // admitted
+      ctx.clock.tickIntervals()
+      assert.deepStrictEqual(jsonFrames(ws).map((f) => f.type), ['participantMapping'])
+      assert.deepStrictEqual(ctx.warnings, [])
     })
 
     it('the Teams poller is registered and its interval id is clearable', () => {

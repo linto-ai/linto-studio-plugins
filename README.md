@@ -398,7 +398,7 @@ class MyASRTranscriber extends EventEmitter {
 | `transcriber/out/{sessionId}/{channelId}/partial` | Transcriber | Frontend, Translator | Interim transcription results (not stored in DB) |
 | `transcriber/out/{sessionId}/{channelId}/final` | Transcriber | Scheduler, Translator | Confirmed transcription results (stored in `closedCaptions`) |
 | `transcriber/out/{sessionId}/{channelId}/{partial\|final}/translations` | Transcriber (discrete), Translator (external) | Scheduler, Frontend | Translation results. Both discrete and external converge here. Stored in `translatedCaptions`. |
-| `transcriber/out/{uniqueId}/status` | Transcriber | Scheduler | Transcriber online/offline status |
+| `transcriber/out/{uniqueId}/status` | Transcriber | Scheduler | Transcriber online/offline status (not retained: published again whenever `scheduler/status` turns online) |
 | `transcriber/out/{uniqueId}/session` | Transcriber | Scheduler | Stream status updates per session/channel |
 | `system/out/sessions/paused` | Session-API | Studio-API, others | Notification when a session is paused, payload: `{id, organizationId}` |
 | `system/out/sessions/resumed` | Session-API | Studio-API, others | Notification when a session is resumed, payload: `{id, organizationId}` |

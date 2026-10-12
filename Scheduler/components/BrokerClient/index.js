@@ -62,13 +62,9 @@ class BrokerClient extends Component {
     //Note specific retain status for last will and testament cause we wanna ALWAYS know when scheduler is offline
     //Scheduler online status is required for other components to publish their status, ensuing synchronization of the system
     this.client = new MqttClient({ uniqueId: this.uniqueId, pub: this.pub, subs: this.subs, retain: true });
-    this.client.on("ready", async () => {
-      this.state = READY
-      this.client.publishStatus(); // scheduler status (online)
-      await this.resetSessions(); // reset all active sessions / channels (streamStatus) to ready/inactive state
-      await Model.Translator.update({ online: false }, { where: {} }); // mark all translators offline on startup
-      this.recoverEndedNotices(); // sessions/ended owed from before a restart or a broker outage
-    });
+    this.resynchronizing = Promise.resolve();
+    this.sessionsPublication = Promise.resolve();
+    this.client.on("ready", () => this.resynchronize());
     this.client.on("error", (err) => {
       this.state = ERROR;
     });
@@ -85,6 +81,42 @@ class BrokerClient extends Component {
     }, 60 * 1000);
   }
 
+
+  // On every connection to the broker, first or after a broker restart or a
+  // network outage: what was published meanwhile is lost, and a restarted
+  // broker has lost the retained sessions snapshot too.
+  //   1. publish the scheduler status (online, retained): every transcriber
+  //      announces itself on it, wherever it is in its own reconnection (a
+  //      transcriber status is not retained);
+  //   2. reset the sessions and channels left active (their transcribers
+  //      report again), mark offline the translators not heard of on this
+  //      connection (their status is retained: it comes right after the
+  //      subscription);
+  //   3. publish the sessions snapshot, whichever transcriber announces itself;
+  //   4. then only, finish the sessions/ended notices still owed: their ends
+  //      publish snapshots of their own, and must not hold the resync back.
+  // Two connections in a row resynchronize one after the other.
+  resynchronize() {
+    const connectedAt = new Date();
+    this.state = this.constructor.states.READY;
+    this.client.publishStatus();
+    const resync = this.resynchronizing.then(async () => {
+      try {
+        await this.resetSessions();
+        await Model.Translator.update({ online: false }, { where: { updatedAt: { [Model.Op.lt]: connectedAt } } });
+      } catch (err) {
+        logger.error(`Failed to reset the sessions and translators on connecting to the broker: ${err?.message || err}`);
+      }
+      try {
+        await this.publishSessions();
+      } catch (err) {
+        logger.error(`Failed to publish the sessions snapshot on connecting to the broker: ${err?.message || err}`);
+      }
+    });
+    this.resynchronizing = resync;
+    resync.then(() => this.recoverEndedNotices());
+    return resync;
+  }
 
   // ###### Asked to schedule things ######
   async autoStart() {
@@ -936,6 +968,8 @@ class BrokerClient extends Component {
 
   // A transcriber has connected.
   async registerTranscriber(transcriber) {
+    // A transcriber announces itself again each time the Scheduler (re)connects.
+    this.transcribers = this.transcribers.filter(t => t.uniqueId !== transcriber.uniqueId);
     this.transcribers.push(transcriber);
     // new transcriber registered, publish the current list of sessions to broker
     logger.debug(`Transcriber ${transcriber.uniqueId} UP`);
@@ -1127,7 +1161,16 @@ class BrokerClient extends Component {
     );
   }
 
-  async publishSessions() {
+  // Snapshots are read and published one at a time, in call order: one read
+  // before a change can never be published (and retained) after one read
+  // since.
+  publishSessions() {
+    const publication = this.sessionsPublication.catch(() => {}).then(() => this._publishSessions());
+    this.sessionsPublication = publication;
+    return publication;
+  }
+
+  async _publishSessions() {
     const sessions = await Model.Session.findAll({
       attributes: ['id', 'privateId', 'status', 'scheduleOn', 'endOn', 'autoStart', 'autoEnd', 'name', 'organizationId', 'visibility'],
       where: { status: ['active', 'ready', 'paused'] },

@@ -81,3 +81,49 @@ describe('MqttMessages inbound payload hardening', () => {
     assert.ok(true);
   });
 });
+
+// The Scheduler's status (retained) is the cue for every transcriber to
+// announce itself. A transcriber's own status is not retained: one published
+// on its reconnection before the Scheduler's (e.g. both reconnecting after a
+// broker restart) is lost to the Scheduler, so it announces itself again.
+describe('MqttMessages scheduler status', () => {
+  before(() => { teardown = setupMocks(); });
+  after(() => { if (teardown) teardown(); });
+
+  class Ctx {
+    static states = { WAITING_SCHEDULER: 'waiting_scheduler', READY: 'ready' };
+  }
+
+  function connectedCtx(state) {
+    const ctx = new Ctx();
+    ctx.client = new EventEmitter();
+    ctx.state = state;
+    ctx.uniqueId = 't1';
+    ctx.statuses = 0;
+    ctx.client.publishStatus = () => { ctx.statuses += 1; };
+    ctx.started = 0;
+    ctx.maybeStartServers = () => { ctx.started += 1; };
+    registerMqttMessages.call(ctx);
+    return ctx;
+  }
+
+  it('announces itself again when the Scheduler comes back online', async () => {
+    const ctx = connectedCtx(Ctx.states.READY);
+    await emit(ctx, 'scheduler/status', JSON.stringify({ uniqueId: 'scheduler', online: true }));
+    assert.strictEqual(ctx.statuses, 1);
+    assert.strictEqual(ctx.started, 0, 'its servers are already running');
+  });
+
+  it('does not announce itself when the Scheduler goes offline', async () => {
+    const ctx = connectedCtx(Ctx.states.READY);
+    await emit(ctx, 'scheduler/status', JSON.stringify({ uniqueId: 'scheduler', online: false }));
+    assert.strictEqual(ctx.statuses, 0);
+  });
+
+  it('still registers through maybeStartServers on its first connection', async () => {
+    const ctx = connectedCtx(Ctx.states.WAITING_SCHEDULER);
+    await emit(ctx, 'scheduler/status', JSON.stringify({ uniqueId: 'scheduler', online: true }));
+    assert.strictEqual(ctx.started, 1);
+    assert.strictEqual(ctx.statuses, 0, 'maybeStartServers publishes it');
+  });
+});

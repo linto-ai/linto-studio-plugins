@@ -31,7 +31,11 @@ function handleSchedulerMessage(scheduler) {
   if (this.state === this.constructor.states.WAITING_SCHEDULER) {
     this.maybeStartServers();
   } else {
+    // The Scheduler (re)connected, e.g. after a broker restart or its own: it
+    // may have missed our status (not retained), published on our own
+    // reconnection. Announce ourselves again.
     logger.info(`${this.uniqueId} scheduler back online.`);
+    this.client.publishStatus();
   }
 }
 

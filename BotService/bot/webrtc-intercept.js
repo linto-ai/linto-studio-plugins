@@ -257,7 +257,42 @@ function getInterceptScript (localWsUrl, platformConfig) {
   // filled in as setupTrackCapture() progresses. Also what keeps the sink element
   // referenced (and playing) for as long as the track is captured.
   const captures = new Map();
-  let sharedCtx = null, workletReady = false;
+  let sharedCtx = null, workletLoad = null, transport = null;
+
+  // AudioWorklet module. All the processors of a context share one
+  // AudioWorkletGlobalScope: each capture processor appends its track's render
+  // quantum to one queue there, and a single transport processor posts that queue
+  // to the page once per quantum. Posting from every capture node's own port would
+  // reorder the tracks: after a main-thread stall the page drains each port's
+  // backlog in one go, so one track's whole backlog reaches the Node mixer before
+  // the other's (measured in Chromium: ~600 ms of one track, then the other, after
+  // a 600 ms stall). Through one port the quanta stay in render order, interleaved
+  // across tracks. (ScriptProcessor callbacks share the main-thread task queue and
+  // stay interleaved on their own.)
+  const WORKLET_MODULE = [
+    'const queue = [];',
+    'class PCMCapture extends AudioWorkletProcessor {',
+    '  constructor(options) {',
+    '    super();',
+    '    this.trackIndex = options.processorOptions.trackIndex;',
+    '    this.live = true;',
+    '    this.port.onmessage = () => { this.live = false; };',
+    '  }',
+    '  process(inputs) {',
+    '    const c = inputs[0][0];',
+    '    if (this.live && c && c.length > 0) queue.push(this.trackIndex, new Float32Array(c));',
+    '    return this.live;',
+    '  }',
+    '}',
+    'class PCMTransport extends AudioWorkletProcessor {',
+    '  process() {',
+    '    if (queue.length > 0) this.port.postMessage(queue.splice(0, queue.length));',
+    '    return true;',
+    '  }',
+    '}',
+    'registerProcessor("pcm-capture", PCMCapture);',
+    'registerProcessor("pcm-transport", PCMTransport);'
+  ].join('\\n');
 
   // One AudioContext for every track of the document, created at 16 kHz: Chromium
   // then resamples each MediaStream source itself (band-limited sinc resampler)
@@ -278,6 +313,34 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function sendPcm(capture, samples) {
     const pcm = capture.resample ? capture.resample(samples) : samples;
     if (pcm.length > 0) sendBinary(capture.index, float32ToInt16(pcm));
+  }
+
+  // Transport message: [trackIndex, samples, trackIndex, samples, ...] in render
+  // order. Quanta of a track torn down in the meantime are dropped, so nothing of
+  // a track is sent after its trackRemoved.
+  function onTransportMessage(e) {
+    const queue = e.data;
+    for (let i = 0; i < queue.length; i += 2) {
+      const capture = captures.get(queue[i]);
+      if (capture) sendPcm(capture, queue[i + 1]);
+    }
+  }
+
+  // Load the module and start the transport, once per context: tracks set up
+  // concurrently share the load, and a failure is kept so that every track falls
+  // back the same way.
+  function loadWorklet(ctx) {
+    if (!workletLoad) {
+      workletLoad = Promise.resolve().then(function () {
+        const url = URL.createObjectURL(new Blob([WORKLET_MODULE], { type: 'application/javascript' }));
+        return ctx.audioWorklet.addModule(url).finally(function () { URL.revokeObjectURL(url); });
+      }).then(function () {
+        transport = new AudioWorkletNode(ctx, 'pcm-transport');
+        transport.port.onmessage = onTransportMessage;
+        transport.connect(ctx.destination); // keeps it processing
+      });
+    }
+    return workletLoad;
   }
 
   async function setupTrackCapture(track, capture) {
@@ -302,20 +365,13 @@ function getInterceptScript (localWsUrl, platformConfig) {
     capture.source = ctx.createMediaStreamSource(ms);
 
     try {
-      if (!workletReady) {
-        const code = 'class PCMCapture extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c&&c.length>0)this.port.postMessage(new Float32Array(c));return true;}}registerProcessor("pcm-capture",PCMCapture);';
-        const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
-        await ctx.audioWorklet.addModule(url);
-        URL.revokeObjectURL(url);
-        workletReady = true;
-      }
+      await loadWorklet(ctx);
       // Same check after the module load: tear down the source and sink built above.
       if (capture.ended) { teardownCapture(capture); return; }
-      const node = new AudioWorkletNode(ctx, 'pcm-capture');
+      const node = new AudioWorkletNode(ctx, 'pcm-capture', { processorOptions: { trackIndex: capture.index } });
       capture.node = node;
       capture.source.connect(node);
       node.connect(ctx.destination); // keeps the graph pulling
-      node.port.onmessage = function (e) { sendPcm(capture, e.data); };
       log('AudioWorklet capture for track', capture.index);
     } catch (e) {
       if (capture.ended) { teardownCapture(capture); return; }
@@ -339,7 +395,8 @@ function getInterceptScript (localWsUrl, platformConfig) {
     const node = capture.node, source = capture.source, sink = capture.sink;
     capture.node = capture.source = capture.sink = null;
     if (node) {
-      if (node.port) node.port.onmessage = null; else node.onaudioprocess = null;
+      // Stop the processor (it no longer queues quanta), or the ScriptProcessor callback.
+      if (node.port) node.port.postMessage('stop'); else node.onaudioprocess = null;
       try { node.disconnect(); } catch (e) {}
     }
     if (source) { try { source.disconnect(); } catch (e) {} }

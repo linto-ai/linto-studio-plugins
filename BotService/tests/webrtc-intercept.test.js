@@ -80,9 +80,17 @@ function makeFakeWS (clock) {
 // path); opts.honorsRate grants a requested rate like Chromium does, and
 // opts.rateRefused makes asking for one throw.
 function makeAudioEnv (opts = {}) {
-  const env = { workletNodes: [], scriptProcessors: [], sources: [], contextOptions: [], sampleRate: opts.sampleRate || 48000 }
+  // workletNodes: the per-track capture nodes; transports: the 'pcm-transport' nodes.
+  const env = { workletNodes: [], transports: [], scriptProcessors: [], sources: [], contextOptions: [], addModuleCalls: 0, sampleRate: opts.sampleRate || 48000 }
   class FakeAudioWorkletNode {
-    constructor () { this.port = { onmessage: null }; this.connected = []; this.disconnected = false; env.workletNodes.push(this) }
+    constructor (ctx, name, options) {
+      this.name = name
+      this.options = options
+      this.port = { onmessage: null, posted: [], postMessage (m) { this.posted.push(m) } }
+      this.connected = []
+      this.disconnected = false
+      if (name === 'pcm-transport') env.transports.push(this); else env.workletNodes.push(this)
+    }
     connect (n) { this.connected.push(n) }
     disconnect () { this.disconnected = true }
   }
@@ -97,7 +105,10 @@ function makeAudioEnv (opts = {}) {
       this.destination = { id: 'dest' }
       this.audioWorklet = {
         // opts.addModule lets a test hold the module load pending.
-        addModule: opts.addModule || (async () => { if (opts.workletThrows) throw new Error('no worklet') })
+        addModule: (url) => {
+          env.addModuleCalls++
+          return opts.addModule ? opts.addModule(url) : (async () => { if (opts.workletThrows) throw new Error('no worklet') })()
+        }
       }
     }
     async resume () { this.state = 'running' }
@@ -203,7 +214,8 @@ function runScript (script, opts = {}) {
     script
   )
   const FakeURL = { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} }
-  function FakeBlob () {}
+  const blobs = [] // source of every Blob built (the AudioWorklet module)
+  function FakeBlob (parts) { blobs.push(parts.join('')) }
   function FakeMediaStream (tracks) { this.tracks = tracks; this.getAudioTracks = () => tracks }
   fn(
     fakeWindow, fakeDocument, fakeNavigator, FakeWebSocket, audio.AudioWorkletNode, audio.AudioContext,
@@ -212,7 +224,7 @@ function runScript (script, opts = {}) {
   )
 
   const fireWindow = (ev) => (winListeners[ev] || []).forEach((cb) => cb())
-  return { clock, FakeWebSocket, audio, sinks, warnings, logs, pcInstances, fakeWindow, fakeNavigator, fakeDocument, OriginalRTCPeerConnection, fireWindow }
+  return { clock, FakeWebSocket, audio, sinks, blobs, warnings, logs, pcInstances, fakeWindow, fakeNavigator, fakeDocument, OriginalRTCPeerConnection, fireWindow }
 }
 
 // Parse the JSON text frames a fake WS received (binary frames are ArrayBuffers).
@@ -221,6 +233,11 @@ function jsonFrames (ws) {
 }
 function binaryFrames (ws) {
   return ws.sent.filter((f) => typeof f !== 'string')
+}
+// Deliver render quanta the way the transport processor posts them:
+// [trackIndex, samples, trackIndex, samples, ...].
+function feed (ctx, ...quanta) {
+  ctx.audio.transports[0].port.onmessage({ data: quanta })
 }
 // Open the loopback WS that connectWs() created (first instance) and flush.
 async function openLoopback (ctx) {
@@ -456,7 +473,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       emitTrack(ctx, makeTrack('t16'))
       await flush(); await flush()
       assert.ok(ctx.audio.contextOptions.some((o) => o && o.sampleRate === 16000), 'context requested at 16 kHz')
-      ctx.audio.workletNodes[0].port.onmessage({ data: Float32Array.from([0.5, -0.5, 0.25]) })
+      feed(ctx, 0, Float32Array.from([0.5, -0.5, 0.25]))
       const bin = binaryFrames(ws)[0]
       const view = new DataView(bin)
       assert.strictEqual(bin.byteLength, 4 + 3 * 2, 'no resampling at 16 kHz')
@@ -471,7 +488,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       emitTrack(ctx, makeTrack('t48'))
       await flush(); await flush()
       assert.ok(ctx.warnings.some((w) => w.includes('16 kHz AudioContext unavailable')))
-      ctx.audio.workletNodes[0].port.onmessage({ data: new Float32Array(48) })
+      feed(ctx, 0, new Float32Array(48))
       assert.strictEqual(pcmSamples(binaryFrames(ws)), 16)
     })
 
@@ -480,9 +497,8 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('t44'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
       // One second of render quanta (the last one partial).
-      for (let sent = 0; sent < 44100; sent += 128) node.port.onmessage({ data: new Float32Array(Math.min(128, 44100 - sent)) })
+      for (let sent = 0; sent < 44100; sent += 128) feed(ctx, 0, new Float32Array(Math.min(128, 44100 - sent)))
       assert.strictEqual(pcmSamples(binaryFrames(ws)), Math.ceil(44099 * 16000 / 44100)) // 16000, not 344 * 46
     })
 
@@ -500,6 +516,66 @@ describe('webrtc-intercept getInterceptScript()', () => {
     })
   })
 
+  // Per-node worklet ports reorder tracks after a main-thread stall (each port's
+  // backlog is drained in one go); one transport keeps every quantum in render order.
+  describe('ordered delivery through one transport (behavioral)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+
+    it('loads the module once and starts a single transport for tracks set up together', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('a'))
+      emitTrack(ctx, makeTrack('b'))
+      await flush(); await flush(); await flush()
+      assert.strictEqual(ctx.audio.addModuleCalls, 1)
+      assert.strictEqual(ctx.audio.transports.length, 1)
+      assert.deepStrictEqual(ctx.audio.transports[0].connected, [{ id: 'dest' }], 'transport kept processing')
+      assert.deepStrictEqual(ctx.audio.workletNodes.map((n) => n.options.processorOptions.trackIndex).sort(), [0, 1])
+    })
+
+    it('sends the quanta of a transport message in render order, each tagged with its track', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('a'))
+      emitTrack(ctx, makeTrack('b'))
+      await flush(); await flush(); await flush()
+      feed(ctx, 0, new Float32Array(4), 1, new Float32Array(4), 0, new Float32Array(4), 1, new Float32Array(4))
+      assert.deepStrictEqual(binaryFrames(ws).map((f) => new DataView(f).getUint16(0, false)), [0, 1, 0, 1])
+    })
+
+    it('worklet module: captures share one queue that the transport posts in render order', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('m'))
+      await flush(); await flush()
+      const registered = {}
+      class FakeProcessor {
+        constructor () { this.port = { onmessage: null, posted: [], postMessage (m) { this.posted.push(m) } } }
+      }
+      new Function('AudioWorkletProcessor', 'registerProcessor', ctx.blobs[ctx.blobs.length - 1])(
+        FakeProcessor, (name, cls) => { registered[name] = cls })
+      const a = new registered['pcm-capture']({ processorOptions: { trackIndex: 0 } })
+      const b = new registered['pcm-capture']({ processorOptions: { trackIndex: 1 } })
+      const transport = new registered['pcm-transport']()
+      const quantum = (v) => [[Float32Array.from([v, v])]]
+      assert.strictEqual(a.process(quantum(0.25)), true)
+      b.process(quantum(0.5))
+      a.process(quantum(0.75))
+      b.process([[]]) // no channel (no input connected): nothing queued
+      transport.process()
+      const posted = transport.port.posted
+      assert.strictEqual(posted.length, 1)
+      assert.deepStrictEqual(posted[0].filter((x, i) => i % 2 === 0), [0, 1, 0])
+      assert.deepStrictEqual(posted[0].filter((x, i) => i % 2 === 1).map((q) => q[0]), [0.25, 0.5, 0.75])
+      transport.process()
+      assert.strictEqual(posted.length, 1, 'nothing posted for an empty queue')
+      a.port.onmessage({ data: 'stop' })
+      assert.strictEqual(a.process(quantum(1)), false, 'a stopped capture processor ends')
+      transport.process()
+      assert.strictEqual(posted.length, 1, 'and queues nothing more')
+    })
+  })
+
   describe('setupTrackCapture()/handleNewTrack() (behavioral)', () => {
     it('AudioWorklet path: worklet message sends a resampled PCM binary frame', async () => {
       const s = getInterceptScript(WS, { platformType: 'sfu' })
@@ -509,9 +585,10 @@ describe('webrtc-intercept getInterceptScript()', () => {
       await flush(); await flush()
       assert.strictEqual(ctx.audio.workletNodes.length, 1, 'a worklet node was created')
       const node = ctx.audio.workletNodes[0]
-      assert.strictEqual(typeof node.port.onmessage, 'function')
+      assert.strictEqual(node.name, 'pcm-capture')
+      assert.deepStrictEqual(node.options.processorOptions, { trackIndex: 0 }, 'the processor tags its quanta with the track index')
       // Feed 6 samples @48k -> 2 samples @16k -> 4 bytes PCM + 4 byte header.
-      node.port.onmessage({ data: Float32Array.from([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]) })
+      feed(ctx, 0, Float32Array.from([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]))
       const bins = binaryFrames(ws)
       assert.strictEqual(bins.length, 1)
       assert.strictEqual(bins[0].byteLength, 4 + 2 * 2, 'header(4) + 2 int16 samples')
@@ -523,8 +600,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('t1'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: new Float32Array(48) }) // 48 @48k -> 16 @16k
+      feed(ctx, 0, new Float32Array(48)) // 48 @48k -> 16 @16k
       const bins = binaryFrames(ws)
       assert.strictEqual(bins[0].byteLength, 4 + 16 * 2)
     })
@@ -616,14 +692,15 @@ describe('webrtc-intercept getInterceptScript()', () => {
       return { ctx, ws, track }
     }
 
-    it('AudioWorklet path: drops the message handler, disconnects node and source, releases the sink', async () => {
+    it('AudioWorklet path: stops the processor, disconnects node and source, releases the sink', async () => {
       const { ctx, ws, track } = await capturedTrack({ sampleRate: 16000 })
       const node = ctx.audio.workletNodes[0]
-      const onmessage = node.port.onmessage
-      onmessage({ data: new Float32Array(8) })
+      feed(ctx, 0, new Float32Array(8))
       assert.strictEqual(binaryFrames(ws).length, 1, 'captured while live')
       track.fire('ended')
-      assert.strictEqual(node.port.onmessage, null, 'no handler left for in-flight messages')
+      feed(ctx, 0, new Float32Array(8)) // a quantum still in flight from the worklet
+      assert.strictEqual(binaryFrames(ws).length, 1, 'in-flight quanta of an ended track are dropped')
+      assert.deepStrictEqual(node.port.posted, ['stop'], 'the processor stops queueing quanta')
       assert.strictEqual(node.disconnected, true)
       assert.strictEqual(ctx.audio.sources[0].disconnected, true)
       assert.strictEqual(ctx.sinks[0].paused, true)
@@ -844,8 +921,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('hdr'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: Float32Array.from([1.0, -1.0]) }) // 16k -> no resample
+      feed(ctx, 0, Float32Array.from([1.0, -1.0])) // 16k -> no resample
       const bin = binaryFrames(ws)[0]
       const view = new DataView(bin)
       assert.strictEqual(view.getUint16(0, false), 0, 'trackIndex 0 big-endian')
@@ -861,8 +937,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('big'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: new Float32Array(10) }) // 10 samples
+      feed(ctx, 0, new Float32Array(10)) // 10 samples
       const bin = binaryFrames(ws)[0]
       assert.strictEqual(bin.byteLength, 4 + 10 * 2)
     })
@@ -875,8 +950,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('empty'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: new Float32Array(0) })
+      feed(ctx, 0, new Float32Array(0))
       assert.strictEqual(binaryFrames(ws).length, 0)
     })
 
@@ -887,8 +961,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       await flush()
       emitTrack(ctx, makeTrack('closed'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: Float32Array.from([0.5]) })
+      feed(ctx, 0, Float32Array.from([0.5]))
       assert.strictEqual(binaryFrames(ctx.FakeWebSocket.instances[0]).length, 0)
     })
   })

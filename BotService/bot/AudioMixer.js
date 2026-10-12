@@ -89,6 +89,9 @@ class AudioMixer extends EventEmitter {
     // the latest speakerChanged
     this._unattributedRun = false
     this._announcedTag = null
+    // trackId -> the tag it was announced unattributed under, until a 'mapped'
+    // names it
+    this._unnamed = new Map()
     this._silenceMs = 0
 
     // Pre-allocated accumulators: the hot path runs 50×/s. Tracks are summed wide
@@ -326,6 +329,7 @@ class AudioMixer extends EventEmitter {
       const tag = this._trackTag(dominant.trackId)
       if (this._announcedTag !== tag) {
         this.currentSpeaker = null
+        this._unnamed.set(dominant.trackId, tag)
         this._emitSpeaker(null, 'unattributed', tag)
       }
       return
@@ -387,7 +391,8 @@ class AudioMixer extends EventEmitter {
    * (rather than at their next loud frame), with reason 'mapped': the speech
    * announced as unattributed was theirs, so the Transcriber can name the
    * segments held unnamed meanwhile (even if the participant was already known,
-   * e.g. on another track).
+   * e.g. on another track). A track announced unattributed but not speaking any
+   * more gets its 'mapped' too, naming its segments only (once per tag).
    * @param {*} trackId
    * @param {{id:string, name?:string}|null} participant
    */
@@ -396,11 +401,22 @@ class AudioMixer extends EventEmitter {
     const previous = track.participant
     track.participant = participant ? { id: participant.id, name: participant.name || participant.id } : null
     if (previous && (!track.participant || track.participant.id !== previous.id)) track.generation++
-    if (track.participant && this._unattributedSpeaker === trackId) {
+    if (!track.participant) return
+    const tag = this._trackTag(trackId)
+    const announced = this._unnamed.get(trackId) === tag
+    this._unnamed.delete(trackId)
+    if (this._unattributedSpeaker === trackId) {
       this._unattributedSpeaker = null
       this._silenceMs = 0
       this.currentSpeaker = { id: track.participant.id, name: track.participant.name }
-      this._emitSpeaker(this.currentSpeaker, 'mapped', this._trackTag(trackId))
+      this._emitSpeaker(this.currentSpeaker, 'mapped', tag)
+    } else if (announced) {
+      // Announced unattributed earlier, but not the one speaking now (another
+      // track took over, or nobody speaks): its 'mapped' names the segments sent
+      // under its tag, and the current speaker is unchanged (as is the run of
+      // unattributed speech: no new null is due for the track speaking now).
+      const named = { id: track.participant.id, name: track.participant.name }
+      this.emit('speakerChanged', { type: 'speakerChanged', position: this.mixPosition, speaker: named, reason: 'mapped', track: tag })
     }
   }
 
@@ -414,12 +430,14 @@ class AudioMixer extends EventEmitter {
     if (!track) return
     track.participant = null
     track.generation++
+    this._unnamed.delete(trackId)
     if (this._unattributedSpeaker === trackId) this._unattributedSpeaker = null
   }
 
   /** Forget a track (it ended). Its unmixed tail (under a frame) goes with it. */
   removeTrack (trackId) {
     if (!this.tracks.delete(trackId)) return
+    this._unnamed.delete(trackId)
     if (this._unattributedSpeaker === trackId) this._unattributedSpeaker = null
     this._drain() // nobody waits for it anymore
   }
@@ -495,6 +513,7 @@ class AudioMixer extends EventEmitter {
     this._unattributedSpeaker = null
     this._unattributedRun = false
     this._announcedTag = null
+    this._unnamed.clear()
     this._silenceMs = 0
   }
 }

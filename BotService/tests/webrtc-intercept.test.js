@@ -1441,6 +1441,22 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'participantMapping:bob'])
     })
 
+    it('a track claimed by several participants, none of them its owner, is unmapped until one claim settles', async () => {
+      const lk = room([lkPart('alice', 'Alice', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      poll(ctx)
+      lk.r.remoteParticipants = [lkPart('bob', 'Bob', 'rx'), lkPart('carol', 'Carol', 'rx')] // Alice left
+      poll(ctx)
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'trackUnmapped:0', 'participantLeft:alice'], 'unknown, not Alice')
+      lk.r.remoteParticipants = [lkPart('bob', 'Bob', 'rx'), lkPart('carol', 'Carol', 'none')]
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'trackUnmapped:0', 'participantLeft:alice', 'participantMapping:bob'])
+    })
+
     it("a re-fired 'track' never mapped yet is reported as changing hands too", async () => {
       const lk = room([])
       const ctx = runScript(s, { elements: lk.elements })

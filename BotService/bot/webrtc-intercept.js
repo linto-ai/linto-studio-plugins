@@ -538,14 +538,20 @@ function getInterceptScript (localWsUrl, platformConfig) {
   // (two publications on the same MediaStreamTrack, e.g. halfway through a
   // handover) keeps its current mapping, rather than flipping between them at
   // every poll. Reported once per track.
+  // A track whose owner is not among the claimants any more (they left, or
+  // handed the receiver over) is unmapped instead: unknown until one claim
+  // settles, rather than possibly the wrong one.
   const ambiguousTracks = new Set();
   function mapClaims(claims) {
     claims.forEach(function (owners, trackId) {
-      const ids = owners.map(function (o) { return o.id; }).filter(function (id, i, all) { return all.indexOf(id) === i; });
+      const ids = owners.map(function (o) { return sanitizeParticipant(o).id; }).filter(function (id, i, all) { return all.indexOf(id) === i; });
       if (ids.length === 1) { mapTrack(trackId, owners[0]); return; }
-      if (!tracks.has(trackId) || ambiguousTracks.has(trackId)) return;
+      const info = tracks.get(trackId);
+      if (!info) return;
+      if (info.participantId && ids.indexOf(info.participantId) === -1) forgetMapping(info);
+      if (ambiguousTracks.has(trackId)) return;
       ambiguousTracks.add(trackId);
-      warn('track ' + trackId + ' claimed by ' + ids.length + ' participants (' + ids.map(sanitizeText).join(', ') + '): its mapping is left as it is');
+      warn('track ' + trackId + ' claimed by ' + ids.length + ' participants (' + ids.join(', ') + '): not remapped until a single one claims it');
     });
   }
   function claim(claims, trackId, participant) {

@@ -1115,6 +1115,43 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.deepStrictEqual(indices, [0, 1])
     })
 
+    // The Jitsi poller ran at the LiveKit cadence (1.5 s once every track was
+    // mapped): a receiver taken over by somebody else stayed attributed to its
+    // previous owner for up to 1.5 s. And Jitsi had no leave signal at all: a
+    // receiver is reused, not ended, when its participant leaves.
+    it('polls at every tick (250 ms), even with every track mapped', async () => {
+      let parts = [jitsiParticipant('p1', 'Alice', [jitsiTrack('audio', 'rx')])]
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { APP: { conference: { _room: { getParticipants: () => parts } } } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      ctx.clock.advance(3000); ctx.clock.tickIntervals() // mapped to Alice
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      parts = [jitsiParticipant('p1', 'Alice', []), jitsiParticipant('p2', 'Bob', [jitsiTrack('audio', 'rx')])]
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      const maps = jsonFrames(ws).filter((f) => f.type === 'participantMapping').map((f) => f.participant.id)
+      assert.deepStrictEqual(maps, ['p1', 'p2'])
+    })
+
+    it('reports a participant gone from the conference as left, and their receiver as unmapped', async () => {
+      let parts = [jitsiParticipant('p1', 'Alice', [jitsiTrack('audio', 'rx')]), jitsiParticipant('p2', 'Bob', [])]
+      let readable = true
+      const conference = { get _room () { if (!readable) throw new Error('reconnecting'); return { getParticipants: () => parts } } }
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { APP: { conference } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('rx'))
+      await flush(); await flush()
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      readable = false // a conference that cannot be read: nobody left
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      readable = true
+      parts = [jitsiParticipant('p2', 'Bob', [])] // Alice leaves
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      ctx.clock.advance(250); ctx.clock.tickIntervals()
+      const sent = jsonFrames(ws).filter((f) => f.type !== 'trackAdded').map((f) => f.type + ':' + (f.participant ? f.participant.id : f.trackIndex))
+      assert.deepStrictEqual(sent, ['participantMapping:p1', 'participantLeft:p1', 'trackUnmapped:0'])
+    })
+
     it('an exception inside window.APP.conference does not propagate', async () => {
       const APP = { conference: { get _room () { throw new Error('jitsi boom') } } }
       const s = getInterceptScript(WS, { platformType: 'sfu' })
@@ -1399,7 +1436,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       poll(ctx)
       parts = [{ getId: () => 'p2', getDisplayName: () => 'Bob', getTracks: () => [jt('rx')] }]
       poll(ctx)
-      assert.deepStrictEqual(sent(ws), ['participantMapping:p1', 'participantMapping:p2'])
+      assert.deepStrictEqual(sent(ws), ['participantMapping:p1', 'participantMapping:p2', 'participantLeft:p1'])
     })
   })
 

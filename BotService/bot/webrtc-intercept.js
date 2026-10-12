@@ -549,12 +549,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
 // Emitted only for platformType === 'sfu'. Relies on shared helpers
 // (tracks, hasUnmappedTrack, mapTrack, sendJson, intervals, log).
 const SFU_MAPPING_BLOCK = `
-  // Polling starts with the page. While a captured track waits for its
-  // participant, poll fast: its words are only attributed from the mapping on.
-  // Otherwise poll at the normal cadence, for subscriptions and leaves. Finding
-  // the LiveKit Room walks the React fiber tree of the whole DOM, which is
-  // expensive: at most once per SFU_POLL_MS, and no more once found (the Room
-  // object is kept).
+  // Polling starts with the page. Jitsi's state is read directly (cheap): at
+  // every tick. LiveKit's: while a captured track waits for its participant,
+  // poll fast, since its words are only attributed from the mapping on; otherwise
+  // at the normal cadence, for subscriptions and leaves. Finding the LiveKit Room
+  // walks the React fiber tree of the whole DOM, which is expensive: at most once
+  // per SFU_POLL_MS, and no more once found (the Room object is kept).
   var SFU_FAST_POLL_MS = 250, SFU_POLL_MS = 1500;
   var lastSfuPoll = -Infinity, lastRoomSearch = -Infinity; // the first ones run at once
 
@@ -576,14 +576,21 @@ const SFU_MAPPING_BLOCK = `
 
   // Jitsi: tracks live on window.APP.conference._room participants.
   // Polled whatever the mappings: a receiver reused for another participant
-  // (JVB rewrites its sources onto a pool of receivers) is mapped again.
+  // (JVB rewrites its sources onto a pool of receivers) is mapped again. And,
+  // since such a receiver does not end when its participant leaves, the roster
+  // is diffed as for LiveKit: anyone in the previous poll's roster but gone now
+  // has left (the Node side no-ops ids it never mapped). A conference that cannot
+  // be read is no roster at all, not an empty one: nobody is reported as left.
+  const jitsiRoster = new Map(); // id -> name, at the previous poll
   function pollJitsi() {
-    if (tracks.size === 0) return;
     try {
       const room = window.APP && window.APP.conference && window.APP.conference._room;
       if (!room || !room.getParticipants) return;
+      const seen = new Map();
       const claims = new Map();
       for (const p of room.getParticipants()) {
+        seen.set(p.getId(), p.getDisplayName() || p.getId());
+        if (tracks.size === 0) continue;
         for (const pt of (p.getTracks() || [])) {
           if (pt.getType && pt.getType() !== 'audio') continue;
           const id = pt.track && pt.track.id;
@@ -591,6 +598,15 @@ const SFU_MAPPING_BLOCK = `
         }
       }
       mapClaims(claims);
+      jitsiRoster.forEach(function (name, id) {
+        if (seen.has(id)) return;
+        const left = sanitizeParticipant({ id: id, name: name });
+        log('Jitsi participant left:', left.name, '(' + left.id + ')');
+        sendJson({ type: 'participantLeft', participant: left });
+        forgetParticipant(left.id);
+      });
+      jitsiRoster.clear();
+      seen.forEach(function (name, id) { jitsiRoster.set(id, name); });
     } catch (e) { /* jitsi API not ready */ }
   }
 
@@ -698,9 +714,9 @@ const SFU_MAPPING_BLOCK = `
   }
   function pollSfu() {
     const now = Date.now();
+    pollJitsi();
     if (!hasUnmappedTrack() && now - lastSfuPoll < SFU_POLL_MS) return;
     lastSfuPoll = now;
-    pollJitsi();
     pollLivekit(now);
   }
   intervals.push(setInterval(pollSfu, SFU_FAST_POLL_MS));

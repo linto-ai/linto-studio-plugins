@@ -27,13 +27,14 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // One StartStreamTranscription call of the stub service.
 class StubStream {
-    constructor(audioStream, { closesOnInputEnd = true } = {}) {
+    constructor(audioStream, { closesOnInputEnd = true, finalizesInMs = 30 } = {}) {
         this.chunks = [];
         this.inputEnded = false;
         this.events = [];
         this.waiters = [];
         this.closed = false;
         this.closesOnInputEnd = closesOnInputEnd;
+        this.finalizesInMs = finalizesInMs;
         this.consume(audioStream);
     }
 
@@ -64,7 +65,7 @@ class StubStream {
         this.inputEnded = true;
         clearInterval(silence);
         if (!this.closesOnInputEnd) return; // a service that never answers
-        await wait(30); // the service finalizes
+        await wait(this.finalizesInMs); // the service finalizes
         this.push(this.result(`words ${this.chunks.length}`, false));
         this.push({ end: true });
     }
@@ -181,6 +182,22 @@ describe('AmazonTranscriber start/stop against the streaming contract (stub, not
         provider.transcribe(Buffer.from([3, 4]));
         await provider.stop(); // right away: both chunks still queued
         assert.deepStrictEqual(service.streams[0].chunks.map((c) => [...c]), [[1, 2], [3, 4]]);
+    });
+
+    it('drops the service\'s final arriving after stop() kept the partial as a final', async () => {
+        process.env.ASR_STOP_FLUSH_TIMEOUT_MS = '700'; // waits 700 - 500 ms
+        service.options = { finalizesInMs: 400 };
+        try {
+            const { provider, finals } = await streaming();
+            provider.transcribe(Buffer.from([1, 2]));
+            await wait(50);
+            await provider.stop();
+            assert.deepStrictEqual(finals, ['words 1'], 'the partial, kept as a final');
+            await wait(400); // the service's final comes now
+            assert.deepStrictEqual(finals, ['words 1'], 'not a second caption');
+        } finally {
+            process.env.ASR_STOP_FLUSH_TIMEOUT_MS = '3000';
+        }
     });
 
     it('stop() is bounded when the service never closes, and keeps the last partial as a final', async () => {

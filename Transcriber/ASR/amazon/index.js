@@ -37,6 +37,9 @@ class AmazonTranscriber extends EventEmitter {
         this.isStreaming = false;
         this.streamingPromise = null;
         this.lastPartialResult = null; // Track last partial result
+        // Bumped by stop() once it stops waiting for the stream's results (see
+        // processTranscriptionStream).
+        this._resultsGeneration = 0;
         // Generation counter bumped on every start()/stop(). Long-running async
         // work (start, reconnect) captures the epoch at entry and re-checks it
         // after every await so a stop()+start() cycle aborts in-flight calls
@@ -177,8 +180,16 @@ class AmazonTranscriber extends EventEmitter {
     }
 
     async processTranscriptionStream(resultStream) {
+        // A result arriving after stop() stopped waiting comes too late: the
+        // partial it replaces was already kept as a final (a second caption),
+        // and the ASR wrapper has moved on to the end-of-stream marker.
+        const generation = this._resultsGeneration;
         try {
             for await (const event of resultStream) {
+                if (generation !== this._resultsGeneration) {
+                    this.logger.warn('Amazon ASR: result received after the stop, dropped');
+                    return;
+                }
                 if (event.TranscriptEvent) {
                     const results = event.TranscriptEvent.Transcript.Results;
 
@@ -463,6 +474,7 @@ class AmazonTranscriber extends EventEmitter {
             clearTimeout(timer);
             this.streamingPromise = null;
         }
+        this._resultsGeneration += 1;
         this.audioQueue = [];
 
         // A partial that no final replaced (stream closed early, or not in

@@ -220,8 +220,11 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
     return bot
   }
 
+  // Records built by a test: their transcriber stream is disposed after it, so
+  // that no ack watchdog it armed fires during a later suite.
+  const records = []
   function makeRecord (bot, botId = 1) {
-    return {
+    const record = {
       bot,
       ws: null,
       botId,
@@ -232,6 +235,8 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
       reconnectAttempts: 0,
       reconnectTimer: null
     }
+    records.push(record)
+    return record
   }
 
   let ctx
@@ -248,6 +253,7 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
     realSetTimeout = global.setTimeout
   })
   afterEach(() => {
+    for (const record of records.splice(0)) if (record.stream) record.stream.dispose()
     if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
     if (realWsCacheEntry) require.cache[wsPath] = realWsCacheEntry; else delete require.cache[wsPath]
     delete process.env.BOTSERVICE_WS_RECONNECT_RETRIES
@@ -483,8 +489,11 @@ describe('BotService BrokerClient — _openSocket / _scheduleReconnect / stopBot
     return bot
   }
 
+  // Records built by a test: their transcriber stream is disposed after it, so
+  // that no ack watchdog it armed fires during a later suite.
+  const records = []
   function makeRecord (bot, botId = 1) {
-    return {
+    const record = {
       bot,
       ws: null,
       botId,
@@ -495,6 +504,8 @@ describe('BotService BrokerClient — _openSocket / _scheduleReconnect / stopBot
       reconnectAttempts: 0,
       reconnectTimer: null
     }
+    records.push(record)
+    return record
   }
 
   let ctx
@@ -509,6 +520,7 @@ describe('BotService BrokerClient — _openSocket / _scheduleReconnect / stopBot
     realSetTimeout = global.setTimeout
   })
   afterEach(() => {
+    for (const record of records.splice(0)) if (record.stream) record.stream.dispose()
     if (ctx.instance.heartbeatTimer) clearInterval(ctx.instance.heartbeatTimer)
     if (realWsCacheEntry) require.cache[wsPath] = realWsCacheEntry; else delete require.cache[wsPath]
     delete process.env.BOTSERVICE_WS_RECONNECT_RETRIES

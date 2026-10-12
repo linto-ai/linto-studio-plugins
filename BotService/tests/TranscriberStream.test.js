@@ -1,8 +1,17 @@
 const assert = require('assert')
 const EventEmitter = require('events')
-const { describe, it, beforeEach } = require('mocha')
+const { describe, it, beforeEach, afterEach } = require('mocha')
 const { logger } = require('live-srt-lib')
-const TranscriberStream = require('../bot/TranscriberStream')
+
+// Every stream a test creates (disposed after it, see below).
+const created = []
+const TranscriberStream = new Proxy(require('../bot/TranscriberStream'), {
+  construct (Target, args) {
+    const stream = new Target(...args)
+    created.push(stream)
+    return stream
+  }
+})
 
 // Spy on the shared winston logger so log-throttling/latch behavior can be
 // asserted without real I/O. Captures (level, message) pairs and restores the
@@ -35,6 +44,9 @@ const jsonFrames = (ws) => ws.sent.filter(x => typeof x === 'string').map(JSON.p
 const audioFrames = (ws) => ws.sent.filter(x => Buffer.isBuffer(x))
 
 describe('TranscriberStream', () => {
+  // No ack watchdog armed by a test (10 s by default) may fire during a later suite.
+  afterEach(() => { for (const stream of created.splice(0)) stream.dispose() })
+
   let ws, bot
   beforeEach(() => { ws = new FakeWs(); bot = fakeBot(); new TranscriberStream(ws, bot, { maxBuffer: 3 }) })
 

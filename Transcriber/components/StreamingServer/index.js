@@ -48,6 +48,9 @@ class StreamingServer extends Component {
     // legacy ASR, or its per-stream channel context. Only its stop reports the
     // channel inactive (see _stopAsr).
     this.latestStreams = new Map();
+    // Legacy ASR -> the server's stream object it serves (see _stopAsr); a
+    // per-stream context carries its own (`ctx.stream`).
+    this.asrStreams = new WeakMap();
     this.servers = [];
     this.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     // Per-stream diarization (one ASR per participant). All keyed by the channel
@@ -103,7 +106,9 @@ class StreamingServer extends Component {
       const server = new serverClass(this.app);
       this.servers.push(server);
 
-      server.on('session-start', (session, channel) => {
+      // `stream` identifies the server's connection (one per stream), so that a
+      // stop is applied to the ASR of that stream only.
+      server.on('session-start', (session, channel, stream) => {
         try {
           // Per-stream: a bot announced perStream at init and the env flag is on,
           // so the WS server holds a participant map for this channel. We do NOT
@@ -134,7 +139,7 @@ class StreamingServer extends Component {
             // K9: `registeredAt` is the reaper's grace anchor — a channel marked
             // here but not yet streaming a single tagged frame must never be
             // collected as an orphan.
-            const ctx = { session, channel, allocator, registeredAt: Date.now() };
+            const ctx = { session, channel, allocator, registeredAt: Date.now(), stream };
             this.channels.set(ck, ctx);
             this.latestStreams.set(ck, ctx);
             // K9: arm the orphan-channel reaper on the first per-stream channel
@@ -177,6 +182,7 @@ class StreamingServer extends Component {
           const asr = this._wireAsr(session, channel, { initialSegmentId, speakerTracker, diarizationMode },
             `${session.id}_${channel.id}`, session.id, channel.id);
           this.latestStreams.set(`${session.id}_${channel.id}`, asr);
+          if (stream !== undefined) this.asrStreams.set(asr, stream);
           this.emit('session-start', session, channel);
           logger.info(`Session ${session.id}, channel ${channel.id} started`);
         } catch (error) {
@@ -184,10 +190,10 @@ class StreamingServer extends Component {
         }
       });
 
-      server.on('session-stop', async (session, channelId) => {
+      server.on('session-stop', async (session, channelId, stream) => {
         try {
           logger.info(`Session ${session.id}, channel ${channelId} stopped`);
-          await this._stopAsr(session, channelId);
+          await this._stopAsr(session, channelId, stream);
         } catch (error) {
           logger.error(`Error stopping session ${session.id}, channel ${channelId}: ${error}`);
         }
@@ -508,12 +514,29 @@ class StreamingServer extends Component {
   //      ONLY when this stream is still the channel's latest one, running or
   //      being stopped (K1: a reconnect that superseded it during the stop
   //      must not have its successor deactivated, see _reportChannelStopped)
-  // Returns false when no ASR was registered for the channel.
-  async _stopAsr(session, channelId) {
+  // Returns false when no ASR was registered for the channel, or when `stream`
+  // (the stream that stopped, if the server passes it) is not the one the
+  // channel's legacy ASR or per-stream context serves: a replaced connection
+  // whose own close or worker exit comes late must not stop the newer stream.
+  async _stopAsr(session, channelId, stream) {
     const ck = `${session.id}_${channelId}`;
     // Per-stream channels keep their ASR under `${ck}#${tag}`; legacy under `${ck}`.
-    // Match both so a channel's every sub-ASR is torn down (0 orphans).
-    const subKeys = [...this.ASRs.keys()].filter(k => k === ck || k.startsWith(`${ck}#`));
+    // Without a stream, match both so a channel's every sub-ASR is torn down
+    // (0 orphans); with one, only the keys of that stream.
+    let ofStream = (k) => k === ck || k.startsWith(`${ck}#`);
+    if (stream !== undefined) {
+      const legacy = this.ASRs.get(ck);
+      const ctx = this.channels.get(ck);
+      if (legacy && this.asrStreams.get(legacy) === stream) {
+        ofStream = (k) => k === ck;
+      } else if (ctx && ctx.stream === stream) {
+        ofStream = (k) => k.startsWith(`${ck}#`);
+      } else {
+        logger.info(`Session ${session.id}, channel ${channelId}: stop of a replaced stream ignored`);
+        return false;
+      }
+    }
+    const subKeys = [...this.ASRs.keys()].filter(ofStream);
 
     if (subKeys.length === 0) {
       // D3a lazy hole: a per-stream channel that was marked at session-start but

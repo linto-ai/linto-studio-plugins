@@ -229,7 +229,7 @@ class MultiplexedSRTServer extends EventEmitter {
             this.handleWorkerEvents(connection, fd, worker);
             this.handleConnectionEvents(connection, fd, worker, readerWriter);
             logger.info(`Session ${session.name} starts.`, {sessionId: session.id, channelId: channel.id});
-            this.emit('session-start', fd.session, fd.channel);
+            this.emit('session-start', fd.session, fd.channel, fd);
             this.addRunningSession(session, connection, fd, worker);
         } finally {
             this.pendingChannels.delete(channel.id);
@@ -357,6 +357,9 @@ class MultiplexedSRTServer extends EventEmitter {
         }
     }
 
+    // Cleans up one stream (fd: one per connection), once: a later call for the
+    // same stream (e.g. a read that fails on the replaced connection) removes
+    // only its own entries and never stops the channel's newer stream.
     cleanupConnection(connection, fd, worker) {
         // Reachable from the sentinel, the worker, and our own closed/error handlers,
         // sometimes for the same connection. The teardown below must happen once, but
@@ -369,7 +372,7 @@ class MultiplexedSRTServer extends EventEmitter {
 
         if (!alreadyCleaned) {
             // Tell the streaming server controller to forward the session stop message to the broker
-            this.emit('session-stop', fd.session, fd.channel.id)
+            this.emit('session-stop', fd.session, fd.channel.id, fd)
             logger.info(`Connection: ${connection.fd} --> cleaning up.`, this.getLogMeta(fd));
             if (connection) {
                 // Remove only our own listeners: removeAllListeners() would also strip
@@ -396,12 +399,12 @@ class MultiplexedSRTServer extends EventEmitter {
         }
 
         if (this.runningSessions[fd.session.id]) {
-            this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd.channel.id !== fd.channel.id);
+            this.runningSessions[fd.session.id] = this.runningSessions[fd.session.id].filter(item => item.fd !== fd);
             if (this.runningSessions[fd.session.id].length === 0) {
                 delete this.runningSessions[fd.session.id];
             }
         }
-        if (this.runningChannels[fd.channel.id]) {
+        if (this.runningChannels[fd.channel.id] && this.runningChannels[fd.channel.id].fd === fd) {
             delete this.runningChannels[fd.channel.id]
         }
     }

@@ -328,6 +328,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
                 if (p.tag !== undefined) m.set(p.tag, p);
             }
             this.streamParticipants.set(trackerKey, m);
+            fd.streamParticipants = m;
             logger.info(`Per-stream diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${m.size} initial participants: ${[...m.values()].map(p => `${p.tag}=${p.name || p.id}`).join(', ')}, mixedRecording=${fd.mixedRecording})`);
         } else if (fd.diarizationMode === 'native') {
             const tracker = new SpeakerTracker();
@@ -335,6 +336,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
                 tracker.updateParticipant({ action: 'join', participant });
             }
             this.speakerTrackers.set(trackerKey, tracker);
+            fd.speakerTracker = tracker;
             logger.info(`Native diarization enabled for session ${fd.session.id}, channel ${fd.channel.id} (${(initMessage.participants || []).length} initial participants)`);
         }
 
@@ -379,7 +381,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   }
 
   initPcm(ws, fd) {
-      this.emit('session-start', fd.session, fd.channel);
+      this.emit('session-start', fd.session, fd.channel, fd);
       this.addRunningSession(fd.session, ws, fd, null);
       ws.on("close", () => {
           logger.info(`Connection: ${ws} --> closed`);
@@ -390,6 +392,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
           this.cleanupWebsocket(ws, fd);
       });
       return (message, isBinary) => {
+          // A cleaned up (e.g. replaced) connection's frames must not reach the
+          // channel's newer stream.
+          if (fd.stopEmitted) return;
           // A bot stream interleaves binary PCM with JSON control messages
           // (speakerChanged / participant) for native diarization. Only audio may
           // reach the ASR: a control message fed as audio is heard as noise and,
@@ -629,10 +634,11 @@ class MultiplexedWebsocketServer extends EventEmitter {
       // - call scheduler to update session status to active
       // - start buffering audio in circular buffer
       // - start transcription
-      this.emit('session-start', fd.session, fd.channel);
+      this.emit('session-start', fd.session, fd.channel, fd);
       this.addRunningSession(fd.session, ws, fd, worker);
 
       return (message, isBinary) => {
+          if (fd.stopEmitted) return;
           // Same frame contract as the PCM path: only audio reaches the decoder.
           // No sample alignment here: the payload is an encoded stream.
           if (this.handleControlMessage(fd, message, isBinary)) return;
@@ -643,7 +649,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
   // Events sent by the worker
   handleWorkerEvents(ws, fd, worker) {
       worker.on('message', async (message) => {
-          if (message.type === 'data') {
+          if (message.type === 'data' && !fd.stopEmitted) {
               this.emit('data', message.buf, fd.session.id, fd.channel.id);
           }
           if (message.type === 'error') {
@@ -666,6 +672,9 @@ class MultiplexedWebsocketServer extends EventEmitter {
       });
   }
 
+  // Cleans up one stream (fd: one per connection), passed along with
+  // 'session-stop' so that the StreamingServer stops that stream's ASR only.
+  //
   // S1: cleanup is keyed on the CONNECTION, not only on the channel id. A
   // replaced connection (see "Will replace existing connection" in
   // validateStream) is closed synchronously by onConnection, but its OWN
@@ -691,8 +700,8 @@ class MultiplexedWebsocketServer extends EventEmitter {
       // K10: teardown is IDEMPOTENT PER CONNECTION. `fd` is minted once per
       // connection in onConnection and is never shared with a successor, so it
       // is the only teardown identity there is — 'session-stop' is a CHANNEL
-      // event, and _stopAsr, which receives just (session, channelId), cannot
-      // tell a duplicate stop from a legitimate successor stop.
+      // event: _stopAsr gets `fd` with it to stop that stream's ASR only, and
+      // this latch keeps the connection from publishing a second stop.
       // One connection reaches this function several times:
       //   - an abnormal socket close fires 'error' AND 'close', both wired to
       //     cleanupWebsocket (initPcm/initWorker);
@@ -717,7 +726,7 @@ class MultiplexedWebsocketServer extends EventEmitter {
       // this latch exists to prevent.
       if (fd && !superseded && !fd.stopEmitted) {
         fd.stopEmitted = true;
-        this.emit('session-stop', fd.session, fd.channel.id)
+        this.emit('session-stop', fd.session, fd.channel.id, fd)
       }
       if (fd) fd.stopEmitted = true;
 
@@ -754,14 +763,19 @@ class MultiplexedWebsocketServer extends EventEmitter {
       if (fd && !superseded && this.runningChannels[fd.channel.id]) {
           delete this.runningChannels[fd.channel.id];
       }
-      if (fd && !superseded) {
+      // The channel's tracker and participant map are this connection's only if
+      // it created them at init: never a newer connection's of the channel.
+      const trackerKey = fd && `${fd.session.id}_${fd.channel.id}`;
+      if (fd && !superseded && this.speakerTrackers.get(trackerKey) === fd.speakerTracker) {
           // Drop the map reference (a reconnect gets a fresh tracker) but do NOT
           // clear() it synchronously: session-stop triggers an async ASR flush
           // (flushFinals) whose trailing finals still read this tracker to stamp
           // their speaker. The ASR holds the reference; GC reclaims it after dispose.
-          this.speakerTrackers.delete(`${fd.session.id}_${fd.channel.id}`);
+          this.speakerTrackers.delete(trackerKey);
+      }
+      if (fd && !superseded && this.streamParticipants.get(trackerKey) === fd.streamParticipants) {
           // Symmetric cleanup of the per-stream participant map (twin of above).
-          this.streamParticipants.delete(`${fd.session.id}_${fd.channel.id}`);
+          this.streamParticipants.delete(trackerKey);
       }
   }
 }

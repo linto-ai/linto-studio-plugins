@@ -91,8 +91,16 @@ one `session-start` per accepted connection, and **one `session-stop` per channe
 handover**, emitted by the owner only. A normal (unreplaced) close is unaffected:
 it owns its channel, so it takes the full teardown path exactly as before.
 
-SRT and RTMP are untouched — neither multiplexes two sockets onto one channel the
-way the WS server does.
+Every server also passes its stream object (`fd`, one per connection) with
+`session-start` and `session-stop`: the StreamingServer ignores the stop of a
+stream that its channel's ASR no longer serves, so a late cleanup can never stop
+the newer stream (SRT also cleans a connection up once, see `cleanupConnection`).
+Frames that still arrive on a cleaned-up WS connection, or from its GStreamer
+worker, are dropped instead of reaching the newer stream, and RTMP drops the
+data of a worker it already cleaned up.
+
+SRT and RTMP do not multiplex two sockets onto one channel the way the WS server
+does.
 
 ## Per-stream ingest (bot WS only)
 

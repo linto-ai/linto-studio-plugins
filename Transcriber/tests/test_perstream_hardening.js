@@ -117,10 +117,13 @@ describe('WebsocketServer per-stream hardening', () => {
     }
     const session = { id: 's' };
 
+    // As handleInitMessage does: the connection's own tracker and participant map.
     function connect(ws) {
       const fd = { session, channel: { id: 'c' } };
-      server.streamParticipants.set('s_c', new Map([[0, { id: 'u0', name: 'P0', tag: 0 }]]));
-      server.speakerTrackers.set('s_c', { marker: ws.name });
+      fd.streamParticipants = new Map([[0, { id: 'u0', name: 'P0', tag: 0 }]]);
+      fd.speakerTracker = { marker: ws.name };
+      server.streamParticipants.set('s_c', fd.streamParticipants);
+      server.speakerTrackers.set('s_c', fd.speakerTracker);
       server.addRunningSession(session, ws, fd, null);
       return fd;
     }
@@ -201,8 +204,8 @@ describe('WebsocketServer per-stream hardening', () => {
       const stops = [];
       server.on('session-stop', (s, cid) => stops.push([s.id, cid]));
       const ws = new FakeSocket('only');
-      const fd = { session, channel: { id: 'c' }, perStream: true };
-      server.streamParticipants.set('s_c', new Map());
+      const fd = { session, channel: { id: 'c' }, perStream: true, streamParticipants: new Map() };
+      server.streamParticipants.set('s_c', fd.streamParticipants); // as handleInitMessage does
 
       server.initPcm(ws, fd);   // wires cleanupWebsocket to BOTH 'close' and 'error'
       ws.emit('error');

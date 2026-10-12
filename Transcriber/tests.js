@@ -16,6 +16,7 @@ require('./tests/test_asr_flush_finals.js');
 require('./tests/test_asr_empty_finals.js');
 require('./tests/test_asr_transcribe_copy.js');
 require('./tests/test_streaming_server_stop.js');
+require('./tests/test_replaced_stream.js');
 require('./tests/test_segment_continuity.js');
 require('./tests/test_kept_audio.js');
 require('./tests/test_security_diag.js');

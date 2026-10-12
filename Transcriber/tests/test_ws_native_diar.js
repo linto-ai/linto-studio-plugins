@@ -388,10 +388,19 @@ describe('WebsocketServer cleanupWebsocket and tracker isolation', () => {
   });
 
   it('deletes the SpeakerTracker keyed by sessionId_channelId when fd is provided', () => {
-    const fd = { session: { id: 's' }, channel: { id: 'c' } };
-    server.speakerTrackers.set('s_c', new SpeakerTracker());
+    const tracker = new SpeakerTracker();
+    const fd = { session: { id: 's' }, channel: { id: 'c' }, speakerTracker: tracker }; // as set at init
+    server.speakerTrackers.set('s_c', tracker);
     server.cleanupWebsocket(null, fd, null);
     assert.equal(server.speakerTrackers.has('s_c'), false);
+  });
+
+  it("keeps the channel's newer stream tracker when an older stream is cleaned up late", () => {
+    const older = new SpeakerTracker();
+    const newer = new SpeakerTracker();
+    server.speakerTrackers.set('s_c', newer);
+    server.cleanupWebsocket(null, { session: { id: 's' }, channel: { id: 'c' }, speakerTracker: older }, null);
+    assert.equal(server.speakerTrackers.get('s_c'), newer);
   });
 
   it('does not touch any tracker when fd is null', () => {
@@ -408,7 +417,7 @@ describe('WebsocketServer cleanupWebsocket and tracker isolation', () => {
     assert.equal(server.getSpeakerTracker('s', 'c1'), t1);
     assert.equal(server.getSpeakerTracker('s', 'c2'), t2);
     // Cleaning up one channel leaves the sibling intact.
-    server.cleanupWebsocket(null, { session: { id: 's' }, channel: { id: 'c1' } }, null);
+    server.cleanupWebsocket(null, { session: { id: 's' }, channel: { id: 'c1' }, speakerTracker: t1 }, null);
     assert.equal(server.getSpeakerTracker('s', 'c1'), null);
     assert.equal(server.getSpeakerTracker('s', 'c2'), t2);
   });

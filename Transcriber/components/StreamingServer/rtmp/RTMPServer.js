@@ -196,7 +196,7 @@ class MultiplexedRTMPServer extends EventEmitter {
           // Canonical path rebuilt from the validated parts, never the raw one.
           worker.send({ type: 'init', streamPath: safePath });
           this.handleWorkerEvents(nmsSessionId, fd, worker);
-          this.emit('session-start', fd.session, fd.channel);
+          this.emit('session-start', fd.session, fd.channel, fd);
           this.addRunningSession(session, nmsSessionId, fd, worker);
       } finally {
           this.pendingChannels.delete(channel.id);
@@ -206,7 +206,8 @@ class MultiplexedRTMPServer extends EventEmitter {
   // Events sent by the worker
   handleWorkerEvents(nmsSessionId, fd, worker) {
       worker.on('message', async (message) => {
-          if (message.type === 'data') {
+          // Not once the stream is cleaned up: a newer stream may serve the channel.
+          if (message.type === 'data' && this.workers.hasOwnProperty(nmsSessionId)) {
               this.emit('data', Buffer.from(message.buf), fd.session.id, fd.channel.id);
           }
           if (message.type === 'error') {
@@ -230,7 +231,7 @@ class MultiplexedRTMPServer extends EventEmitter {
       const [fd, worker] = this.workers.hasOwnProperty(nmsSessionId) ? this.workers[nmsSessionId] : [null, null];
 
       if (fd) {
-          this.emit('session-stop', fd.session, fd.channel.id);
+          this.emit('session-stop', fd.session, fd.channel.id, fd);
       }
 
       if (worker) {

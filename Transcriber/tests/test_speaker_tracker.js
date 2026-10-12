@@ -532,6 +532,27 @@ describe('SpeakerTracker unattributed speaker', () => {
     assert.equal(t.getSpeakerForSegment(5), null, "Bob's words are not Carol's");
   });
 
+  it('is not named when another unattributed track takes over without silence (overlap before mapping)', () => {
+    const { ref, t } = aliceSpeaking();
+    ref.now = 2000;
+    t.addSpeakerChange(unattributed(1000)); // Bob's track
+    t.assignSpeakerToSegment(5);
+    ref.now = 2100;
+    t.finalizeSegment(5);
+    t.addSpeakerChange(unattributed(1100)); // Carol's track dominates: its own null
+    t.assignSpeakerToSegment(6);
+    ref.now = 2200;
+    t.finalizeSegment(6);
+    t.addSpeakerChange(unattributed(1200)); // Bob's again: a new episode
+    t.assignSpeakerToSegment(7);
+    ref.now = 2300;
+    mapped(t, BOB, 1300);
+    t.finalizeSegment(7);
+    assert.equal(t.getSpeakerForSegment(7).id, 'u2');
+    assert.equal(t.getSpeakerForSegment(6), null, "Carol's words are not Bob's");
+    assert.equal(t.getSpeakerForSegment(5), null, 'an earlier episode stays unknown');
+  });
+
   it('is named once: a later mapping or a grace-period correction does not rename it', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;

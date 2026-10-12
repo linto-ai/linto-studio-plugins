@@ -342,7 +342,7 @@ describe('BrokerClient bot routing (BotService)', () => {
         const notices = sessionUpdates.map(u => u.values.endedNotice);
         assert.equal(notices.length, 3);
         assert.equal(notices[0], 'pending');
-        assert.match(notices[1], /^sending:[0-9a-f]{8}$/);
+        assert.match(notices[1], /^sending:[0-9a-f]{16}$/);
         assert.equal(notices[2], null);
         assert.equal(sessionUpdates[0].values.status, 'terminated');
         assert.ok(sessionUpdates[0].values.endTime instanceof Date);

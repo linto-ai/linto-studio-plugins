@@ -197,3 +197,30 @@ describe('Durable sessions/ended (endedNotice)', () => {
         assert.deepStrictEqual(ended(mqttPublishes), ['s1']);
     });
 });
+
+describe('endedNotice claim size', () => {
+    const path = require('path');
+    afterEach(() => uninstallMocks());
+
+    // The column, as the migration creates it and as lib's model declares it.
+    async function columnLength() {
+        const libDir = path.dirname(require.resolve('live-srt-lib'));
+        const Sequelize = require(require.resolve('sequelize', { paths: [libDir] }));
+        const migration = require(path.resolve(__dirname, '../../migration/migrations/20261012000000-add-session-ended-notice.js'));
+        let column;
+        await migration.up({ addColumn: async (table, name, definition) => { column = definition; } }, Sequelize);
+        const { Session } = require(path.join(libDir, 'model/model.js'));
+        assert.strictEqual(Session.rawAttributes.endedNotice.type.options.length, column.type.options.length, 'model and migration agree');
+        return column.type.options.length;
+    }
+
+    it('fits the claim the Scheduler stores, with room to spare', async () => {
+        const db = database([session('s1')]);
+        const { instance } = await loadBrokerClient({ model: db.model });
+        await instance.endBotSession('s1');
+        const claim = db.updates.find((u) => typeof u.values.endedNotice === 'string' && u.values.endedNotice.startsWith('sending:')).values.endedNotice;
+        const { ENDED_NOTICE_CLAIM_LENGTH } = require('../components/BrokerClient/index.js');
+        assert.strictEqual(claim.length, ENDED_NOTICE_CLAIM_LENGTH);
+        assert.ok(ENDED_NOTICE_CLAIM_LENGTH < await columnLength());
+    });
+});

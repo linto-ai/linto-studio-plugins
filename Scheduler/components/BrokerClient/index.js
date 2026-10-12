@@ -5,6 +5,11 @@ const { MqttClient, Component, Model, logger } = require('live-srt-lib')
 // publishSessionEnded): beyond the publication's acknowledgment timeout, after
 // which a claim left by a crashed Scheduler can be taken again.
 const ENDED_NOTICE_LEASE_MS = 60 * 1000;
+// The claim stored in sessions.endedNotice: 'sending:' and this many random
+// hex digits, ENDED_NOTICE_CLAIM_LENGTH characters in all, well within the
+// column (STRING(64), see the endedNotice migration and lib's model).
+const ENDED_NOTICE_CLAIM_HEX_DIGITS = 16;
+const ENDED_NOTICE_CLAIM_LENGTH = 'sending:'.length + ENDED_NOTICE_CLAIM_HEX_DIGITS;
 
 // Captions and translated captions reference their channel, deleted with its
 // session (ON DELETE CASCADE): a foreign-key violation on insert means the
@@ -284,7 +289,7 @@ class BrokerClient extends Component {
         { streamStatus: 'inactive' },
         { where: { sessionId } }
       );
-      const claim = `sending:${crypto.randomBytes(4).toString('hex')}`;
+      const claim = `sending:${crypto.randomBytes(ENDED_NOTICE_CLAIM_HEX_DIGITS / 2).toString('hex')}`;
       const now = new Date();
       const [claimed, claimedSessions] = await Model.Session.update(
         { endedNotice: claim, endedNoticeLeaseUntil: new Date(now.getTime() + ENDED_NOTICE_LEASE_MS) },
@@ -1196,3 +1201,4 @@ class BrokerClient extends Component {
 }
 
 module.exports = app => new BrokerClient(app);
+module.exports.ENDED_NOTICE_CLAIM_LENGTH = ENDED_NOTICE_CLAIM_LENGTH;

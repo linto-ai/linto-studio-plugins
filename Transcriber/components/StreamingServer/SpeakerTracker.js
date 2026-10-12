@@ -1,12 +1,21 @@
 const { logger } = require('live-srt-lib')
 
 const DEFAULT_GRACE_PERIOD_MS = 200
-// After a `reason: 'unattributed'` null, how long the bot's `reason: 'mapped'`
-// change naming the participant the track got mapped to can still name the
-// time heard from the speaker the bot could not name. The bot sends it as soon
-// as the track is mapped, ~250 ms on an SFU: 1.5 s covers that delay several
-// times over, event and network jitter included.
+// How long the `reason: 'mapped'` change naming the participant an unmapped
+// track got mapped to can still name the speech heard from that track: from
+// the track's first `unattributed` null (tagged changes) or from the null
+// (untagged). The bot sends it as soon as the track is mapped, ~250 ms on an
+// SFU: 1.5 s covers that delay several times over, event and network jitter
+// included.
 const DEFAULT_UNATTRIBUTED_WINDOW_MS = 1500
+// Cap of the unmapped-track tags remembered (with the time their window
+// opened), dropped oldest first: a handful per meeting in practice.
+const MAX_TRACKED_TRACKS = 256
+// The `track` tag of an unattributed/mapped change: an opaque non-empty string,
+// compared as is. Senders that do not tag their changes get the latest-episode
+// rule (see addSpeakerChange).
+const trackOf = (event) => (typeof event.track === 'string' && event.track !== '' ? event.track : null)
+
 // Cap of the in-memory diarization-event ring kept for debugging. Bounded so a
 // long-running channel can never grow it without limit (one entry per
 // assignment/correction, dropped FIFO past this size).
@@ -25,9 +34,9 @@ const DEFAULT_EVENT_RING_SIZE = 50
  *     later call refreshes it: the segment's label follows the current speaker,
  *     so each partial carries who is speaking now;
  *   - while a segment is open, the tracker accumulates speaking time per
- *     participant (speaker-change events split the segment into intervals);
+ *     speaker (speaker-change events split the segment into intervals);
  *   - `finalizeSegment` closes it on the ASR final and freezes the label on the
- *     participant who spoke the longest during the segment (majority);
+ *     speaker who spoke the longest during the segment (majority);
  *   - a short grace period lets a speakerChanged that arrives just after the
  *     segment's first partial re-attribute the segment from its start to the
  *     new speaker (ASR partial vs bot event race);
@@ -37,10 +46,14 @@ const DEFAULT_EVENT_RING_SIZE = 50
  *     previous one, and a segment's label shows nobody while they speak. Only
  *     the bot's `{ speaker, reason: 'mapped' }` change, naming the participant
  *     that unattributed track was just mapped to, names that time, within the
- *     unattributed window, and only for its own episode (the latest null).
- *     Otherwise it stays unnamed (unknown beats wrong): unnamed time that wins
- *     a segment's majority leaves it without speaker. A null without reason is
+ *     unattributed window. Unnamed time that wins a segment's majority leaves
+ *     it without speaker (unknown beats wrong). A null without reason is
  *     silence.
+ *   - with a `track` tag on both changes, the bot names the unmapped track
+ *     speaking each time it becomes the speaker (again): the time track T is
+ *     the speaker is T's, and only `mapped` of T names it, whichever track is
+ *     speaking by then. T's window opens at its first null. Without a tag, a
+ *     `mapped` change names the time of the latest null.
  */
 class SpeakerTracker {
   constructor (options = {}) {
@@ -54,7 +67,7 @@ class SpeakerTracker {
     //     order; `key` is a participant id, or the key of an unnamed speaker
     //     (see _unnamed), whose entry in `unattributed` says whether, and by
     //     whom, it got named;
-    //   unattributed: Map<key, { episode, pendingUntil, speaker }>, the
+    //   unattributed: Map<key, { track, episode, pendingUntil, speaker }>, the
     //     unnamed speakers heard in the segment;
     //   openSpeaker: the participant or the unnamed speaker holding the floor
     //     (null during silence), since openSince;
@@ -64,10 +77,15 @@ class SpeakerTracker {
     this.gracePeriodMs = options.gracePeriodMs != null ? options.gracePeriodMs : DEFAULT_GRACE_PERIOD_MS
     this.unattributedWindowMs = options.unattributedWindowMs != null ? options.unattributedWindowMs : DEFAULT_UNATTRIBUTED_WINDOW_MS
     // Time of the 'unattributed' null the current state comes from, null when
-    // the current state is a speaker or silence. Each null opens a new
-    // episode: a 'mapped' change names the latest episode's time only.
+    // the current state is a speaker or silence. Each untagged null opens a
+    // new episode: an untagged 'mapped' change names the latest episode's
+    // time only. A tagged null makes its track the current one
+    // (currentTrack), its window opening at that track's first null
+    // (trackSince).
     this.unattributedSince = null
     this.unattributedEpisode = 0
+    this.currentTrack = null
+    this.trackSince = new Map() // track tag -> time of its first unattributed null
     // Bounded ring of recent diarization events for offline debugging of locutor
     // accuracy. Not on any hot path (one push per assignment/correction/final).
     this.eventRingSize = options.eventRingSize != null ? options.eventRingSize : DEFAULT_EVENT_RING_SIZE
@@ -104,12 +122,13 @@ class SpeakerTracker {
     return speaker
   }
 
-  // The speaker the bot cannot name yet, when one is speaking: the latest
-  // episode's.
+  // The speaker the bot cannot name yet, when one is speaking: the current
+  // track (tagged), or the latest episode (untagged).
   _unnamed () {
     if (this.unattributedSince === null) return null
+    const track = this.currentTrack
     const episode = this.unattributedEpisode
-    return { unnamed: true, episode, key: `episode:${episode}` }
+    return { unnamed: true, track, episode, key: track !== null ? `track:${track}` : `episode:${episode}` }
   }
 
   updateParticipant (message) {
@@ -155,11 +174,14 @@ class SpeakerTracker {
   }
 
   // The unnamed speaker takes the floor in an open segment: its time can be
-  // named until the window of its unattributed null ends.
+  // named until its window ends, counted from its track's first null (tagged)
+  // or from the unattributed null (untagged).
   _openUnnamed (entry, unnamed) {
     if (!entry.unattributed.has(unnamed.key)) {
-      const pendingUntil = this.unattributedSince + this.unattributedWindowMs
+      const start = unnamed.track !== null ? this.trackSince.get(unnamed.track) : this.unattributedSince
+      const pendingUntil = start + this.unattributedWindowMs
       entry.unattributed.set(unnamed.key, {
+        track: unnamed.track,
         episode: unnamed.episode,
         pendingUntil: this._now() <= pendingUntil ? pendingUntil : null,
         speaker: null
@@ -194,32 +216,43 @@ class SpeakerTracker {
   }
 
   addSpeakerChange (event) {
+    const track = trackOf(event)
     const now = this._now()
     if (!event.speaker) {
       this.currentSpeaker = null
       if (event.reason === 'unattributed') {
-        this._setUnattributed(event, now)
-        return
-      }
-      // Silence: the clock stops, the open segments keep their label.
-      this.unattributedSince = null
-      for (const entry of this.segmentSpeakers.values()) {
-        if (entry.final) continue
-        this._accrue(entry, now)
-        entry.openSpeaker = null
+        this._setUnattributed(event, track, now)
+      } else {
+        // Silence: the clock stops, the open segments keep their label.
+        this.unattributedSince = null
+        this.currentTrack = null
+        for (const entry of this.segmentSpeakers.values()) {
+          if (entry.final) continue
+          this._accrue(entry, now)
+          entry.openSpeaker = null
+        }
       }
       return
     }
-    // The unnamed speaker's time is named only by the 'mapped' change of its
-    // episode (the latest), within the window. Any other speaker (e.g. a
-    // participant answering the newcomer, another newcomer) never names it,
-    // nor does a grace-period correction.
+    if (event.reason === 'mapped' && track !== null && track !== this.currentTrack) {
+      // A track mapped while it is not the speaker (another one is, or nobody):
+      // names its time, the current speaker is unchanged.
+      this._resolvePending(event, (slot) => slot.track === track)
+      return
+    }
+    // A segment's unnamed time is named only by the 'mapped' change of its
+    // track (untagged: of its episode, the latest), within the window. Any
+    // other speaker (e.g. a participant answering the newcomer, another
+    // newcomer) never names it, nor does a grace-period correction.
     if (event.reason === 'mapped') {
       const episode = this.unattributedEpisode
-      this._resolvePending(event, (slot) => slot.episode === episode)
+      this._resolvePending(event, track !== null
+        ? (slot) => slot.track === track
+        : (slot) => slot.track === null && slot.episode === episode)
     }
     this.currentSpeaker = event.speaker
     this.unattributedSince = null
+    this.currentTrack = null
     this.lastKnownSpeaker = event.speaker
     const present = this._presentSpeaker(event.speaker)
     for (const [segmentId, entry] of this.segmentSpeakers) {
@@ -240,20 +273,31 @@ class SpeakerTracker {
     }
   }
 
-  // Someone the bot cannot name yet is speaking.
-  _setUnattributed (event, now) {
+  // Someone the bot cannot name yet is speaking: `track` (tagged) or the
+  // latest untagged null's speaker.
+  _setUnattributed (event, track, now) {
     this.unattributedEpisode += 1
     this.unattributedSince = now
+    this.currentTrack = track
+    if (track !== null && !this.trackSince.has(track)) {
+      this.trackSince.set(track, now)
+      if (this.trackSince.size > MAX_TRACKED_TRACKS) this.trackSince.delete(this.trackSince.keys().next().value)
+    }
     this._recordEvent(event.position, 'unattributed', null)
     const unnamed = this._unnamed()
     for (const [segmentId, entry] of this.segmentSpeakers) {
       if (entry.final) continue
       // Same race as the grace-period correction: a segment assigned a few ms
-      // before this event most likely holds the unnamed speaker's first words,
-      // not the previous speaker's.
-      if (!entry.startedUnattributed && now - entry.assignedAt < this.gracePeriodMs) {
-        this._reattribute(segmentId, entry, unnamed)
-        continue
+      // before this event most likely holds this speaker's first words, not the
+      // previous speaker's, nor another unmapped track's.
+      if (now - entry.assignedAt < this.gracePeriodMs) {
+        const otherTrack = entry.startedUnattributed && track !== null &&
+          entry.startTrack !== null && entry.startTrack !== track
+        if (!entry.startedUnattributed || otherTrack) {
+          entry.startTrack = track
+          this._reattribute(segmentId, entry, unnamed)
+          continue
+        }
       }
       this._accrue(entry, now)
       this._openUnnamed(entry, unnamed)
@@ -314,6 +358,7 @@ class SpeakerTracker {
       openSpeaker: null,
       openSince: now,
       startedUnattributed: false,
+      startTrack: null,
       finalUnnamed: null
     }
     this.segmentSpeakers.set(segmentId, entry)
@@ -321,6 +366,7 @@ class SpeakerTracker {
     if (unnamed) {
       // Someone the bot cannot name yet is speaking: no lastKnownSpeaker fallback.
       entry.startedUnattributed = true
+      entry.startTrack = unnamed.track
       this._openUnnamed(entry, unnamed)
       logger.debug(`SpeakerTracker: segment ${segmentId} unattributed`)
       this._recordEvent(segmentId, 'pending', null)
@@ -336,11 +382,11 @@ class SpeakerTracker {
 
   // Close a segment on its ASR final: freeze the label on the speaker with the
   // most accumulated speaking time during the segment (ties: first to have
-  // spoken). Unnamed time counts for the speaker who named it, and for nobody
-  // otherwise: unnamed time that wins leaves the segment without speaker,
-  // until it gets named, if still within its window. A segment with no
-  // accumulated time (final without any partial, or pure fallback) keeps its
-  // live label. Opens the segment first if needed.
+  // spoken). Unnamed time counts for the participant its track got mapped to,
+  // and for nobody otherwise: unnamed time that wins leaves the segment without
+  // speaker, until its track's mapping, if still within its window. A segment
+  // with no accumulated time (final without any partial, or pure fallback)
+  // keeps its live label. Opens the segment first if needed.
   finalizeSegment (segmentId) {
     if (segmentId == null) return
     if (!this.segmentSpeakers.has(segmentId)) this.assignSpeakerToSegment(segmentId)
@@ -394,6 +440,8 @@ class SpeakerTracker {
     this.lastKnownSpeaker = null
     this.unattributedSince = null
     this.unattributedEpisode = 0
+    this.currentTrack = null
+    this.trackSince.clear()
     this._events = []
   }
 

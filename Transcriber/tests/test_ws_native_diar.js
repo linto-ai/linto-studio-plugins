@@ -28,6 +28,21 @@ describe('WebsocketServer native-diarization control routing', () => {
     assert.equal(tracker.currentSpeaker.id, 'u1');
   });
 
+  it('routes the track tag of an unattributed/mapped speakerChanged to the tracker', () => {
+    const control = (event) => Buffer.from(JSON.stringify(Object.assign({ type: 'speakerChanged' }, event)));
+    let now = 1000;
+    tracker._now = () => now;
+    server.handleControlMessage(fd, control({ position: 0, speaker: null, reason: 'unattributed', track: 'c3:1.0' }));
+    tracker.assignSpeakerToSegment(1);
+    now = 1400;
+    server.handleControlMessage(fd, control({ position: 400, speaker: null, reason: 'unattributed', track: 'c3:2.0' }));
+    now = 1500;
+    server.handleControlMessage(fd, control({ position: 500, speaker: { id: 'u2', name: 'Bob' }, reason: 'mapped', track: 'c3:1.0' }));
+    tracker.finalizeSegment(1); // c3:1.0 400 ms (now Bob), c3:2.0 100 ms
+    assert.equal(tracker.getSpeakerForSegment(1).id, 'u2');
+    assert.equal(tracker.currentTrack, 'c3:2.0');
+  });
+
   it('routes a participant join/leave control message to the tracker', () => {
     const join = Buffer.from(JSON.stringify({ type: 'participant', action: 'join', participant: { id: 'u1', name: 'Alice' } }));
     assert.equal(server.handleControlMessage(fd, join), true);

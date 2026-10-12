@@ -63,6 +63,10 @@ class BrokerClient extends Component {
     // hold a context of the pool, so they count in the advertised load, and a new
     // bot for the same channel waits for its predecessor's.
     this.disposing = new Map()
+    // Starts in progress, per channel: { cancelled }. A stopbot for the channel,
+    // or a newer startbot, cancels it, even while it waits for the previous bot
+    // to leave (there is no record to stop yet then).
+    this.pendingStarts = new Map()
     this.heartbeatTimer = null
     this.lastPublishedCount = -1
 
@@ -203,7 +207,25 @@ class BrokerClient extends Component {
       return
     }
     logger.info(`BotService: starting bot ${key} (${botType})`)
-    await this.stopBot(session.id, channel.id) // replace any stale instance, or wait for the one leaving
+    const start = { cancelled: false }
+    const superseded = this.pendingStarts.get(key)
+    if (superseded) superseded.cancelled = true
+    this.pendingStarts.set(key, start)
+    try {
+      await this._startBot(key, start, { session, channel, address, botType, websocketUrl, botId })
+    } finally {
+      if (this.pendingStarts.get(key) === start) this.pendingStarts.delete(key)
+    }
+  }
+
+  async _startBot (key, start, { session, channel, address, botType, websocketUrl, botId }) {
+    await this._stopChannel(key) // replace any stale instance, or wait for the one leaving
+    if (start.cancelled) {
+      // Stopped (or superseded by a newer startbot) while the previous bot left:
+      // nothing joined, nothing to report.
+      logger.info(`BotService: start of bot ${key} (botId ${botId}) cancelled before joining`)
+      return
+    }
 
     this.metrics.botJoinAttempts++
 
@@ -230,20 +252,22 @@ class BrokerClient extends Component {
     // Join the meeting BEFORE opening the Transcriber WS: login can be slow and
     // we don't want the Transcriber's connection-idle timeout to fire mid-join.
     const ok = await bot.init()
+    // A stopbot (or a newer startbot) that arrived during the (slow) init removed
+    // our record: the bot was stopped on purpose, so a join that failed meanwhile
+    // is no join failure to report. Make sure it is disposed (idempotent).
+    if (this.bots.get(key) !== record || start.cancelled) {
+      logger.info(`BotService: bot ${key} was stopped during init, disposing orphan`)
+      if (this.bots.get(key) === record) await this._stopChannel(key)
+      else if (record.stopping) await this.disposing.get(record) // the stop disposes it
+      else await this._dispose(key, record, () => bot.dispose())
+      this._publishStatus()
+      return
+    }
     if (!ok) {
       // A failed join is a fatal bot error.
       this.metrics.botJoinFailures++
       this._publishBotError(botId, 'join-failed')
-      await this.stopBot(session.id, channel.id)
-      return
-    }
-    // A stopbot that arrived during the (slow) init replaced/removed our record:
-    // the just-initialized bot is now an orphan — dispose it directly (stopBot
-    // would no-op on the missing key and leak the live context).
-    if (this.bots.get(key) !== record) {
-      logger.info(`BotService: bot ${key} was stopped during init, disposing orphan`)
-      await this._dispose(key, record, () => bot.dispose())
-      this._publishStatus()
+      await this._stopChannel(key)
       return
     }
 
@@ -272,7 +296,7 @@ class BrokerClient extends Component {
       this._publishBotError(botId, error.message || 'bot-error')
       // Surface a teardown failure instead of swallowing it (it would otherwise
       // leak the browser context / mixer / ws).
-      this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
+      this.stopBot(bot.session.id, bot.channel.id, record).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
     // Count participant churn (joins + leaves) reported by the bot.
     bot.on('participant-joined', () => { this.metrics.participantChurn++ })
@@ -284,7 +308,7 @@ class BrokerClient extends Component {
       // stores the conversation. endSession distinguishes this from a plain bot
       // removal (DELETE /bots) or a never-admitted leave.
       this._requestSchedulerCleanup(botId, { endSession: true })
-      this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
+      this.stopBot(bot.session.id, bot.channel.id, record).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
     // A join-watchdog leave (never admitted: wrong link / not admitted / empty
     // room) is a FAILURE, not a clean empty-meeting leave. Record it as a distinct
@@ -293,7 +317,7 @@ class BrokerClient extends Component {
       logger.warn(`BotService: bot ${key} (botId ${botId}) never admitted (join timeout), leaving`)
       this._publishBotError(botId, 'join-timeout')
       this._requestSchedulerCleanup(botId)
-      this.stopBot(bot.session.id, bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
+      this.stopBot(bot.session.id, bot.channel.id, record).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${botId}): ${err.message}`))
     })
     // The Transcriber picks its diarization mode from the `init` frame and has no
     // mid-stream control to change it, so the Teams native→ASR fallback only takes
@@ -356,7 +380,7 @@ class BrokerClient extends Component {
       // structured bot-error so the Scheduler records WHY the bot vanished.
       logger.error(`BotService: transcriber WS for ${key} (botId ${record.botId}) gave up after ${record.reconnectAttempts} reconnect attempts, stopping bot`)
       this._publishBotError(record.botId, 'transcriber-unreachable')
-      this.stopBot(record.bot.session.id, record.bot.channel.id).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${record.botId}): ${err.message}`))
+      this.stopBot(record.bot.session.id, record.bot.channel.id, record).catch(err => logger.error(`BotService: stopBot failed for ${key} (botId ${record.botId}): ${err.message}`))
       return
     }
     record.reconnectAttempts++
@@ -378,8 +402,10 @@ class BrokerClient extends Component {
     this.client.publish('scheduler/in/schedule/stopbot', { botId, endSession }, 1, false, true)
   }
 
-  // Run a stopped bot's teardown, counted in `disposing` until it is over.
+  // Run a stopped bot's teardown, counted in `disposing` until it is over (once
+  // per record: a second call waits for the first).
   async _dispose (key, record, teardown) {
+    if (this.disposing.has(record)) return this.disposing.get(record)
     record.key = key
     const done = (async () => {
       try { await teardown() } finally { this.disposing.delete(record) }
@@ -393,8 +419,19 @@ class BrokerClient extends Component {
     return Promise.all([...this.disposing].filter(([record]) => record.key === key).map(([, done]) => done))
   }
 
-  async stopBot (sessionId, channelId) {
+  // Stop the channel's bot, and cancel a start of the channel in progress. A
+  // bot's own lifecycle events (error, meeting end, join timeout, transcriber
+  // unreachable) pass its record: they stop that bot only, so that a late event
+  // of a bot already replaced neither stops its successor nor cancels its start.
+  async stopBot (sessionId, channelId, own = null) {
     const key = `${sessionId}_${channelId}`
+    if (own) return this.bots.get(key) === own ? this._stopChannel(key) : undefined
+    const start = this.pendingStarts.get(key)
+    if (start) start.cancelled = true
+    return this._stopChannel(key)
+  }
+
+  async _stopChannel (key) {
     const record = this.bots.get(key)
     // Nothing running: a bot of the channel may still be leaving. Waiting for it
     // lets a replacement (startBot stops the channel first) reuse its context
@@ -419,6 +456,7 @@ class BrokerClient extends Component {
 
   async destroy () {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    for (const start of this.pendingStarts.values()) start.cancelled = true
     await Promise.all([...this.bots.keys()].map(key => {
       const [sessionId, channelId] = key.split('_')
       return this.stopBot(sessionId, channelId)

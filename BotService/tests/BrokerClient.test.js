@@ -1179,6 +1179,72 @@ describe('BotService BrokerClient — startBot lifecycle', () => {
     assert.equal(ctx.instance.bots.get('s_c').bot, botInstances[1])
   })
 
+  // A stopbot arriving while a replacement waited for its predecessor found no
+  // record to stop, and the replacement joined and transcribed anyway.
+  describe('a start waiting for its predecessor to leave', () => {
+    let releases
+    beforeEach(() => {
+      releases = []
+      botBehaviour.dispose = () => new Promise((resolve) => releases.push(resolve))
+    })
+    const leave = async () => { while (releases.length) releases.shift()(); await tick(); await tick() }
+
+    it('is cancelled by a stopbot for the channel: nothing joins, nothing is reported', async () => {
+      await ctx.instance.startBot(startArgs(1))
+      const stopping1 = ctx.instance.stopBot('s', 'c')
+      await tick()
+      const starting2 = ctx.instance.startBot(startArgs(2))
+      await tick()
+      const stopping2 = ctx.instance.stopBot('s', 'c')
+      await tick()
+      await leave()
+      await stopping1; await stopping2; await starting2
+      assert.equal(botInstances.length, 1, 'bot 2 never created')
+      assert.equal(ctx.instance.bots.has('s_c'), false)
+      assert.equal(ctx.instance.metrics.botJoinAttempts, 1)
+      assert.equal(ctx.publishes.filter((p) => /bot-error/.test(p.topic)).length, 0)
+    })
+
+    it('is superseded by a newer startbot for the channel: only the newest joins', async () => {
+      await ctx.instance.startBot(startArgs(1))
+      const stopping1 = ctx.instance.stopBot('s', 'c')
+      await tick()
+      const starting2 = ctx.instance.startBot(startArgs(2))
+      const starting3 = ctx.instance.startBot(startArgs(3))
+      await tick()
+      await leave()
+      await stopping1; await starting2; await starting3
+      assert.equal(botInstances.length, 2, 'bot 1 and bot 3')
+      assert.equal(ctx.instance.bots.get('s_c').botId, 3)
+      botBehaviour.dispose = null
+    })
+
+    it('a bot\'s own late event (error, meeting end) stops that bot only, never its successor or its successor\'s start', async () => {
+      await ctx.instance.startBot(startArgs(1))
+      const record1 = ctx.instance.bots.get('s_c')
+      const stopping1 = ctx.instance.stopBot('s', 'c')
+      await tick()
+      const starting2 = ctx.instance.startBot(startArgs(2))
+      await tick()
+      await ctx.instance.stopBot('s', 'c', record1) // e.g. bot 1's page crashes while it leaves
+      await leave()
+      await stopping1; await starting2
+      assert.equal(ctx.instance.bots.get('s_c').botId, 2, 'bot 2 joined')
+      botBehaviour.dispose = null
+      await ctx.instance.stopBot('s', 'c', record1)
+      assert.equal(ctx.instance.bots.get('s_c').botId, 2, 'and is not stopped by it')
+    })
+  })
+
+  it('a join that fails because a stopbot arrived meanwhile is no join failure', async () => {
+    botBehaviour.init = async () => { await ctx.instance.stopBot('s', 'c'); return false }
+    await ctx.instance.startBot(startArgs(7))
+    assert.equal(ctx.instance.metrics.botJoinFailures, 0)
+    assert.equal(ctx.publishes.filter((p) => /bot-error/.test(p.topic)).length, 0)
+    assert.equal(botInstances[0].disposeCalls, 1)
+    assert.equal(ctx.instance.bots.size, 0)
+  })
+
   it('tracks multiple concurrent bots and removes exactly one on stop', async () => {
     await ctx.instance.startBot(startArgs(1, 's1', 'c1'))
     await ctx.instance.startBot(startArgs(2, 's2', 'c2'))

@@ -80,7 +80,6 @@ class AudioMixer extends EventEmitter {
     this.stalls = 0 // stalls of every track (removed ones too)
     this.currentSpeaker = null // { id, name } | null
     this._unattributedSpeaker = null // id of the unattributed track last heard speaking
-    this._lastSpeakerEvent = null // last speakerChanged: 'speaker' | 'silence' | 'unattributed'
     this._silenceMs = 0
 
     // Pre-allocated accumulators: the hot path runs 50×/s. Tracks are summed wide
@@ -297,17 +296,19 @@ class AudioMixer extends EventEmitter {
       // yet): the speaker is unknown, and keeping the previous one would put their
       // name on someone else's words. Its participant is announced as soon as the
       // track is attributed (setTrackParticipant). The reason tells this null from
-      // a silence one, after which the previous speaker may still be assumed: so
-      // it is also sent after a silence, not only over a current speaker (never
-      // before any speaker was announced, nor twice in a row).
+      // a silence one, after which the previous speaker may still be assumed. It
+      // is sent once per episode: when unattributed speech starts, whatever came
+      // before (a speaker, a silence, or nothing yet: the first words of the
+      // meeting), and again after the episode ended (a speaker, or a silence
+      // longer than the grace), never twice within one.
       // No hysteresis, as between participants: the first louder frame switches
       // (the silence grace is the only one, and it applies here too).
       this._silenceMs = 0
-      this._unattributedSpeaker = dominant.trackId
-      if (this._lastSpeakerEvent === 'speaker' || this._lastSpeakerEvent === 'silence') {
+      if (this._unattributedSpeaker === null) {
         this.currentSpeaker = null
         this._emitSpeaker(null, 'unattributed')
       }
+      this._unattributedSpeaker = dominant.trackId
       return
     }
 
@@ -341,7 +342,6 @@ class AudioMixer extends EventEmitter {
   _emitSpeaker (speaker, reason) {
     const event = { type: 'speakerChanged', position: this.mixPosition, speaker }
     if (reason) event.reason = reason // additive: a silence keeps the original shape
-    this._lastSpeakerEvent = speaker ? 'speaker' : (reason || 'silence')
     this.emit('speakerChanged', event)
   }
 
@@ -438,7 +438,6 @@ class AudioMixer extends EventEmitter {
     this.stalls = 0
     this.currentSpeaker = null
     this._unattributedSpeaker = null
-    this._lastSpeakerEvent = null
     this._silenceMs = 0
   }
 }

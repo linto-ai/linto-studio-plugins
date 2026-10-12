@@ -352,7 +352,7 @@ describe('AudioMixer', () => {
       open(mixer, ['unmapped'], false)
       feed(mixer, { mapped: frame(100), unmapped: frame(9000) })
       assert.equal(samplesOf(out.frames[0])[0], 9100)
-      assert.deepEqual(out.speakers, [])
+      assert.deepEqual(out.speakers, [null], 'unknown, not them')
     })
 
     it('attribution can come before any audio and be renamed', () => {
@@ -449,12 +449,37 @@ describe('AudioMixer', () => {
       m.stop()
     })
 
-    it('not before any speaker was ever announced (nothing to be mistaken for)', () => {
-      const ev = events(mixer)
+    // The first words of the meeting: the Transcriber must know they are somebody
+    // still unnamed, to name them with the participant mapped next.
+    it('also for the first episode, before any speaker was announced', () => {
+      const raw = []
+      mixer.on('speakerChanged', (ev) => raw.push(ev))
       open(mixer, ['alice'])
       open(mixer, ['new'], false)
       feed(mixer, { alice: frame(0), new: frame(5000) })
-      assert.deepEqual(ev, [])
+      feed(mixer, { alice: frame(0), new: frame(5000) })
+      assert.deepEqual(raw, [{ type: 'speakerChanged', position: 0, speaker: null, reason: 'unattributed' }])
+    })
+
+    it('again for each new episode: after the grace, or after a speaker (never twice within one)', () => {
+      const m = new AudioMixer({ silenceGraceMs: 40 })
+      const raw = []
+      m.on('speakerChanged', (ev) => raw.push([ev.position, ev.speaker && ev.speaker.id, ev.reason]))
+      open(m, ['alice'])
+      open(m, ['u1', 'u2'], false)
+      const step = (a, u1, u2) => feed(m, { alice: frame(a), u1: frame(u1), u2: frame(u2) })
+      step(0, 5000, 0) // 0: episode 1
+      step(0, 0, 5000) // 20: u2 takes over: same episode
+      step(0, 0, 0) // 40: a pause shorter than the grace
+      step(0, 5000, 0) // 60: same episode
+      step(0, 0, 0); step(0, 0, 0) // 80, 100: the grace is over: the episode ends
+      step(0, 5000, 0) // 120: episode 2
+      step(5000, 0, 0) // 140: Alice
+      step(0, 0, 5000) // 160: episode 3
+      assert.deepEqual(raw, [
+        [0, null, 'unattributed'], [120, null, 'unattributed'], [140, 'alice', undefined], [160, null, 'unattributed']
+      ])
+      m.stop()
     })
 
     it('keeps the current speaker while the unattributed track is quiet or quieter', () => {
@@ -487,7 +512,7 @@ describe('AudioMixer', () => {
       feed(m, { new: frame(5000) })
       for (let i = 0; i < 4; i++) feed(m, { new: frame(0) }) // 80 ms pause
       m.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
-      assert.deepEqual(ev, [[100, 'bob']])
+      assert.deepEqual(ev, [[0, null], [100, 'bob']])
       m.stop()
     })
 
@@ -498,9 +523,9 @@ describe('AudioMixer', () => {
       feed(m, { new: frame(5000) })
       for (let i = 0; i < 5; i++) feed(m, { new: frame(0) }) // 100 ms of silence
       m.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
-      assert.deepEqual(ev, [])
+      assert.deepEqual(ev, [[0, null]])
       feed(m, { new: frame(5000) })
-      assert.deepEqual(ev, [[120, 'bob']])
+      assert.deepEqual(ev, [[0, null], [120, 'bob']])
       m.stop()
     })
 
@@ -509,7 +534,7 @@ describe('AudioMixer', () => {
       open(mixer, ['a', 'b'], false)
       feed(mixer, { a: frame(5000), b: frame(100) })
       mixer.setTrackParticipant('b', { id: 'bob', name: 'Bob' })
-      assert.deepEqual(ev, [])
+      assert.deepEqual(ev, [[0, null]])
     })
 
     it('a removed track is no longer the one speaking', () => {
@@ -518,14 +543,16 @@ describe('AudioMixer', () => {
       feed(mixer, { new: frame(5000), other: frame(0) })
       mixer.removeTrack('new')
       mixer.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
-      assert.deepEqual(ev, [])
+      assert.deepEqual(ev, [[0, null]])
     })
 
-    it('MCU/Teams (nothing attributed): never any speaker event', () => {
+    // The Bot relays the mixer's speaker events on SFU platforms only (see
+    // 'never derives speakers from the mixer on Teams').
+    it('nothing attributed (MCU/Teams): never a participant, one null per episode', () => {
       const ev = events(mixer)
       open(mixer, ['t0', 't1'], false)
       for (let i = 0; i < 10; i++) feed(mixer, { t0: frame(i % 2 ? 9000 : 0), t1: frame(i % 2 ? 0 : 9000) })
-      assert.deepEqual(ev, [])
+      assert.deepEqual(ev, [[0, null]])
     })
   })
 

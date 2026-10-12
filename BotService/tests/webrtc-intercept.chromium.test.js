@@ -251,7 +251,8 @@ describe('webrtc-intercept in Chromium', function () {
       const joined = nowMs()
       await waitFor(() => events.some((e) => e.what === 'speaker Alice'), 10000, 'Alice as the speaker')
       const named = events.find((e) => e.what === 'speaker Alice').at
-      assert.deepStrictEqual(events.map((e) => e.what), ['join Alice', 'speaker Alice'])
+      // Her first words are unattributed (null), until she is mapped and named.
+      assert.deepStrictEqual(events.map((e) => e.what), ['speaker null', 'join Alice', 'speaker Alice'])
       assert.ok(firstAudio !== null && firstAudio <= named, 'her audio is mixed before she is mapped')
       assert.ok(named - firstAudio < 600, `named ${(named - firstAudio).toFixed(0)} ms after her first mixed frame`)
       assert.ok(named - joined < 1500, `named ${(named - joined).toFixed(0)} ms after her track was published`)

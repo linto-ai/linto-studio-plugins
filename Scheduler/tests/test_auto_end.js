@@ -51,6 +51,7 @@ describe('BrokerClient.autoEnd()', () => {
                 update: async () => [3, sessionsToEnd.map(s => ({ id: s.id, organizationId: 'org-1' }))],
             },
             Channel: {
+                count: async () => 0, // no stream left to drain
                 update: async () => [0, []],
             },
         });
@@ -77,7 +78,7 @@ describe('BrokerClient.autoEnd()', () => {
         assert.strictEqual(endedPubs.length, 3);
     });
 
-    it('marks all channels of ended sessions as inactive', async () => {
+    it('marks all channels of ended sessions as inactive once drained', async () => {
         let channelUpdate = null;
         const model = buildModel({
             Session: {
@@ -86,6 +87,7 @@ describe('BrokerClient.autoEnd()', () => {
                 update: async () => [1, [{ id: 's1', organizationId: 'o' }]],
             },
             Channel: {
+                count: async () => 0, // no stream left to drain
                 update: async (values, options) => {
                     channelUpdate = { values, options };
                     return [1, []];
@@ -102,7 +104,9 @@ describe('BrokerClient.autoEnd()', () => {
 
         assert.ok(channelUpdate, 'Channel.update should be called when sessions are auto-ended');
         assert.strictEqual(channelUpdate.values.streamStatus, 'inactive');
-        assert.deepStrictEqual(channelUpdate.options.where.sessionId, { [Op.in]: ['s1'] });
+        assert.deepStrictEqual(channelUpdate.options.where, { sessionId: 's1' });
+        assert.strictEqual(channelUpdate.options.transaction, undefined,
+            'not forced inside the terminating transaction: the transcribers deactivate the channels first');
     });
 
     it('returns false and skips channel updates when nothing matches', async () => {

@@ -1,6 +1,6 @@
 const assert = require('assert');
 const { describe, it } = require('mocha');
-const { buildModel, loadBrokerClient, uninstallMocks } = require('./helpers');
+const { buildModel, loadBrokerClient, uninstallMocks, Op } = require('./helpers');
 
 describe('BrokerClient bot routing (BotService)', () => {
   describe('#selectBotService()', () => {
@@ -325,6 +325,7 @@ describe('BrokerClient bot routing (BotService)', () => {
           update: async (values, opts) => { sessionUpdates.push({ values, opts }); return [1, []]; }
         },
         Channel: {
+          count: async () => 0, // the bot's stream is already deactivated
           update: async (values, opts) => { channelUpdates.push({ values, opts }); return [1, []]; }
         }
       });
@@ -371,6 +372,7 @@ describe('BrokerClient bot routing (BotService)', () => {
 
     it('endSession is idempotent: an already-terminated session is left untouched', async () => {
       const sessionUpdates = [];
+      const channelUpdates = [];
       const model = buildModel({
         Bot: {
           findByPk: async () => ({ id: 42, channel: { id: 10, sessionId: 'sess-1' } }),
@@ -378,13 +380,23 @@ describe('BrokerClient bot routing (BotService)', () => {
         },
         Session: {
           findByPk: async () => ({ id: 'sess-1', status: 'terminated', organizationId: 'org-9' }),
-          update: async (values, opts) => { sessionUpdates.push({ values, opts }); return [1, []]; }
+          // The row is already 'terminated': the conditional update matches nothing.
+          update: async (values, opts) => {
+            sessionUpdates.push({ values, opts });
+            return [opts.where.status[Op.ne] === 'terminated' ? 0 : 1, []];
+          }
+        },
+        Channel: {
+          update: async (values, opts) => { channelUpdates.push({ values, opts }); return [1, []]; }
         }
       });
       const { instance, mqttPublishes } = await loadBrokerClient({ model });
       try {
         await instance.stopBot(42, { endSession: true });
-        assert.equal(sessionUpdates.length, 0, 'no re-termination');
+        assert.equal(sessionUpdates.length, 1);
+        assert.deepEqual(sessionUpdates[0].opts.where, { id: 'sess-1', status: { [Op.ne]: 'terminated' } },
+          'the termination is conditional, so it is atomic against a concurrent end');
+        assert.equal(channelUpdates.length, 0, 'channels untouched');
         assert.equal(mqttPublishes.filter(p => p.topic === 'system/out/sessions/ended').length, 0);
       } finally { uninstallMocks(); }
     });

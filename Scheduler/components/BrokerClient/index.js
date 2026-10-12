@@ -91,7 +91,6 @@ class BrokerClient extends Component {
   }
 
   async autoEnd() {
-    let isUpdated = false;
     let endedSessionIds = [];
 
     await Model.sequelize.transaction(async (transaction) => {
@@ -133,49 +132,120 @@ class BrokerClient extends Component {
         }
       );
 
-      const sessionIds = updatedSessions.map(session => session.id);
-
-      if (sessionIds.length > 0) {
-        logger.debug(`Auto end sessions ${sessionIds}`);
-        isUpdated = true;
-        endedSessionIds = sessionIds;
-        await Model.Channel.update(
-          { streamStatus: 'inactive' },
-          {
-            where: {
-              sessionId: {
-                [Model.Op.in]: sessionIds
-              }
-            },
-            transaction
-          }
-        );
+      endedSessionIds = updatedSessions.map(session => session.id);
+      if (endedSessionIds.length > 0) {
+        logger.debug(`Auto end sessions ${endedSessionIds}`);
       }
     });
 
-    // Publish one terminal notification per auto-ended session so consumers
-    // (e.g. studio-api) can react without diffing the statuses snapshot. The
-    // payload is minimal — consumers re-fetch the full session when needed.
-    for (const sessionId of endedSessionIds) {
-      try {
-        const endedSession = await Model.Session.findByPk(sessionId, {
-          attributes: ['id', 'organizationId']
-        });
-        if (endedSession) {
-          this.client.publish(
-            'system/out/sessions/ended',
-            { id: endedSession.id, organizationId: endedSession.organizationId },
-            1,
-            false,
-            true
-          );
-        }
-      } catch (err) {
-        logger.error(`Failed to publish sessions/ended for ${sessionId}: ${err?.message || err}`);
-      }
-    }
+    // The channels are not forced 'inactive' here: endSessions() waits for
+    // their transcribers to deactivate them, i.e. for their last captions.
+    await this.endSessions(endedSessionIds);
 
-    return isUpdated;
+    return endedSessionIds.length > 0;
+  }
+
+  // Second half of a session end driven by the Scheduler (autoEnd, a bot
+  // leaving an empty meeting), once the caller has set the sessions to
+  // 'terminated'. Consumers (studio-api) react to system/out/sessions/ended by
+  // building the conversation from the stored captions and deleting the
+  // session, channels and captions included, so the notification must wait
+  // for the last caption, as PUT /sessions/:id/stop?waitFinal=true does:
+  //   1. publish the statuses snapshot without the sessions: the transcribers
+  //      cut the streams still open on them (ASR flush -> end-of-stream marker
+  //      -> 'inactive' deactivation, published in that order);
+  //   2. wait for every channel to be deactivated (waitSessionDrained), at
+  //      most SESSION_STOP_FLUSH_TIMEOUT_MS so a dead transcriber cannot hold
+  //      the end back;
+  //   3. force the channels still 'active' to 'inactive' (timeout case);
+  //   4. publish one system/out/sessions/ended per session. The payload is
+  //      minimal: consumers re-fetch the full session when needed.
+  async endSessions(sessionIds) {
+    if (sessionIds.length === 0) return;
+    try {
+      await this.publishSessions();
+    } catch (err) {
+      logger.error(`Failed to publish the session statuses to end ${sessionIds.join(', ')}: ${err?.message || err}`);
+    }
+    const timeoutMs = parseInt(process.env.SESSION_STOP_FLUSH_TIMEOUT_MS, 10) || 10000;
+    await Promise.all(sessionIds.map(sessionId => this.publishSessionEnded(sessionId, timeoutMs)));
+  }
+
+  async publishSessionEnded(sessionId, timeoutMs) {
+    try {
+      if (!await this.waitSessionDrained(sessionId, timeoutMs)) {
+        logger.warn(`Session ${sessionId}: channel(s) still active ${timeoutMs}ms after the session ended; publishing sessions/ended anyway, captions may be incomplete`);
+      }
+      await Model.Channel.update(
+        { streamStatus: 'inactive' },
+        { where: { sessionId } }
+      );
+      const endedSession = await Model.Session.findByPk(sessionId, {
+        attributes: ['id', 'organizationId']
+      });
+      if (!endedSession) return;
+      logger.info(`Session ${sessionId} ended and drained; publishing sessions/ended`);
+      this.client.publish(
+        'system/out/sessions/ended',
+        { id: endedSession.id, organizationId: endedSession.organizationId },
+        1,
+        false,
+        true
+      );
+    } catch (err) {
+      logger.error(`Failed to publish sessions/ended for ${sessionId}: ${err?.message || err}`);
+    }
+  }
+
+  // Resolves true once no channel of the session is 'active' and the writes
+  // already queued for its channels have settled, false when timeoutMs runs
+  // out first. A channel leaves 'active' when updateSession() persists its
+  // transcriber's 'inactive' deactivation. The Transcriber publishes it after
+  // the stream's last final and its end-of-stream marker, on the same MQTT
+  // connection at QoS 1, so they arrive in that order, and the per-channel
+  // persistence chain commits them in arrival order: every caption of the
+  // channel is stored by then. Each 'channel-inactive' event (emitted once such
+  // a write is committed) triggers a recount; the database decides.
+  async waitSessionDrained(sessionId, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    let deactivated = false;
+    let wake = null;
+    const onChannelInactive = (id) => {
+      if (id !== undefined && id !== sessionId) return;
+      deactivated = true;
+      if (wake) wake();
+    };
+    this.on('channel-inactive', onChannelInactive);
+    try {
+      for (;;) {
+        deactivated = false;
+        const activeChannels = await Model.Channel.count({
+          where: { sessionId, streamStatus: 'active' }
+        });
+        if (activeChannels === 0) break;
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) return false;
+        // A deactivation committed while counting: count again.
+        if (deactivated) continue;
+        let timer;
+        await new Promise((resolve) => {
+          wake = resolve;
+          timer = setTimeout(resolve, remainingMs);
+        });
+        wake = null;
+        clearTimeout(timer);
+      }
+    } finally {
+      this.removeListener('channel-inactive', onChannelInactive);
+    }
+    // Writes queued behind the deactivations (e.g. a translation that arrived
+    // meanwhile) belong to the session too.
+    const pending = [];
+    for (const [key, chain] of this.channelPersistChains) {
+      if (key.startsWith(`${sessionId}_`)) pending.push(chain);
+    }
+    await Promise.all(pending);
+    return true;
   }
 
   // Safety net (defense-in-depth) for the cross-channel session-status race: if
@@ -553,35 +623,20 @@ class BrokerClient extends Component {
   // Terminate a bot-driven session the way autoEnd() terminates a scheduled one,
   // and emit the same terminal notification so studio-api stores the conversation
   // and deletes the session. This is the auto-leave counterpart of the manual
-  // "stop recording" (which Studio drives directly). Idempotent: a session that is
-  // already 'terminated' is left untouched (studio-api's sessions/ended handler is
-  // itself 404-safe, so a manual stop that raced ahead simply no-ops here).
+  // "stop recording" (which Studio drives directly). The notification waits for
+  // the session's last captions (see endSessions). Idempotent: only the call that
+  // moves the session to 'terminated' publishes, so a duplicate stopbot or a
+  // manual stop that raced ahead leaves the session untouched.
   async endBotSession(sessionId) {
     if (!sessionId) return;
     try {
-      const session = await Model.Session.findByPk(sessionId, {
-        attributes: ['id', 'status', 'organizationId']
-      });
-      if (!session) return;
-      if (session.status === 'terminated') return; // already finalized
-      await Model.sequelize.transaction(async (transaction) => {
-        await Model.Session.update(
-          { status: 'terminated', endTime: new Date() },
-          { where: { id: sessionId }, transaction }
-        );
-        await Model.Channel.update(
-          { streamStatus: 'inactive' },
-          { where: { sessionId }, transaction }
-        );
-      });
-      logger.info(`Bot session ${sessionId} ended (meeting empty); publishing sessions/ended`);
-      this.client.publish(
-        'system/out/sessions/ended',
-        { id: session.id, organizationId: session.organizationId },
-        1,
-        false,
-        true
+      const [updatedCount] = await Model.Session.update(
+        { status: 'terminated', endTime: new Date() },
+        { where: { id: sessionId, status: { [Model.Op.ne]: 'terminated' } } }
       );
+      if (updatedCount === 0) return; // already finalized, or gone
+      logger.info(`Bot session ${sessionId} ended (meeting empty); publishing sessions/ended once its channels are drained`);
+      await this.endSessions([sessionId]);
     } catch (err) {
       logger.error(`Failed to end bot session ${sessionId}: ${err?.message || err}`);
     }
@@ -767,6 +822,9 @@ class BrokerClient extends Component {
         { streamStatus: 'inactive', transcriberId: null },
         { where: { transcriberId: transcriber.uniqueId } }
       );
+      // Sessions unknown here: wake every waitSessionDrained() for a recount
+      // (the captions still in flight on that transcriber died with it).
+      this.emit('channel-inactive');
 
       // Fetch sessions that had channels associated with the transcriber
       const affectedSessions = await Model.Session.findAll({
@@ -907,6 +965,10 @@ class BrokerClient extends Component {
       );
 
       await transaction.commit();
+      if (newStreamStatus === 'inactive') {
+        // Same persistence chain: the channel's captions are committed already.
+        this.emit('channel-inactive', sessionId, channelId);
+      }
       await this.publishSessions();
     } catch (error) {
       await transaction.rollback();

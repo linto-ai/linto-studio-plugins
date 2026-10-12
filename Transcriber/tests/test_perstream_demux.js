@@ -314,6 +314,7 @@ describe('StreamingServer per-stream demux', () => {
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
     inst.stoppingStreams = new Map();
+    inst.latestStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.emitted = [];
@@ -340,8 +341,12 @@ describe('StreamingServer per-stream demux', () => {
   }
 
   // Mark a channel per-stream the way session-start would, then return it.
+  // Registers a per-stream connection the way session-start does: its context,
+  // which is also the channel's latest stream (the one whose stop deactivates).
   function markPerStream(inst, ck, session, channel, firstSegmentId = 1) {
-    inst.channels.set(ck, { session, channel, allocator: { next: firstSegmentId } });
+    const ctx = { session, channel, allocator: { next: firstSegmentId } };
+    inst.channels.set(ck, ctx);
+    inst.latestStreams.set(ck, ctx);
   }
 
   async function settle(asr) {

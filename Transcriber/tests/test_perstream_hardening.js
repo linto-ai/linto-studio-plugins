@@ -338,6 +338,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
     inst.stoppingStreams = new Map();
+    inst.latestStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.pendingLeaves = new Map();
@@ -368,10 +369,20 @@ describe('StreamingServer per-stream teardown hardening', () => {
     const m = new Map(participants.map(p => [p.tag, p]));
     return { getStreamParticipants: () => m };
   }
+  // Registers a per-stream connection the way session-start does: its context,
+  // which is also the channel's latest stream (the one whose stop deactivates).
   function markPerStream(inst, ck, channel, firstSegmentId = 1) {
     const ctx = { session, channel, allocator: { next: firstSegmentId }, registeredAt: Date.now() };
     inst.channels.set(ck, ctx);
+    inst.latestStreams.set(ck, ctx);
     return ctx;
+  }
+  // Registers a legacy connection the way session-start does: its ASR under the
+  // bare channel key, which is also the channel's latest stream.
+  function startLegacy(inst, ck, asr) {
+    inst.ASRs.set(ck, asr);
+    inst.latestStreams.set(ck, asr);
+    return asr;
   }
   async function settle(asr) {
     await new Promise(r => setImmediate(r));
@@ -725,7 +736,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
       // The legacy session-start branch: an ASR under the BARE `${ck}` key and
       // no channel context whatsoever.
       const successor = fakeAsr('legacy-successor', log, 0);
-      inst.ASRs.set(ck, successor);
+      startLegacy(inst, ck, successor);
       await stopP;
 
       assert.strictEqual(inst.emitted.filter(e => e[0] === 'session-stop').length, 0,
@@ -750,7 +761,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
 
       const stopP = inst._stopAsr(session, 'chan');   // 0 ASR: awaits the leave
       const successor = fakeAsr('legacy-successor', log, 0);
-      inst.ASRs.set(ck, successor);                   // the takeover lands in the wait
+      startLegacy(inst, ck, successor);                   // the takeover lands in the wait
       release();
       await stopP;
 
@@ -770,11 +781,11 @@ describe('StreamingServer per-stream teardown hardening', () => {
       const ck = 'sess_chan';
       const outgoing = fakeAsr('legacy-outgoing', log, 30);
       outgoing.segmentId = 57;
-      inst.ASRs.set(ck, outgoing);   // no channel context: a legacy channel
+      startLegacy(inst, ck, outgoing);   // no channel context: a legacy channel
 
       const stopP = inst._stopAsr(session, 'chan');
       const successor = fakeAsr('legacy-successor', log, 0);
-      inst.ASRs.set(ck, successor);  // the reconnect re-registers the bare key
+      startLegacy(inst, ck, successor);  // the reconnect re-registers the bare key
       await stopP;
 
       assert.deepStrictEqual(log,
@@ -909,7 +920,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
       // The replacement connection is NOT per-stream: it registers no context
       // and creates a single legacy ASR under the bare key, mid-flush.
       const successor = fakeAsr('legacy-successor', log, 0);
-      inst.ASRs.set(ck, successor);
+      startLegacy(inst, ck, successor);
       await stopP;
 
       assert.strictEqual(inst.ASRs.get(ck), successor, 'the legacy successor ASR is still registered');
@@ -929,7 +940,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
       const origFlush = first.flushFinals.bind(first);
       first.flushFinals = async () => {
         inst.ASRs.set(`${ck}#9`, straggler);   // a per-stream straggler
-        inst.ASRs.set(ck, successor);          // and a legacy successor
+        startLegacy(inst, ck, successor);          // and a legacy successor
         await origFlush();
       };
       inst.ASRs.set(`${ck}#0`, first);
@@ -972,7 +983,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
       const stale = markPerStream(inst, ck, makeChannel(), 1);
       const legacy = fakeAsr('legacy', log, 0);
       legacy.segmentId = 57;
-      inst.ASRs.set(ck, legacy);
+      startLegacy(inst, ck, legacy);
 
       await inst._stopAsr(session, 'chan');
 

@@ -175,6 +175,7 @@ describe('K2 per-stream recording split', () => {
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
     inst.stoppingStreams = new Map();
+    inst.latestStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.pendingLeaves = new Map();
@@ -485,7 +486,9 @@ describe('K2 per-stream recording split', () => {
       const inst = makeServer();
       const session = makeSession();
       const ck = `${session.id}_chan`;
-      inst.channels.set(ck, { session, channel: makeChannel(), allocator: { next: 1 }, registeredAt: Date.now() });
+      const ctx = { session, channel: makeChannel(), allocator: { next: 1 }, registeredAt: Date.now() };
+      inst.channels.set(ck, ctx);
+      inst.latestStreams.set(ck, ctx);
       const p0 = fakeAsr('p0', log), p1 = fakeAsr('p1', log), rec = fakeAsr('rec', log);
       inst.ASRs.set(`${ck}#0`, p0);
       inst.ASRs.set(`${ck}#1`, p1);

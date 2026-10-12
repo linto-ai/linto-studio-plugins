@@ -41,6 +41,10 @@ class StreamingServer extends Component {
     // a promise that settles once that stream's segment cursor is final (see
     // _stopAsr and initialSegmentIdFor).
     this.stoppingStreams = new Map();
+    // Latest stream started on each channel, running or being stopped: its
+    // legacy ASR, or its per-stream channel context. Only its stop reports the
+    // channel inactive (see _stopAsr).
+    this.latestStreams = new Map();
     this.servers = [];
     this.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     // Per-stream diarization (one ASR per participant). All keyed by the channel
@@ -128,7 +132,9 @@ class StreamingServer extends Component {
             // K9: `registeredAt` is the reaper's grace anchor — a channel marked
             // here but not yet streaming a single tagged frame must never be
             // collected as an orphan.
-            this.channels.set(ck, { session, channel, allocator, registeredAt: Date.now() });
+            const ctx = { session, channel, allocator, registeredAt: Date.now() };
+            this.channels.set(ck, ctx);
+            this.latestStreams.set(ck, ctx);
             // K9: arm the orphan-channel reaper on the first per-stream channel
             // (idempotent), so a deployment that never goes per-stream never
             // arms it at all.
@@ -169,8 +175,9 @@ class StreamingServer extends Component {
             ? server.getSpeakerTracker(session.id, channel.id)
             : null;
           const diarizationMode = speakerTracker ? 'native' : 'asr';
-          this._wireAsr(session, channel, { initialSegmentId, speakerTracker, diarizationMode },
+          const asr = this._wireAsr(session, channel, { initialSegmentId, speakerTracker, diarizationMode },
             `${session.id}_${channel.id}`, session.id, channel.id);
+          this.latestStreams.set(`${session.id}_${channel.id}`, asr);
           this.emit('session-start', session, channel);
           logger.info(`Session ${session.id}, channel ${channel.id} started`);
         } catch (error) {
@@ -498,9 +505,9 @@ class StreamingServer extends Component {
   //      segments (a per-stream one shares the allocator instead, see K1)
   //   5. detach listeners and dispose (audio save stays fire-and-forget)
   //   6. emit 'session-stop' -> controllers -> deactivate published last, but
-  //      ONLY when this stop still owns the channel (K1: a reconnect that
-  //      superseded it during the flush must not have its successor
-  //      deactivated, whether that successor is per-stream or legacy)
+  //      ONLY when this stream is still the channel's latest one, running or
+  //      being stopped (K1: a reconnect that superseded it during the stop
+  //      must not have its successor deactivated, see _reportChannelStopped)
   // Returns false when no ASR was registered for the channel.
   async _stopAsr(session, channelId) {
     const ck = `${session.id}_${channelId}`;
@@ -536,29 +543,11 @@ class StreamingServer extends Component {
         // flushing its trailing finals — the deactivate must not precede them.
         const lazyLeaves = [...(this.pendingLeaves?.get(ck) || [])];
         if (lazyLeaves.length > 0) await Promise.allSettled(lazyLeaves);
-        // K1: 'session-stop' is wired to BrokerClient.deactivate(), which
-        // publishes streamStatus 'inactive' for the CHANNEL — so a stop that a
-        // reconnect has superseded must stay SILENT. Its deactivate would
-        // otherwise land after the successor's activate (the flush awaits
-        // outlast the successor's session-start) and the Scheduler's stale-owner
-        // guard cannot catch it: both connections carry the same transcriberId,
-        // so the channel is set inactive and the session drops back to 'ready'
-        // while the successor is still streaming and publishing captions.
-        // _cleanupPerStream already answers exactly that ownership question —
-        // and answers true for every legacy stop, which has no context at all.
-        // K10, same gate as the per-stream tail below: a LEGACY successor (a
-        // demoted bot, a plain WS client) registers NO channel context, so
-        // _cleanupPerStream structurally cannot see it — but the ASR it created
-        // under the bare `${ck}` key can. `subKeys` was empty here, so this stop
-        // tore no such ASR down: its presence means somebody else owns the
-        // channel now, and deactivating it would drop a live session to 'ready'.
-        const takenOverByLegacy = this.ASRs.has(ck);
-        const owns = this._cleanupPerStream(ck, lazyCtx);
-        if (takenOverByLegacy) {
-          logger.info(`Channel ${ck} was taken over by a non-per-stream connection while stopping; not deactivating it`);
-        } else if (owns) {
-          this.emit('session-stop', session, channelId);
-        }
+        // K1: drop the context this stop owns, never a successor's; the
+        // deactivate is gated on the channel's latest stream (same rule as the
+        // tail below).
+        this._cleanupPerStream(ck, lazyCtx);
+        this._reportChannelStopped(session, channelId, lazyCtx);
         logger.info(`Stopped per-stream channel ${ck} with 0 ASR (lazy hole closed)`);
         return true;
       }
@@ -586,6 +575,7 @@ class StreamingServer extends Component {
     // missing context as the already-handled "nothing to preserve" case.
     const perStreamKeys = subKeys.filter(k => k !== ck);
     const isPerStreamStop = perStreamKeys.length > 0;
+    let legacyAsr;
     if (isPerStreamStop) {
       // Per-stream: a channel has N sub-ASR but ONE end-of-stream. Flush every
       // sub-ASR's in-flight finals (listeners attached so trailing captions are
@@ -690,6 +680,7 @@ class StreamingServer extends Component {
         }
       }
     } else {
+      legacyAsr = this.ASRs.get(ck);
       // Legacy single ASR: the original ordering (flush, streamStopped,
       // preserveSegmentId, removeAllListeners, dispose). A client that
       // reconnects at once starts a newer stream while this one flushes: its
@@ -715,33 +706,35 @@ class StreamingServer extends Component {
       }
     }
 
-    // K1: same ownership gate as the lazy branch above — a superseded stop must
-    // not deactivate the SUCCESSOR's channel.
-    //
-    // K10: _cleanupPerStream answers ownership with `this.channels.get(ck) === ctx`,
-    // which can only ever detect a PER-STREAM successor. A LEGACY successor
-    // registers no channel context at all (session-start's legacy branch), so
-    // the identity check passed and the stop deactivated a LIVE stream. That
-    // successor is not exotic: it is what the mixedRecording gate produces when
-    // it DEMOTES a keepAudio bot, what the native->web re-route sends, what
-    // any plain WS client is, and what a legacy client reconnecting at once
-    // starts (e.g. a bot reopening its WS to switch diarization mode). The one
-    // piece of evidence it leaves behind is its ASR under the bare `${ck}` key —
-    // which this stop no longer holds: a PER-STREAM stop never tears it down (it
-    // only touches `${ck}#*`), and a LEGACY stop deleted its own in its
-    // synchronous prefix, before the flush. Its presence here always means
-    // somebody else owns the channel: its activation is already published, and
-    // this deactivation, carrying the same transcriberId, would mark the channel
-    // inactive under it (the Scheduler only ignores another transcriber's stale
-    // deactivation). The newer stream deactivates the channel when it stops.
-    const takenOverByLegacy = this.ASRs.has(ck);
-    const owns = this._cleanupPerStream(ck, ctx);
-    if (takenOverByLegacy) {
-      logger.info(`Session ${session.id}, channel ${channelId}: a newer stream took over during the stop flush, channel kept active`);
-    } else if (owns) {
-      this.emit('session-stop', session, channelId);
-    }
+    // K1: drop the per-stream context this stop owns, never a successor's.
+    this._cleanupPerStream(ck, ctx);
+    this._reportChannelStopped(session, channelId, isPerStreamStop ? ctx : legacyAsr);
     logger.info(`Stopped ${isPerStreamStop ? perStreamKeys.length : subKeys.length} ASR for ${ck} (0 orphans)`);
+    return true;
+  }
+
+  // 'session-stop' is wired to BrokerClient.deactivate(), which publishes
+  // streamStatus 'inactive' for the CHANNEL. A client that reconnects right away
+  // (a bot reopening its WS to switch diarization mode, a demoted bot, the
+  // native->web re-route, a plain WS client) starts a newer stream on the
+  // channel while this one is being stopped: per-stream or legacy, its
+  // activation is already published, and this deactivation, carrying the same
+  // transcriberId, would mark the channel inactive under it (the Scheduler only
+  // ignores another transcriber's stale deactivation), or before its captions
+  // are stored if it is being stopped too. So only the channel's LATEST stream,
+  // running or being stopped (`latestStreams`: its legacy ASR or its per-stream
+  // context), reports it inactive, after its own captions; an older stream's
+  // stop never does. This replaces the evidence the stop used to look for (a
+  // re-registered context, a bare-key ASR), which missed a newer stream that is
+  // itself already being stopped.
+  _reportChannelStopped(session, channelId, stream) {
+    const ck = `${session.id}_${channelId}`;
+    if (this.latestStreams.get(ck) !== stream) {
+      logger.info(`Session ${session.id}, channel ${channelId}: a newer stream took over during the stop, channel kept active`);
+      return false;
+    }
+    this.latestStreams.delete(ck);
+    this.emit('session-stop', session, channelId);
     return true;
   }
 
@@ -805,6 +798,7 @@ class StreamingServer extends Component {
       if (this._isChannelStreaming(ctx)) continue;
       logger.info(`Reaping orphan channel context ${ck} (no ASR, no live stream)`);
       this.channels.delete(ck);
+      if (this.latestStreams.get(ck) === ctx) this.latestStreams.delete(ck);
       this._noRecorderWarned?.delete(ck);
     }
     this._reapNoRecorderWarned();

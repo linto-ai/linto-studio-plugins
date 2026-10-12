@@ -98,14 +98,16 @@ describe('StreamingServer stop flush vs. an immediate reconnect', () => {
         assert.deepStrictEqual(events.slice(3), ['marker', 'inactive'], "B's stop deactivates the channel");
     });
 
-    it('still deactivates when the newer stream stopped too before the first flush ended', async () => {
+    it('deactivates once, after the newer stream\'s last caption, when that stream is stopped too', async () => {
         ws.emit('session-start', session, channel);
         ws.emit('session-stop', session, channel.id);
         ws.emit('session-start', session, channel);
-        ws.emit('session-stop', session, channel.id);
-        await wait(100);
-        assert.ok(events.includes('inactive'), JSON.stringify(events));
-        assert.strictEqual(events[events.length - 1], 'inactive', 'the channel ends inactive');
+        ws.emit('session-stop', session, channel.id); // the newer stream is being stopped as well
+        await wait(150);
+        // A deactivation before the newer stream's marker would let a
+        // session-end drain finish before that stream's captions are stored.
+        assert.deepStrictEqual(events, ['active', 'active', 'marker', 'marker', 'inactive']);
         assert.strictEqual(streaming.ASRs.size, 0);
+        assert.strictEqual(streaming.latestStreams.size, 0, 'no channel entry left behind');
     });
 });

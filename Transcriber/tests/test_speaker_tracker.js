@@ -387,24 +387,34 @@ describe('SpeakerTracker (native diarization)', () => {
 
 // `{ speaker: null, reason: 'unattributed' }`: the dominant audio comes from a
 // track the bot has not mapped to a participant yet (SFU newcomer, first
-// ~250 ms; or a departed participant's reused track). The bot then sends the
-// participant once mapped, or the next known speaker. A null without reason is
+// ~250 ms; or a departed participant's reused track). Once mapped, the bot sends
+// that participant's join, then its speakerChanged. A null without reason is
 // plain silence and keeps the lastKnownSpeaker fallback.
 //
 // The unnamed speaker's time counts in the segment's majority like anyone
-// else's, but for the speaker who names it only: unnamed time that wins leaves
-// the segment without speaker. Segments are finalized the way the ASR does it
-// (one at a time, the final before the next segment's first partial).
+// else's, but for the participant who names it only: unnamed time that wins
+// leaves the segment without speaker. Segments are finalized the way the ASR
+// does it (one at a time, the final before the next segment's first partial),
+// and a naming that comes after a final, within the window, still names it.
 describe('SpeakerTracker unattributed speaker', () => {
   const ALICE = { id: 'u1', name: 'Alice' };
   const BOB = { id: 'u2', name: 'Bob' };
+  const CAROL = { id: 'u3', name: 'Carol' };
   const unattributed = (position) => ({ position, speaker: null, reason: 'unattributed' });
 
+  // Alice is a known participant and the current speaker.
   function aliceSpeaking() {
     const ref = { now: 1000 };
     const t = trackerAt(ref, { gracePeriodMs: 200 }); // default 1.5 s unattributed window
+    t.updateParticipant({ action: 'join', participant: ALICE });
     t.addSpeakerChange({ position: 0, speaker: ALICE });
     return { ref, t };
+  }
+
+  // The bot maps the track: the newcomer's join, then its speakerChanged.
+  function mapped(t, participant, position) {
+    t.updateParticipant({ action: 'join', participant });
+    t.addSpeakerChange({ position, speaker: participant });
   }
 
   it('never gives a segment starting unattributed to the previous speaker', () => {
@@ -418,55 +428,97 @@ describe('SpeakerTracker unattributed speaker', () => {
     assert.equal(t.getSpeakerForSegment(5), null, 'nor does the final');
   });
 
-  it('gives the pending segment to the participant mapped within the window', () => {
+  it('gives the pending segment to the newcomer mapped within the window', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.addSpeakerChange(unattributed(1000));
     ref.now = 2100;
     t.assignSpeakerToSegment(5);
     ref.now = 3400; // 1.4 s after the unattributed null, 1.3 s after the assignment (no grace)
-    t.addSpeakerChange({ position: 2400, speaker: BOB });
-    assert.equal(t.getSpeakerForSegment(5).id, 'u2', 'the newcomer, once mapped');
+    mapped(t, BOB, 2400);
+    assert.equal(t.getSpeakerForSegment(5).id, 'u2');
     assert.equal(t.lastKnownSpeaker.id, 'u2');
     t.finalizeSegment(5);
     assert.equal(t.getSpeakerForSegment(5).id, 'u2', 'the unnamed time is now Bob\'s');
   });
 
-  it('also takes a known participant who is the loudest again within the window', () => {
+  it('is never named by a participant known before the null: Bob stops, Alice answers', () => {
+    const { ref, t } = aliceSpeaking();
+    ref.now = 2000;
+    t.addSpeakerChange(unattributed(1000)); // Bob, not mapped yet
+    t.assignSpeakerToSegment(5);
+    ref.now = 2300;
+    t.addSpeakerChange({ position: 1300, speaker: null }); // Bob stops
+    ref.now = 2600; // within the window
+    t.addSpeakerChange({ position: 1600, speaker: ALICE }); // Alice answers
+    ref.now = 2700;
+    t.finalizeSegment(5); // Bob 300 ms, Alice 100 ms
+    assert.equal(t.getSpeakerForSegment(5), null, "Bob's words are not Alice's");
+  });
+
+  it('is still named by the newcomer mapped after a known participant spoke, within the window', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.addSpeakerChange(unattributed(1000));
     t.assignSpeakerToSegment(5);
+    ref.now = 2200;
+    t.finalizeSegment(5); // the newcomer's words end as Alice speaks
+    t.addSpeakerChange({ position: 1200, speaker: ALICE });
     ref.now = 2500;
-    t.addSpeakerChange({ position: 1500, speaker: ALICE });
-    t.finalizeSegment(5);
-    assert.equal(t.getSpeakerForSegment(5).id, 'u1');
+    mapped(t, BOB, 1500);
+    assert.equal(t.getSpeakerForSegment(5).id, 'u2');
   });
 
-  it('leaves the segment without speaker when nobody is named within the window', () => {
+  it('is named by a participant who rejoins after the null (reused track of a departed one)', () => {
+    const { ref, t } = aliceSpeaking();
+    t.updateParticipant({ action: 'join', participant: CAROL });
+    t.updateParticipant({ action: 'leave', participant: CAROL });
+    ref.now = 2000;
+    t.addSpeakerChange(unattributed(1000));
+    t.assignSpeakerToSegment(5);
+    ref.now = 2300;
+    mapped(t, CAROL, 1300);
+    t.finalizeSegment(5);
+    assert.equal(t.getSpeakerForSegment(5).id, 'u3');
+  });
+
+  it('is not named by a speaker never announced by a join', () => {
+    const { ref, t } = aliceSpeaking();
+    ref.now = 2000;
+    t.addSpeakerChange(unattributed(1000));
+    t.assignSpeakerToSegment(5);
+    ref.now = 2300;
+    t.addSpeakerChange({ position: 1300, speaker: BOB });
+    ref.now = 2400;
+    t.finalizeSegment(5); // unnamed 300 ms, Bob 100 ms
+    assert.equal(t.getSpeakerForSegment(5), null);
+  });
+
+  it('leaves the segment without speaker when the newcomer is mapped after the window', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.addSpeakerChange(unattributed(1000));
     t.assignSpeakerToSegment(5);
     ref.now = 3600; // 1.6 s after the unattributed null
-    t.addSpeakerChange({ position: 2600, speaker: BOB });
+    mapped(t, BOB, 2600);
     ref.now = 3650;
-    t.finalizeSegment(5); // unnamed 1600 ms, Bob 50 ms
-    assert.equal(t.getSpeakerForSegment(5), null, 'a late mapping does not name it');
+    t.finalizeSegment(5);
+    assert.equal(t.getSpeakerForSegment(5), null);
     ref.now = 3700;
     t.addSpeakerChange({ position: 2700, speaker: ALICE });
     assert.equal(t.getSpeakerForSegment(5), null, 'nor a known participant regaining the floor');
   });
 
-  it('is settled by the first speaker only, without grace-period correction', () => {
+  it('is named once: neither a later newcomer nor a grace-period correction renames it', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.addSpeakerChange(unattributed(1000));
     t.assignSpeakerToSegment(5);
     ref.now = 2050;
-    t.addSpeakerChange({ position: 1050, speaker: BOB }); // mapped
-    ref.now = 2100; // still within the segment's grace period
-    t.addSpeakerChange({ position: 1100, speaker: ALICE });
+    mapped(t, BOB, 1050);
+    ref.now = 2100; // within the window and the segment's grace period
+    mapped(t, CAROL, 1100);
+    t.addSpeakerChange({ position: 1150, speaker: ALICE });
     ref.now = 2150;
     t.finalizeSegment(5); // Bob 100 ms (the unnamed 50 he named + his own 50), Alice 50 ms
     assert.equal(t.getSpeakerForSegment(5).id, 'u2');
@@ -479,7 +531,7 @@ describe('SpeakerTracker unattributed speaker', () => {
     ref.now = 3600; // the newcomer is still not mapped
     t.assignSpeakerToSegment(6);
     ref.now = 3650; // within the segment's grace period
-    t.addSpeakerChange({ position: 2650, speaker: BOB });
+    mapped(t, BOB, 2650);
     t.finalizeSegment(6);
     assert.equal(t.getSpeakerForSegment(6), null);
   });
@@ -493,7 +545,7 @@ describe('SpeakerTracker unattributed speaker', () => {
     t.addSpeakerChange(unattributed(1100));
     assert.equal(t.getSpeakerForSegment(5), null);
     ref.now = 2400; // mapped, past the grace period
-    t.addSpeakerChange({ position: 1400, speaker: BOB });
+    mapped(t, BOB, 1400);
     t.finalizeSegment(5);
     assert.equal(t.getSpeakerForSegment(5).id, 'u2');
   });
@@ -505,7 +557,7 @@ describe('SpeakerTracker unattributed speaker', () => {
     ref.now = 2300; // past grace
     t.addSpeakerChange(unattributed(1300));
     ref.now = 2400;
-    t.addSpeakerChange({ position: 1400, speaker: BOB });
+    mapped(t, BOB, 1400);
     t.finalizeSegment(4); // Alice 300 ms, then the newcomer (now Bob) 100 ms
     assert.equal(t.getSpeakerForSegment(4).id, 'u1');
   });
@@ -533,7 +585,7 @@ describe('SpeakerTracker unattributed speaker', () => {
     ref.now = 2000;
     t.addSpeakerChange(unattributed(1000));
     t.assignSpeakerToSegment(5);
-    t.addSpeakerChange({ position: 1100, speaker: BOB });
+    mapped(t, BOB, 1100);
     assert.deepEqual(t.getRecentEvents().map((e) => [e.position, e.action, e.speaker && e.speaker.id]), [
       [1000, 'unattributed', null], [5, 'pending', null], [5, 'resolve', 'u2'],
     ]);
@@ -541,7 +593,7 @@ describe('SpeakerTracker unattributed speaker', () => {
 
   // Next's majority: the newcomer's time is counted, under its own (unnamed)
   // name, against everyone else's in the segment.
-  it('counts the unnamed speaker in the majority, named by the speaker announced next', () => {
+  it('counts the unnamed speaker in the majority, named once the newcomer is mapped', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.assignSpeakerToSegment(5); // Alice speaks 400 ms
@@ -550,15 +602,15 @@ describe('SpeakerTracker unattributed speaker', () => {
     t.assignSpeakerToSegment(5); // the next partial
     assert.equal(t.getSpeakerForSegment(5), null, 'the partial shows nobody while the newcomer speaks');
     ref.now = 2700;
-    t.addSpeakerChange({ position: 1700, speaker: BOB });
+    mapped(t, BOB, 1700);
     t.assignSpeakerToSegment(5);
-    assert.equal(t.getSpeakerForSegment(5).id, 'u2', 'then the newcomer, named');
+    assert.equal(t.getSpeakerForSegment(5).id, 'u2', 'then the mapped newcomer');
     ref.now = 3200;
     t.finalizeSegment(5);
     assert.equal(t.getSpeakerForSegment(5).id, 'u2', 'Bob 800 ms vs Alice 400 ms');
   });
 
-  it('a newcomer never named and speaking the most leaves the segment unknown, not the previous speaker', () => {
+  it('a newcomer never mapped and speaking the most leaves the segment unknown, not the previous speaker', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.assignSpeakerToSegment(5);
@@ -569,11 +621,13 @@ describe('SpeakerTracker unattributed speaker', () => {
     assert.equal(t.getSpeakerForSegment(5), null);
   });
 
-  it('clear() forgets the unattributed state', () => {
+  it('clear() forgets the unattributed state and the joins', () => {
     const { ref, t } = aliceSpeaking();
     ref.now = 2000;
     t.addSpeakerChange(unattributed(1000));
     t.clear();
+    assert.equal(t.joinCount, 0);
+    assert.equal(t.joinedAt.size, 0);
     t.addSpeakerChange({ position: 0, speaker: ALICE });
     t.addSpeakerChange({ position: 50, speaker: null });
     t.assignSpeakerToSegment(1);

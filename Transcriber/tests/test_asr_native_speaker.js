@@ -512,6 +512,7 @@ describe('ASR native diarization + secret redaction', () => {
             let assigns = 0;
             const assign = tracker.assignSpeakerToSegment.bind(tracker);
             tracker.assignSpeakerToSegment = (segmentId) => { assigns += 1; assign(segmentId); };
+            tracker.updateParticipant({ action: 'join', participant: { id: 'u1', name: 'Alice' } });
             tracker.addSpeakerChange({ position: 0, speaker: { id: 'u1', name: 'Alice' } });
             const asr = await makeAsr({ diarizationMode: 'native', speakerTracker: tracker });
             const seg = asr.segmentId;
@@ -527,7 +528,8 @@ describe('ASR native diarization + secret redaction', () => {
             assert.strictEqual(partials[0].locutor, undefined, 'not the previous speaker');
             assert.strictEqual(partials[1].locutor, undefined, 'the secondary reads the same pending segment');
 
-            clock.now = 2300; // mapped within the window
+            clock.now = 2300; // mapped within the window: the newcomer's join, then its speaker change
+            tracker.updateParticipant({ action: 'join', participant: { id: 'u2', name: 'Bob' } });
             tracker.addSpeakerChange({ position: 1300, speaker: { id: 'u2', name: 'Bob' } });
             asr.provider.emit('transcribed', { text: 'hi there', isPrimary: true });
             asr.provider.emit('transcribed', { text: 'salut toi', isPrimary: false });

@@ -818,13 +818,18 @@ class ASR extends eventEmitter {
     if (!(this.state === ASR.states.READY || this.state === ASR.states.TRANSCRIBING)) return;
     const audioBuffer = this.audioBuffer.getAudioBuffer();
     if (audioBuffer.length >= Math.floor(process.env.MIN_AUDIO_BUFFER / 1000 * process.env.SAMPLE_RATE * process.env.BYTES_PER_SAMPLE)) {
+      // A copy: the circular buffer is overwritten by the next packet right
+      // after flush(), while the kept-audio write stream and some providers
+      // (Amazon's audio queue, a socket under backpressure) hold on to the
+      // chunk until they consume it.
+      const chunk = audioBuffer.slice();
       if (this.channel.keepAudio && this.record) {
-        this.audioFile.write(audioBuffer);
+        this.audioFile.write(chunk);
       }
-      this.provider.transcribe(audioBuffer);
+      this.provider.transcribe(chunk);
       if (this.timeline) {
         // Only audio the provider actually heard advances its clock.
-        const forwardedMs = this._bytesToMs(audioBuffer.length);
+        const forwardedMs = this._bytesToMs(chunk.length);
         this.timeline.audioMs += forwardedMs;
         this.timeline.pendingMs = Math.max(0, this.timeline.pendingMs - forwardedMs);
       }

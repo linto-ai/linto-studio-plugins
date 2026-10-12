@@ -402,7 +402,7 @@ class MyASRTranscriber extends EventEmitter {
 | `transcriber/out/{uniqueId}/session` | Transcriber | Scheduler | Stream status updates per session/channel |
 | `system/out/sessions/paused` | Session-API | Studio-API, others | Notification when a session is paused, payload: `{id, organizationId}` |
 | `system/out/sessions/resumed` | Session-API | Studio-API, others | Notification when a session is resumed, payload: `{id, organizationId}` |
-| `system/out/sessions/ended` | Scheduler | Studio-API | Notification when the Scheduler ends a session (`autoEnd` past `endOn`, or a bot leaving an empty meeting), published once every channel has been deactivated by its transcriber, so its captions are stored (bounded by `SESSION_STOP_FLUSH_TIMEOUT_MS`), payload: `{id, organizationId}` |
+| `system/out/sessions/ended` | Scheduler | Studio-API | Notification when the Scheduler ends a session (`autoEnd` past `endOn`, or a bot leaving an empty meeting), published once every channel has been deactivated by its transcriber, so its captions and kept audio file are stored (bounded by `SESSION_STOP_FLUSH_TIMEOUT_MS`), payload: `{id, organizationId}` |
 | `translator/out/{translatorName}/status` | Translator | Scheduler | Translator presence (retained + LWT for automatic deregistration) |
 | `botservice/out/{uniqueId}/status` | BotService, VisioBotService | Scheduler | Bot-service presence, load and advertised `capabilities` (retained + LWT). The Scheduler routes a bot to the least-loaded replica advertising the requested capability |
 | `botservice/out/{uniqueId}/bot-error` | BotService, VisioBotService | Scheduler | A bot failed fatally, payload: `{botId, reason}`. A `join-failed` from a *native* dispatch is re-routed once to the web sibling |

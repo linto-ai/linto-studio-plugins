@@ -395,6 +395,7 @@ describe('StreamingServer per-stream teardown hardening', () => {
   function fakeAsr(name, log, delayMs = 0) {
     return {
       name, flushed: false, detached: false, disposed: false,
+      channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
       async flushFinals() {
         if (delayMs) await sleep(delayMs);
         this.flushed = true;

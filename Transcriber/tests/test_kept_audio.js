@@ -20,7 +20,7 @@ const os = require('os');
 const path = require('path');
 const EventEmitter = require('eventemitter3');
 const { describe, it, before, after, beforeEach, afterEach } = require('mocha');
-const { setupMocks, fromTranscriber } = require('./helpers/asr_mocks');
+const { setupMocks, fromTranscriber, mockLogger } = require('./helpers/asr_mocks');
 
 const STREAMING_SERVER = fromTranscriber('components/StreamingServer/index.js');
 
@@ -154,5 +154,72 @@ describe('Kept audio across stream stops and reconnects', () => {
         await wait(150);
         const closed = events.indexOf('raw file closed');
         assert.ok(closed >= 0 && closed < events.indexOf('transcode start 1,2'), events.join(' | '));
+    });
+
+    // Session-end drains end on the channel deactivation, after which
+    // studio-api reads the kept audio file (converts and deletes the WAV).
+    describe('channel deactivation', () => {
+        const ORIG_TIMEOUT = process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS;
+        let warns, origWarn;
+        beforeEach(() => {
+            warns = [];
+            origWarn = mockLogger.warn;
+            mockLogger.warn = (msg) => warns.push(msg);
+        });
+        afterEach(() => {
+            mockLogger.warn = origWarn;
+            if (ORIG_TIMEOUT === undefined) delete process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS;
+            else process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS = ORIG_TIMEOUT;
+        });
+
+        it('is reported only once the kept audio file is saved', async () => {
+            transcodeDelayMs = 60;
+            await start();
+            send([1, 2]);
+            ws.emit('session-stop', session, channel.id);
+            await wait(200);
+            assert.deepStrictEqual(events, ['transcode start 1,2', 'transcode end', 'inactive']);
+            assert.deepStrictEqual(keptAudio(), [1, 2]);
+        });
+
+        it('waits for both streams of an immediate reconnect to be saved', async () => {
+            transcodeDelayMs = 50;
+            await start();
+            send([1, 2]);
+            ws.emit('session-stop', session, channel.id);
+            ws.emit('session-start', session, channel);
+            await wait(60);
+            send([3, 4]);
+            ws.emit('session-stop', session, channel.id);
+            await wait(300);
+            assert.deepStrictEqual(events, [
+                'transcode start 1,2', 'transcode end', 'transcode start 3,4', 'transcode end',
+                'inactive', // the second stream's: the first one's is skipped (newer stream)
+            ]);
+        });
+
+        it('does not wait longer than ASR_STOP_AUDIO_SAVE_TIMEOUT_MS, and warns', async () => {
+            process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS = '50';
+            transcodeDelayMs = 400;
+            await start();
+            send([1, 2]);
+            ws.emit('session-stop', session, channel.id);
+            await wait(150);
+            assert.deepStrictEqual(events, ['transcode start 1,2', 'inactive'], 'inactive while still transcoding');
+            assert.strictEqual(warns.length, 1);
+            assert.ok(/kept audio still being saved after 50ms/.test(warns[0]), warns[0]);
+            await wait(350);
+            assert.deepStrictEqual(keptAudio(), [1, 2], 'the save still completes');
+        });
+
+        it('does not wait for dispose without kept audio', async () => {
+            ws.emit('session-start', session, { ...channel, keepAudio: false });
+            const asr = streaming.ASRs.get('sess_7');
+            await asr._transitionLock;
+            asr.dispose = () => new Promise(() => {}); // would hang
+            ws.emit('session-stop', session, channel.id);
+            await wait(100);
+            assert.deepStrictEqual(events, ['inactive']);
+        });
     });
 });

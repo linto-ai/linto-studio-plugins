@@ -474,6 +474,7 @@ describe('K2 per-stream recording split', () => {
     function fakeAsr(name, log) {
       return {
         name, flushCount: 0, markerCount: 0, detached: false, disposed: false,
+        channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
         async flushFinals() { this.flushCount += 1; log.push(`flush:${name}`); },
         streamStopped() { this.markerCount += 1; log.push(`marker:${name}`); },
         removeAllListeners() { this.detached = true; },

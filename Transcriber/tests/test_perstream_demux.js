@@ -494,6 +494,7 @@ describe('StreamingServer per-stream demux', () => {
   function fakeAsr(name) {
     return {
       name, segmentId: 1, flushed: false, detached: false, disposed: false, marked: false,
+      channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
       async flushFinals() { this.flushed = true; },
       streamStopped() { this.marked = true; },
       removeAllListeners() { this.detached = true; },

@@ -503,7 +503,9 @@ class StreamingServer extends Component {
   //   4. preserve the segment-id cursor (it now includes the flushed finals);
   //      a newer legacy stream of the channel waits for it to number its
   //      segments (a per-stream one shares the allocator instead, see K1)
-  //   5. detach listeners and dispose (audio save stays fire-and-forget)
+  //   5. detach listeners and dispose; with kept audio, wait for the audio
+  //      file to be saved (bounded, see _awaitKeptAudio): the legacy ASR's,
+  //      or the per-stream recorder's
   //   6. emit 'session-stop' -> controllers -> deactivate published last, but
   //      ONLY when this stream is still the channel's latest one, running or
   //      being stopped (K1: a reconnect that superseded it during the stop
@@ -638,9 +640,7 @@ class StreamingServer extends Component {
       // the archive emits 'error', and detaching first threw away the only
       // ASR-key-qualified log line that names which channel's archive died.
       // ASR.dispose() removes the listeners itself on its way out.
-      for (const recorder of recorders) {
-        recorder.dispose();
-      }
+      const recorderSaves = recorders.map(recorder => recorder.dispose());
       // K1: a RECONNECT can have re-registered a fresh context for this channel
       // while we were awaiting the flushes above — cleanupWebsocket emits
       // 'session-stop' SYNCHRONOUSLY from the new connection's handler, so the
@@ -679,6 +679,9 @@ class StreamingServer extends Component {
           this.lastSegmentIds.set(ck, ctx.allocator.next);
         }
       }
+      if (recorderSaves.length > 0) {
+        await this._awaitKeptAudio(Promise.all(recorderSaves), session, channelId);
+      }
     } else {
       legacyAsr = this.ASRs.get(ck);
       // Legacy single ASR: the original ordering (flush, streamStopped,
@@ -702,7 +705,10 @@ class StreamingServer extends Component {
           cursorFinal();
         }
         asr.removeAllListeners();
-        asr.dispose();
+        const disposed = asr.dispose();
+        if (asr.channel.keepAudio) {
+          await this._awaitKeptAudio(disposed, session, channelId);
+        }
       }
     }
 
@@ -713,6 +719,24 @@ class StreamingServer extends Component {
     return true;
   }
 
+  // Session-end drains (Scheduler, PUT /sessions/:id/stop?waitFinal=true) end
+  // when the channel is reported inactive, and studio-api then reads the kept
+  // audio file: it converts and deletes the WAV, and measures the MP3 once for
+  // good. So the deactivation waits for the file to be complete, at most
+  // ASR_STOP_AUDIO_SAVE_TIMEOUT_MS so a slow transcode cannot hold it forever.
+  async _awaitKeptAudio(disposed, session, channelId) {
+    const timeoutMs = parseInt(process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS, 10) || 5000;
+    let timer;
+    const saved = await Promise.race([
+      disposed.catch(() => {}).then(() => true),
+      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
+    ]);
+    clearTimeout(timer);
+    if (!saved) {
+      logger.warn(`Session ${session.id}, channel ${channelId}: kept audio still being saved after ${timeoutMs}ms, reporting the channel inactive anyway (its audio file may be incomplete when read)`);
+    }
+  }
+
   // 'session-stop' is wired to BrokerClient.deactivate(), which publishes
   // streamStatus 'inactive' for the CHANNEL. A client that reconnects right away
   // (a bot reopening its WS to switch diarization mode, a demoted bot, the
@@ -721,7 +745,7 @@ class StreamingServer extends Component {
   // activation is already published, and this deactivation, carrying the same
   // transcriberId, would mark the channel inactive under it (the Scheduler only
   // ignores another transcriber's stale deactivation), or before its captions
-  // are stored if it is being stopped too. So only the channel's LATEST stream,
+  // and audio are saved if it is being stopped too. So only the channel's LATEST stream,
   // running or being stopped (`latestStreams`: its legacy ASR or its per-stream
   // context), reports it inactive, after its own captions; an older stream's
   // stop never does. This replaces the evidence the stop used to look for (a

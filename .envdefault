@@ -174,10 +174,14 @@ ASR_STOP_FLUSH_TIMEOUT_MS=3000
 # Grace period after the provider flush for straggler SDK callbacks, before
 # the end-of-stream marker is emitted (ms)
 ASR_STOP_SETTLE_MS=300
+# Max time the Transcriber waits, at stream stop, for the kept audio file
+# (keepAudio) to be saved before reporting the channel inactive (ms)
+ASR_STOP_AUDIO_SAVE_TIMEOUT_MS=5000
 # Max time PUT /sessions/:id/stop?waitFinal=true waits for every channel to be
 # deactivated by its transcriber before reading captions as-is, and the
 # Scheduler before publishing system/out/sessions/ended for a session it ends
-# itself (autoEnd, bot leaving an empty meeting) (ms)
+# itself (autoEnd, bot leaving an empty meeting) (ms). Keep it above
+# ASR_STOP_FLUSH_TIMEOUT_MS + ASR_STOP_SETTLE_MS + ASR_STOP_AUDIO_SAVE_TIMEOUT_MS.
 SESSION_STOP_FLUSH_TIMEOUT_MS=10000
 ASR_AVAILABLE_TRANSLATIONS_MICROSOFT="ar,eu,bs,bg,zh,zhh,cs,da,nl,en,et,fi,fr,gl,de,el,hi,hu,id,it,ja,ko,lv,lt,mk,nb,pl,pt,ro,ru,sr,sk,sl,es,sv,th,tr,uk,vi,cy"
 ASR_HAS_DIARIZATION_MICROSOFT=true

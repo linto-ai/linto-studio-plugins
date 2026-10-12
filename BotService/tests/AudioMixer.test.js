@@ -161,6 +161,26 @@ describe('AudioMixer', () => {
       m.stop()
     })
 
+    // See _drain: an early track is not realigned below maxLag (it would take
+    // dropping its audio), and is realigned without loss beyond.
+    it('an early track (backlog on top of its flow) stays offset by at most maxLag, and loses nothing', () => {
+      const q = (v) => frame(v, 128)
+      for (const [backlogMs, offset] of [[100, 1600], [250, 4000], [1000, 0], [3000, 0]]) {
+        const m = new AudioMixer()
+        open(m, ['x', 'y'], false)
+        for (let i = 0; i < 50; i++) { m.addAudio('x', q(1)); m.addAudio('y', q(2)) }
+        m.addAudio('x', frame(1, backlogMs * 16))
+        for (let i = 0; i < 1000; i++) { m.addAudio('x', q(1)); m.addAudio('y', q(2)) }
+        const x = m.tracks.get('x')
+        const y = m.tracks.get('y')
+        assert.equal(x.samplesAvailable - y.samplesAvailable, offset, `${backlogMs} ms backlog`)
+        assert.ok(offset <= m.maxLagSamples)
+        assert.equal(m.getStats().droppedSamples, 0)
+        assert.equal(m.getStats().outputSamples + x.samplesAvailable, x.inputSamples, `${backlogMs} ms: all of x mixed or pending`)
+        m.stop()
+      }
+    })
+
     it('a removed track is no longer waited for, and its tail goes with it', () => {
       open(mixer, ['a', 'b'], false)
       feed(mixer, { a: frame(1000, 2 * SAMPLES_PER_FRAME), b: frame(1, 100) })

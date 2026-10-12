@@ -165,6 +165,20 @@ class AudioMixer extends EventEmitter {
 
   // Emit frames while the buffered audio allows: once every flowing track has a
   // frame, or once a track is maxLag ahead of one that has not.
+  //
+  // Only LATE tracks are realigned (they stop being waited for, and line up again
+  // with a lead-in). An EARLY track, holding more than the others (a burst that
+  // was not preceded by a gap), keeps its offset, and that is on purpose:
+  // - It cannot happen within one document: its tracks share one AudioContext
+  //   and reach us through one ordered transport (ScriptProcessor callbacks are
+  //   interleaved as well), so a track is never more than a delivery ahead. Only
+  //   two documents capturing at once can skew, and none of the meeting clients
+  //   does.
+  // - The offset is bounded by maxLag: beyond it the other tracks look stalled,
+  //   the backlog is mixed at once (no loss) and the tracks are aligned again.
+  // - Removing it below maxLag would mean dropping up to maxLag of that track's
+  //   real audio, words, to fix a relative shift between two speakers that
+  //   costs the ASR nothing.
   _drain () {
     for (;;) {
       let ready = false

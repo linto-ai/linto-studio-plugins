@@ -40,7 +40,10 @@ const DEFAULTS = {
  * stream: a participant's microphone, their screen share audio, or a server-mixed
  * MCU/Teams stream) sample-aligned into a single S16LE 16 kHz mono stream, and,
  * for tracks attributed to participants (SFU), derives a native-diarization "who
- * is speaking" signal by energy-based VAD.
+ * is speaking" signal by energy-based VAD. A track speaks before the page has
+ * mapped it to its participant (its first seconds): the speaker is then unknown
+ * (null) rather than whoever spoke before, and its participant becomes the
+ * speaker as soon as the mapping arrives.
  *
  * Frames are driven by the input, not by a timer: every track of a page is
  * rendered by one AudioContext and its quanta reach us in render order, so the
@@ -75,6 +78,7 @@ class AudioMixer extends EventEmitter {
     this.droppedSamples = 0 // samples dropped on overflow, by every track (removed ones too)
     this.stalls = 0 // stalls of every track (removed ones too)
     this.currentSpeaker = null // { id, name } | null
+    this._unattributedSpeaker = null // id of the unattributed track last heard speaking
     this._silenceMs = 0
 
     // Pre-allocated accumulators: the hot path runs 50×/s. Tracks are summed wide
@@ -211,7 +215,9 @@ class AudioMixer extends EventEmitter {
   _mixFrame () {
     const mix = this._mix
     mix.fill(0)
-    const touched = [] // [participantId, name, sub-mix] in track order
+    // What speaks is told apart per participant (their tracks together: mic +
+    // screen share) and, for a track not attributed yet, per track. In track order.
+    const units = [] // { participant, sub } | { trackId, energySq }
     for (const track of this.tracks.values()) {
       const n = Math.min(track.samplesAvailable, SAMPLES_PER_FRAME)
       if (n === 0) continue
@@ -223,17 +229,20 @@ class AudioMixer extends EventEmitter {
           sub = new Int32Array(SAMPLES_PER_FRAME)
           this._participantMix.set(id, sub)
         }
-        if (!touched.some(t => t[0] === id)) {
+        if (!units.some(u => u.participant && u.participant.id === id)) {
           sub.fill(0)
-          touched.push([id, track.participant.name, sub])
+          units.push({ participant: track.participant, sub })
         }
       }
+      let energySq = 0
       for (let i = 0; i < n; i++) {
         const sample = track.buffer[track.readPos]
         track.readPos = (track.readPos + 1) % this.bufferSize
         mix[i] += sample
         if (sub) sub[i] += sample
+        else energySq += sample * sample
       }
+      if (!sub) units.push({ trackId: track.id, energySq })
       track.samplesAvailable -= n
     }
 
@@ -249,32 +258,48 @@ class AudioMixer extends EventEmitter {
     this.emit('audio', out)
     this.outputSamples += SAMPLES_PER_FRAME
 
-    // A participant's energy is that of their tracks together (mic + screen share).
     let maxEnergy = 0
-    let dominantSpeakerId = null
-    let dominantSpeakerName = null
-    for (const [id, name, sub] of touched) {
-      let energySq = 0
-      for (let i = 0; i < SAMPLES_PER_FRAME; i++) energySq += sub[i] * sub[i]
+    let dominant = null
+    for (const unit of units) {
+      let energySq = unit.energySq
+      if (unit.sub) {
+        energySq = 0
+        for (let i = 0; i < SAMPLES_PER_FRAME; i++) energySq += unit.sub[i] * unit.sub[i]
+      }
       const energy = Math.sqrt(energySq / SAMPLES_PER_FRAME)
       if (energy > this.energyThreshold && energy > maxEnergy) {
         maxEnergy = energy
-        dominantSpeakerId = id
-        dominantSpeakerName = name
+        dominant = unit
       }
     }
-    this._updateSpeaker(dominantSpeakerId, dominantSpeakerName)
+    this._updateSpeaker(dominant)
     this.mixPosition += FRAME_DURATION_MS
   }
 
-  _updateSpeaker (dominantSpeakerId, dominantSpeakerName) {
+  // dominant: the loudest unit of the frame above the energy threshold, or null.
+  _updateSpeaker (dominant) {
     const currentId = this.currentSpeaker ? this.currentSpeaker.id : null
 
-    if (dominantSpeakerId) {
+    if (dominant && dominant.participant) {
       this._silenceMs = 0
-      if (currentId !== dominantSpeakerId) {
-        this.currentSpeaker = { id: dominantSpeakerId, name: dominantSpeakerName }
+      this._unattributedSpeaker = null
+      if (currentId !== dominant.participant.id) {
+        this.currentSpeaker = { id: dominant.participant.id, name: dominant.participant.name }
         this._emitSpeaker(this.currentSpeaker)
+      }
+      return
+    }
+
+    if (dominant) {
+      // A track not attributed yet is speaking (its participant is not mapped
+      // yet): the speaker is unknown, and keeping the previous one would put their
+      // name on someone else's words. Its participant is announced as soon as the
+      // track is attributed (setTrackParticipant).
+      this._silenceMs = 0
+      this._unattributedSpeaker = dominant.trackId
+      if (currentId !== null) {
+        this.currentSpeaker = null
+        this._emitSpeaker(null)
       }
       return
     }
@@ -288,6 +313,14 @@ class AudioMixer extends EventEmitter {
         this.currentSpeaker = null
         this._silenceMs = 0
         this._emitSpeaker(null)
+      }
+    } else if (this._unattributedSpeaker !== null) {
+      // The unattributed track is quiet: past the grace, its mapping no longer
+      // means that its participant is the one speaking.
+      this._silenceMs += FRAME_DURATION_MS
+      if (this._silenceMs >= this.silenceGraceMs) {
+        this._unattributedSpeaker = null
+        this._silenceMs = 0
       }
     }
   }
@@ -304,19 +337,28 @@ class AudioMixer extends EventEmitter {
 
   /**
    * Attribute a track to a participant (SFU native diarization), or to nobody.
-   * Unattributed tracks are mixed but never make anyone the speaker.
+   * Unattributed tracks are mixed but never make anyone the speaker. When the
+   * track is the one heard speaking, its participant becomes the speaker at once
+   * (rather than at their next loud frame), so that the segment under way can
+   * still be put on them.
    * @param {*} trackId
    * @param {{id:string, name?:string}|null} participant
    */
   setTrackParticipant (trackId, participant) {
-    this._track(trackId).participant = participant
-      ? { id: participant.id, name: participant.name || participant.id }
-      : null
+    const track = this._track(trackId)
+    track.participant = participant ? { id: participant.id, name: participant.name || participant.id } : null
+    if (track.participant && this._unattributedSpeaker === trackId) {
+      this._unattributedSpeaker = null
+      this._silenceMs = 0
+      this.currentSpeaker = { id: track.participant.id, name: track.participant.name }
+      this._emitSpeaker(this.currentSpeaker)
+    }
   }
 
   /** Forget a track (it ended). Its unmixed tail (under a frame) goes with it. */
   removeTrack (trackId) {
     if (!this.tracks.delete(trackId)) return
+    if (this._unattributedSpeaker === trackId) this._unattributedSpeaker = null
     this._drain() // nobody waits for it anymore
   }
 
@@ -385,6 +427,7 @@ class AudioMixer extends EventEmitter {
     this.droppedSamples = 0
     this.stalls = 0
     this.currentSpeaker = null
+    this._unattributedSpeaker = null
     this._silenceMs = 0
   }
 }

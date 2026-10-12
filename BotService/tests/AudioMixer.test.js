@@ -394,6 +394,99 @@ describe('AudioMixer', () => {
     })
   })
 
+  // An SFU track speaks before the page maps it to its participant (its first
+  // seconds). The Transcriber pins a segment's speaker at its first partial, with
+  // a 200 ms grace: the previous speaker must not stay current meanwhile, and the
+  // participant must be announced the moment the mapping arrives.
+  describe('tracks not attributed yet (SFU first words)', () => {
+    const events = (m) => {
+      const list = []
+      m.on('speakerChanged', (ev) => list.push([ev.position, ev.speaker && ev.speaker.id]))
+      return list
+    }
+
+    it('an unattributed track speaking over the current speaker makes the speaker unknown, even for a lone participant', () => {
+      const ev = events(mixer)
+      open(mixer, ['alice'])
+      open(mixer, ['new'], false)
+      feed(mixer, { alice: frame(5000), new: frame(0) })
+      feed(mixer, { alice: frame(0), new: frame(5000) }) // someone not mapped yet speaks
+      assert.deepEqual(ev, [[0, 'alice'], [20, null]])
+      assert.equal(mixer.getCurrentSpeaker(), null)
+    })
+
+    it('keeps the current speaker while the unattributed track is quiet or quieter', () => {
+      const ev = events(mixer)
+      open(mixer, ['alice'])
+      open(mixer, ['new'], false)
+      feed(mixer, { alice: frame(5000), new: frame(400) }) // below the threshold
+      feed(mixer, { alice: frame(5000), new: frame(3000) }) // louder than the threshold, quieter than Alice
+      assert.deepEqual(ev, [[0, 'alice']])
+    })
+
+    it('announces the participant at once when the speaking track gets mapped', () => {
+      const ev = events(mixer)
+      open(mixer, ['alice'])
+      open(mixer, ['new'], false)
+      feed(mixer, { alice: frame(5000), new: frame(0) })
+      feed(mixer, { alice: frame(0), new: frame(5000) })
+      feed(mixer, { alice: frame(0), new: frame(5000) })
+      mixer.setTrackParticipant('new', { id: 'bob', name: 'Bob' }) // no further audio needed
+      assert.deepEqual(ev, [[0, 'alice'], [20, null], [60, 'bob']])
+      assert.deepEqual(mixer.getCurrentSpeaker(), { id: 'bob', name: 'Bob' })
+      feed(mixer, { alice: frame(0), new: frame(5000) })
+      assert.equal(ev.length, 3, 'no second transition while Bob goes on')
+    })
+
+    it('also after a pause shorter than the grace', () => {
+      const m = new AudioMixer({ silenceGraceMs: 100 })
+      const ev = events(m)
+      open(m, ['new'], false)
+      feed(m, { new: frame(5000) })
+      for (let i = 0; i < 4; i++) feed(m, { new: frame(0) }) // 80 ms pause
+      m.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
+      assert.deepEqual(ev, [[100, 'bob']])
+      m.stop()
+    })
+
+    it('not once the track has been quiet for the grace (its next loud frame tells)', () => {
+      const m = new AudioMixer({ silenceGraceMs: 100 })
+      const ev = events(m)
+      open(m, ['new'], false)
+      feed(m, { new: frame(5000) })
+      for (let i = 0; i < 5; i++) feed(m, { new: frame(0) }) // 100 ms of silence
+      m.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
+      assert.deepEqual(ev, [])
+      feed(m, { new: frame(5000) })
+      assert.deepEqual(ev, [[120, 'bob']])
+      m.stop()
+    })
+
+    it('mapping a track that is not the one speaking announces nobody', () => {
+      const ev = events(mixer)
+      open(mixer, ['a', 'b'], false)
+      feed(mixer, { a: frame(5000), b: frame(100) })
+      mixer.setTrackParticipant('b', { id: 'bob', name: 'Bob' })
+      assert.deepEqual(ev, [])
+    })
+
+    it('a removed track is no longer the one speaking', () => {
+      const ev = events(mixer)
+      open(mixer, ['new', 'other'], false)
+      feed(mixer, { new: frame(5000), other: frame(0) })
+      mixer.removeTrack('new')
+      mixer.setTrackParticipant('new', { id: 'bob', name: 'Bob' })
+      assert.deepEqual(ev, [])
+    })
+
+    it('MCU/Teams (nothing attributed): never any speaker event', () => {
+      const ev = events(mixer)
+      open(mixer, ['t0', 't1'], false)
+      for (let i = 0; i < 10; i++) feed(mixer, { t0: frame(i % 2 ? 9000 : 0), t1: frame(i % 2 ? 0 : 9000) })
+      assert.deepEqual(ev, [])
+    })
+  })
+
   describe('silence/grace transitions', () => {
     it('emits silence only after the grace period, then re-attributes on the next loud frame', () => {
       const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 40 }) // 2 frames of grace

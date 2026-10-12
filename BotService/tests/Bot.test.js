@@ -771,6 +771,34 @@ describe('Bot._onTrackRemoved', () => {
   })
 })
 
+// A Visio-like join: tracks arrive in render order (8 ms quanta), each mapped to
+// its participant by the page poller a little after it starts streaming.
+describe('Bot SFU join sequence (first words)', () => {
+  it('a newcomer speaking before being mapped is "unknown", then theirs as soon as the mapping arrives', () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const events = []
+    bot.on('participant-joined', (p) => events.push(['join', p.name]))
+    bot.on('speakerChanged', (e) => events.push([e.position, e.speaker && e.speaker.name]))
+    const map = (trackIndex, id, name) => bot.handleJsonMessage({ type: 'participantMapping', trackIndex, participant: { id, name } })
+
+    map(0, 'u1', 'Alice')
+    for (let q = 0; q < 60; q++) bot.handleAudioData(0, frame(5000, 128)) // Alice speaks, 480 ms
+    // Bob's track starts streaming; he speaks while Alice is quiet, not mapped yet.
+    for (let q = 0; q < 32; q++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(5000, 128)) }
+    map(1, 'u2', 'Bob') // the poller maps his track
+    for (let q = 0; q < 60; q++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(5000, 128)) }
+
+    assert.deepEqual(events, [
+      ['join', 'Alice'],
+      [0, 'Alice'],
+      [480, null], // Bob's first frame: no longer Alice
+      ['join', 'Bob'],
+      [720, 'Bob'] // the moment the mapping arrives, Bob's join first
+    ])
+  })
+})
+
 describe('Bot audio health log', () => {
   const { logger } = require('live-srt-lib')
   let infos, realInfo

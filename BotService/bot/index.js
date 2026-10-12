@@ -326,14 +326,15 @@ class Bot extends EventEmitter {
   _onParticipantMapping (trackIndex, participant, connId = 0) {
     const key = trackKey(connId, trackIndex)
     this.trackParticipants.set(key, participant)
-    // Teams maps participants, not tracks (trackIndex is always 0): only SFU
-    // mappings attribute a track's audio.
-    if (this.isSfu && this.audioMixer && !this.removedTracks.has(key)) this.audioMixer.setTrackParticipant(key, participant)
     if (!this.participants.has(participant.id)) {
       this.participants.set(participant.id, participant)
       logger.info(`Bot[${this.contextId}]: participant joined: ${participant.name} (${this.participants.size} present)`)
       this.emit('participant-joined', { identity: participant.id, name: participant.name })
     }
+    // Teams maps participants, not tracks (trackIndex is always 0): only SFU
+    // mappings attribute a track's audio. After the join above: if the track is
+    // the one speaking, the mixer announces its participant as the speaker now.
+    if (this.isSfu && this.audioMixer && !this.removedTracks.has(key)) this.audioMixer.setTrackParticipant(key, participant)
     // latched "admitted" milestone — the bot is in the meeting (first mapping).
     if (!this.hasSeenParticipant) {
       logger.info(`Bot[${this.contextId}]: admitted to meeting, first participant mapped (${participant.name})`)

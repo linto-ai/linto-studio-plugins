@@ -7,6 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// stop() waits for the service's last finals at most ASR_STOP_FLUSH_TIMEOUT_MS
+// minus this margin, so that the ASR wrapper, which gives up on stop() after
+// ASR_STOP_FLUSH_TIMEOUT_MS (ASR#flushFinals), still gets the partial flushed
+// after that wait.
+const STOP_WAIT_MARGIN_MS = 500;
+
 class AmazonTranscriber extends EventEmitter {
     static ERROR_MAP = {
         'BadRequestException': 'BAD_REQUEST',
@@ -25,6 +31,9 @@ class AmazonTranscriber extends EventEmitter {
         this.logger = logger.getChannelLogger(session.id, channel.id);
         this.client = null;
         this.audioQueue = [];
+        // Bumped for each new audio stream (start, reconnect): an older
+        // generator then stops reading this.audioQueue.
+        this._audioGeneration = 0;
         this.isStreaming = false;
         this.streamingPromise = null;
         this.lastPartialResult = null; // Track last partial result
@@ -149,12 +158,17 @@ class AmazonTranscriber extends EventEmitter {
         };
     }
 
-    async *audioStreamGenerator() {
-        // Generator that yields audio buffers from the queue
-        while (this.isStreaming) {
+    // Audio events for the service, from this.audioQueue. Once stop() has
+    // cleared isStreaming, it sends what is still queued, then ends: the SDK
+    // then sends the end-of-stream frame, and the service returns the finals of
+    // the audio it got and closes the result stream. It also ends as soon as a
+    // newer generator (start, reconnect) replaces it.
+    async *audioStreamGenerator(generation) {
+        while (generation === this._audioGeneration) {
             if (this.audioQueue.length > 0) {
-                const buffer = this.audioQueue.shift();
-                yield { AudioEvent: { AudioChunk: buffer } };
+                yield { AudioEvent: { AudioChunk: this.audioQueue.shift() } };
+            } else if (!this.isStreaming) {
+                return;
             } else {
                 // Wait a bit before checking again
                 await new Promise(resolve => setTimeout(resolve, 10));
@@ -240,6 +254,9 @@ class AmazonTranscriber extends EventEmitter {
         }
 
         const epoch = this._epoch;
+        // The previous stream is gone: retire its audio generator now, the
+        // queue keeps the audio for the new one.
+        const generation = ++this._audioGeneration;
         this.logger.info('Amazon ASR: Reconnecting...');
 
         // Don't emit error, just reconnect silently
@@ -284,7 +301,7 @@ class AmazonTranscriber extends EventEmitter {
                 MediaSampleRateHertz: 16000,
                 EnablePartialResultsStabilization: true,
                 PartialResultsStability: 'medium',
-                AudioStream: this.audioStreamGenerator(),
+                AudioStream: this.audioStreamGenerator(generation),
             };
 
             // Enable speaker diarization if requested
@@ -338,6 +355,9 @@ class AmazonTranscriber extends EventEmitter {
         this.lastPartialResult = null;
         this.isStreaming = true;
         this.audioQueue = [];
+        // Before any await, so a generator of the previous stream (still
+        // sending its queued audio after a stop) does not read the new queue.
+        const generation = ++this._audioGeneration;
         // Bump epoch BEFORE any await so an in-flight reconnect()/start() from
         // the previous generation observes the change after its next await.
         this._epoch += 1;
@@ -372,7 +392,7 @@ class AmazonTranscriber extends EventEmitter {
                 MediaSampleRateHertz: 16000,
                 EnablePartialResultsStabilization: true,
                 PartialResultsStability: 'medium',
-                AudioStream: this.audioStreamGenerator(),
+                AudioStream: this.audioStreamGenerator(generation),
             };
 
             // Enable speaker diarization if requested
@@ -394,9 +414,11 @@ class AmazonTranscriber extends EventEmitter {
             // Emit ready immediately after connection is established
             this.emit('ready');
 
-            // Start processing the transcription stream
+            // Process the results in the background: start() resolves once the
+            // stream is up. The ASR wrapper chains its transitions (stop flush,
+            // pause, dispose) behind start(); resolving only when the stream
+            // ends held them until the service's 15 s silence timeout.
             this.streamingPromise = this.processTranscriptionStream(response.TranscriptResultStream);
-            await this.streamingPromise;
 
         } catch (err) {
             if (this._isStaleReconnect(epoch)) {
@@ -426,24 +448,29 @@ class AmazonTranscriber extends EventEmitter {
         // and aborts cleanly instead of falling through to install a client.
         this._epoch += 1;
 
-        // Flush any pending partial result as a final transcription
+        // End the input (see audioStreamGenerator): the service then returns
+        // the finals of the audio it got and closes the result stream.
+        this.isStreaming = false;
+
+        // Wait for those finals, bounded (see STOP_WAIT_MARGIN_MS).
+        if (this.streamingPromise) {
+            const flushTimeoutMs = parseInt(process.env.ASR_STOP_FLUSH_TIMEOUT_MS, 10) || 3000;
+            let timer;
+            await Promise.race([
+                this.streamingPromise.catch(() => {}), // errors during shutdown are ignored
+                new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, flushTimeoutMs - STOP_WAIT_MARGIN_MS)); }),
+            ]);
+            clearTimeout(timer);
+            this.streamingPromise = null;
+        }
+        this.audioQueue = [];
+
+        // A partial that no final replaced (stream closed early, or not in
+        // time) is kept as a final.
         if (this.lastPartialResult) {
             this.logger.info('Amazon ASR: Flushing pending partial result as final');
             this.emit('transcribed', this.formatResult(this.lastPartialResult));
             this.lastPartialResult = null;
-        }
-
-        this.isStreaming = false;
-        this.audioQueue = [];
-
-        // Wait for stream processing to complete
-        if (this.streamingPromise) {
-            try {
-                await this.streamingPromise;
-            } catch (err) {
-                // Ignore errors during shutdown
-            }
-            this.streamingPromise = null;
         }
 
         if (this.client) {

@@ -21,6 +21,7 @@ require('./tests/test_kept_audio.js');
 require('./tests/test_security_diag.js');
 require('./tests/test_brokerclient_snapshot.js');
 require('./tests/test_amazon_epoch.js');
+require('./tests/test_amazon_stop.js');
 require('./tests/test_segmentation');
 require('./tests/test_segmentation_reanchor');
 require('./tests/test_google_transcriber.js');

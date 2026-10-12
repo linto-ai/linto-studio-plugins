@@ -336,6 +336,9 @@ class Bot extends EventEmitter {
       case 'participantMapping':
         this._onParticipantMapping(json.trackIndex, json.participant, connId)
         break
+      case 'trackUnmapped':
+        this._onTrackUnmapped(json.trackIndex, connId)
+        break
       case 'speakerChanged':
         // Teams native diarization (page-polled). SFU speaker changes come from
         // the AudioMixer, not here.
@@ -374,6 +377,15 @@ class Bot extends EventEmitter {
     this.hasSeenParticipant = true
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
+  }
+
+  // The page no longer knows whose the track is (its receiver was reused): stop
+  // attributing its audio; it is mapped again once its new owner is found. Its
+  // former participant may still be present (on another track, or listening).
+  _onTrackUnmapped (trackIndex, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    this.trackParticipants.delete(key)
+    if (this.isSfu && this.audioMixer && this.audioMixer.hasTrack(key)) this.audioMixer.setTrackParticipant(key, null)
   }
 
   _onTrackRemoved (trackIndex, connId = 0) {

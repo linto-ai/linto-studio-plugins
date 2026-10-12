@@ -488,11 +488,14 @@ function getInterceptScript (localWsUrl, platformConfig) {
     log('mapped track', info.index, '->', clean.name);
   }
   // The track no longer carries the participant it was mapped to: unmapped (so
-  // polled for fast), and never re-announced on a reconnect.
+  // polled for fast), never re-announced on a reconnect, and the Node side stops
+  // attributing it at once (its participant may still be in the meeting, e.g.
+  // after unpublishing, while the receiver already carries somebody else).
   function forgetMapping(info) {
     if (!info || !info.participantId) return;
     info.participantId = null;
     sentMappings.delete(info.index);
+    sendJson({ type: 'trackUnmapped', trackIndex: info.index });
   }
   // A participant left: their tracks may be reused for someone else (or for them,
   // back), and must be mapped again.

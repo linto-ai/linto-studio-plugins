@@ -818,6 +818,33 @@ describe('Bot reused receiver', () => {
   })
 })
 
+describe('Bot trackUnmapped', () => {
+  it("stops attributing the track at once: the new owner's words are unattributed, then theirs with 'mapped'", () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const ev = []
+    bot.on('speakerChanged', (e) => ev.push([e.speaker && e.speaker.id, e.reason, e.track]))
+    const map = (id) => bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 0, participant: { id, name: id } }, 1)
+    map('alice')
+    for (let i = 0; i < 5; i++) bot.handleAudioData(0, frame(3000), 1) // Alice
+    bot.handleJsonMessage({ type: 'trackUnmapped', trackIndex: 0 }, 1) // her receiver is reused
+    assert.equal(bot.trackParticipants.has('c1:0'), false)
+    assert.equal(bot.participants.has('alice'), true, 'Alice stays in the meeting')
+    for (let i = 0; i < 25; i++) bot.handleAudioData(0, frame(3000), 1) // Bob, not mapped yet
+    map('bob')
+    assert.deepEqual(ev, [['alice', undefined, undefined], [null, 'unattributed', 'c1:0.1'], ['bob', 'mapped', 'c1:0.1']])
+    bot._cancelAudioHealthLog()
+  })
+
+  it('is a no-op for an unknown track, and on MCU/Teams', () => {
+    const bot = makeBot('teams')
+    bot._startMixer()
+    assert.doesNotThrow(() => bot.handleJsonMessage({ type: 'trackUnmapped', trackIndex: 7 }, 1))
+    assert.equal(bot.audioMixer.hasTrack('c1:7'), false, 'no mixer track created')
+    bot._cancelAudioHealthLog()
+  })
+})
+
 describe('Bot SFU join sequence (first words)', () => {
   it('a newcomer speaking before being mapped is "unknown", then theirs as soon as the mapping arrives', () => {
     const bot = makeBot('visio')

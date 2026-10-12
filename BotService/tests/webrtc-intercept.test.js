@@ -1280,7 +1280,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       return { r, elements: [{ __reactFiber$x: { memoizedProps: { room: r }, memoizedState: null, return: null } }] }
     }
     const poll = (ctx) => { ctx.clock.advance(1500); ctx.clock.tickIntervals() }
-    const sent = (ws) => jsonFrames(ws).filter((f) => f.type !== 'trackAdded').map((f) => f.type + ':' + f.participant.id)
+    const sent = (ws) => jsonFrames(ws).filter((f) => f.type !== 'trackAdded').map((f) => f.type + ':' + (f.participant ? f.participant.id : f.trackIndex))
 
     it('a participant who left and comes back on the same receiver is mapped again', async () => {
       const lk = room([lkPart('bob', 'Bob', 'rx')])
@@ -1293,7 +1293,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       poll(ctx)
       lk.r.remoteParticipants = [lkPart('bob', 'Bob', 'rx')] // back, on the same receiver
       poll(ctx)
-      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'participantLeft:bob', 'participantMapping:bob'])
+      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'participantLeft:bob', 'trackUnmapped:0', 'participantMapping:bob'])
     })
 
     it('the receiver taken over by somebody else is mapped to them', async () => {
@@ -1321,7 +1321,27 @@ describe('webrtc-intercept getInterceptScript()', () => {
       ctx.clock.advance(250); ctx.clock.tickIntervals()
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 1)
       assert.strictEqual(ctx.audio.workletNodes.length, 1, 'one capture')
-      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'participantMapping:bob'])
+      assert.deepStrictEqual(sent(ws), ['participantMapping:bob', 'trackUnmapped:0', 'participantMapping:bob'])
+    })
+
+    // Alice unpublishes (she stays in the meeting) and her receiver is reused for
+    // Bob, whose publication LiveKit attaches a little later: until then the Node
+    // side kept attributing the track (Bob's words) to Alice.
+    it('tells the Node side at once that a re-fired track lost its participant, before its new owner is known', async () => {
+      const lk = room([lkPart('alice', 'Alice', 'rx')])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('rx')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      poll(ctx)
+      lk.r.remoteParticipants = [lkPart('alice', 'Alice', 'none'), lkPart('bob', 'Bob', 'none')] // not attached yet
+      emitTrack(ctx, track)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'trackUnmapped:0'], 'right away')
+      poll(ctx)
+      lk.r.remoteParticipants = [lkPart('alice', 'Alice', 'none'), lkPart('bob', 'Bob', 'rx')]
+      poll(ctx)
+      assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'trackUnmapped:0', 'participantMapping:bob'])
     })
 
     it('a reconnect does not re-announce the mapping of a participant who left', async () => {

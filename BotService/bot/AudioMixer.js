@@ -72,6 +72,8 @@ class AudioMixer extends EventEmitter {
     this.tracks = new Map() // trackId -> track state (ring buffer, attribution, counters)
     this.mixPosition = 0 // ms of mixed audio emitted — diarization clock
     this.outputSamples = 0 // samples emitted
+    this.droppedSamples = 0 // samples dropped on overflow, by every track (removed ones too)
+    this.stalls = 0 // stalls of every track (removed ones too)
     this.currentSpeaker = null // { id, name } | null
     this._silenceMs = 0
 
@@ -145,6 +147,7 @@ class AudioMixer extends EventEmitter {
         // overwritten oldest sample is lost — count it (no per-sample logging).
         track.readPos = (track.readPos + 1) % this.bufferSize
         track.droppedSamples++
+        this.droppedSamples++
       }
     }
     // Throttled overflow warning (outside the per-sample loop).
@@ -180,6 +183,7 @@ class AudioMixer extends EventEmitter {
           if (track.active && track.samplesAvailable < SAMPLES_PER_FRAME) {
             track.active = false
             track.stalls++
+            this.stalls++
           }
         }
       }
@@ -334,14 +338,18 @@ class AudioMixer extends EventEmitter {
   }
 
   /**
-   * Counters for health logging: samples emitted, and per track the samples
-   * received, dropped on overflow, buffered, and its stalls.
-   * @returns {{outputSamples:number, tracks:Array<{id, participantId:string|null, active:boolean,
-   *   inputSamples:number, droppedSamples:number, bufferedSamples:number, stalls:number}>}}
+   * Counters for health logging: samples emitted, samples dropped and stalls in
+   * total, and per track the samples received, dropped on overflow, buffered, and
+   * its stalls.
+   * @returns {{outputSamples:number, droppedSamples:number, stalls:number,
+   *   tracks:Array<{id, participantId:string|null, active:boolean, inputSamples:number,
+   *   droppedSamples:number, bufferedSamples:number, stalls:number}>}}
    */
   getStats () {
     return {
       outputSamples: this.outputSamples,
+      droppedSamples: this.droppedSamples,
+      stalls: this.stalls,
       tracks: Array.from(this.tracks.values(), (t) => ({
         id: t.id,
         participantId: t.participant ? t.participant.id : null,
@@ -360,6 +368,8 @@ class AudioMixer extends EventEmitter {
     this._participantMix.clear()
     this.mixPosition = 0
     this.outputSamples = 0
+    this.droppedSamples = 0
+    this.stalls = 0
     this.currentSpeaker = null
     this._silenceMs = 0
   }

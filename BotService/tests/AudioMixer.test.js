@@ -148,6 +148,7 @@ describe('AudioMixer', () => {
       assert.deepEqual(first.slice(100), new Array(220).fill(1000), 'then a alone')
       assert.equal(m.getStats().tracks.find((t) => t.id === 'b').stalls, 1)
       assert.equal(m.getStats().tracks.find((t) => t.id === 'b').active, false)
+      assert.equal(m.getStats().stalls, 1, 'counted in the total too')
       // a keeps flowing without waiting for b.
       m.addAudio('a', frame(1000, SAMPLES_PER_FRAME))
       assert.equal(o.frames.length, 4)
@@ -455,6 +456,8 @@ describe('AudioMixer', () => {
       m.addAudio('t', pcm(Array.from({ length: 740 }, (_, i) => i)))
       assert.deepEqual(o.frames.flatMap(samplesOf), Array.from({ length: 640 }, (_, i) => 100 + i))
       assert.equal(m.getStats().tracks[0].droppedSamples, 100)
+      m.removeTrack('t')
+      assert.equal(m.getStats().droppedSamples, 100, 'the total outlives the track')
       m.stop()
     })
 
@@ -483,6 +486,8 @@ describe('AudioMixer', () => {
       mixer.addAudio('a', frame(1, 400))
       const stats = mixer.getStats()
       assert.equal(stats.outputSamples, SAMPLES_PER_FRAME)
+      assert.equal(stats.droppedSamples, 0)
+      assert.equal(stats.stalls, 0)
       assert.deepEqual(stats.tracks, [{ id: 'a', participantId: 'u1', active: true, inputSamples: 400, droppedSamples: 0, bufferedSamples: 80, stalls: 0 }])
     })
 
@@ -527,7 +532,7 @@ describe('AudioMixer', () => {
       assert.equal(mixer.tracks.size, 0)
       assert.equal(mixer.getPositionMs(), 0)
       assert.equal(mixer.getCurrentSpeaker(), null)
-      assert.equal(mixer.getStats().outputSamples, 0)
+      assert.deepEqual(mixer.getStats(), { outputSamples: 0, droppedSamples: 0, stalls: 0, tracks: [] })
       assert.equal(mixer._silenceMs, 0)
     })
   })

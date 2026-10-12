@@ -771,6 +771,56 @@ describe('Bot._onTrackRemoved', () => {
   })
 })
 
+describe('Bot audio health log', () => {
+  const { logger } = require('live-srt-lib')
+  let infos, realInfo
+  beforeEach(() => { infos = []; realInfo = logger.info; logger.info = (m) => { infos.push(String(m)) } })
+  afterEach(() => { logger.info = realInfo })
+  const healthLines = () => infos.filter(m => m.includes('audio health'))
+
+  it('is armed with the mixer, every 60 s, and cleared on dispose', async () => {
+    const bot = makeBot('teams')
+    const delays = []
+    const realSetInterval = global.setInterval
+    global.setInterval = (fn, ms) => { delays.push(ms); return realSetInterval(fn, ms) }
+    try { bot._startMixer() } finally { global.setInterval = realSetInterval }
+    assert.deepEqual(delays, [60000])
+    assert.notEqual(bot.audioHealthTimer, null)
+    await bot.dispose()
+    assert.equal(bot.audioHealthTimer, null)
+  })
+
+  it('reports each track input rate, the output against the wall clock, and PCM of removed tracks', () => {
+    const bot = makeBot('teams')
+    bot._startMixer()
+    bot.hasSeenParticipant = true
+    const t0 = bot._audioHealth.at
+    // One second of two tracks, delivered as the page does (8 ms quanta in render order).
+    for (let i = 0; i < 125; i++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(100, 128)) }
+    bot._logAudioHealth(t0 + 1000)
+    assert.equal(healthLines()[0], 'Bot[s_c]: audio health over 1s: output 16000 samples/s (x1.00 real time), ' +
+      '2/2 tracks flowing [c0:0 16000/s, c0:1 16000/s], 0 samples dropped, 0 stalls, 0 frames of removed tracks ignored')
+    // The next window only counts what happened since.
+    bot.handleJsonMessage({ type: 'trackRemoved', trackIndex: 0 })
+    for (let i = 0; i < 50; i++) { bot.handleAudioData(0, frame(0, 128)); bot.handleAudioData(1, frame(100, 128)) }
+    bot._logAudioHealth(t0 + 2000)
+    assert.equal(healthLines()[1], 'Bot[s_c]: audio health over 1s: output 6400 samples/s (x0.40 real time), ' +
+      '1/1 tracks flowing [c0:1 6400/s], 0 samples dropped, 0 stalls, 50 frames of removed tracks ignored')
+    bot._cancelAudioHealthLog()
+  })
+
+  it('shows a track that stopped delivering next to one that flows', () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const t0 = bot._audioHealth.at
+    bot.handleAudioData(0, frame(1, 128))
+    bot.handleAudioData(1, frame(1, 128))
+    for (let i = 0; i < 124; i++) bot.handleAudioData(0, frame(1, 128)) // track 1 went silent
+    bot._logAudioHealth(t0 + 1000)
+    assert.ok(healthLines()[0].includes('1/2 tracks flowing [c0:0 16000/s, c0:1 idle 128/s], 0 samples dropped, 1 stalls'), healthLines()[0])
+    bot._cancelAudioHealthLog()
+  })
+})
 describe('Bot removed tracks', () => {
   const { logger } = require('live-srt-lib')
   let warns, realWarn

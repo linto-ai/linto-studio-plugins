@@ -18,6 +18,12 @@ const AUDIO_SILENCE_TIMEOUT_MS = (() => {
 // How often the silence watchdog re-checks the last-audio timestamp.
 const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
 
+// Period of the per-bot audio health log: one line summing up the audio path
+// (each track's input rate, the output rate against the wall clock, drops,
+// stalls, PCM of removed tracks), so that a capture or mixing fault shows in the
+// logs without a packet capture.
+const AUDIO_HEALTH_INTERVAL_MS = 60000
+
 // Parse an env timeout (in seconds) to ms, falling back to the default for a
 // missing OR malformed value. Without the Number.isFinite guard a non-numeric env
 // var yields NaN, and setTimeout(fn, NaN) fires ~immediately — the bot would
@@ -67,11 +73,14 @@ class Bot extends EventEmitter {
 
     this.trackParticipants = new Map() // trackKey -> { id, name }
     this.removedTracks = new Map() // trackKey -> PCM frames received after its removal
+    this.ignoredAudioFrames = 0 // PCM frames of removed tracks, in total
     this.participants = new Map() // participantId -> { id, name }
     this.hasSeenParticipant = false
     this.hasSeenAudio = false // one-shot latch for the "first audio frame" log
     this.lastAudioAt = 0 // ts of the most recent PCM frame (silence watchdog)
     this.audioSilenceWatchdog = null
+    this.audioHealthTimer = null
+    this._audioHealth = null // counters at the start of the current health window
     this.diarizationDegraded = false // native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
     this.joinWatchdog = null
@@ -195,9 +204,54 @@ class Bot extends EventEmitter {
   _startMixer () {
     this.audioMixer = new AudioMixer()
     this.audioMixer.on('audio', (buffer) => this.emit('audio', buffer))
+    this._armAudioHealthLog()
     if (!this.isSfu) return
     this.audioMixer.on('speakerChanged', (event) => this.emit('speakerChanged', event))
     for (const [key, participant] of this.trackParticipants) this.audioMixer.setTrackParticipant(key, participant)
+  }
+
+  _armAudioHealthLog () {
+    if (this.audioHealthTimer || this.disposed) return
+    this._audioHealth = this._audioHealthCounters(Date.now(), this.audioMixer.getStats())
+    this.audioHealthTimer = setInterval(() => this._logAudioHealth(), AUDIO_HEALTH_INTERVAL_MS)
+    if (typeof this.audioHealthTimer.unref === 'function') this.audioHealthTimer.unref()
+  }
+
+  _audioHealthCounters (at, stats) {
+    return {
+      at,
+      outputSamples: stats.outputSamples,
+      droppedSamples: stats.droppedSamples,
+      stalls: stats.stalls,
+      ignoredFrames: this.ignoredAudioFrames,
+      inputSamples: new Map(stats.tracks.map(t => [t.id, t.inputSamples]))
+    }
+  }
+
+  // Log the audio health over the window since the previous call. The output
+  // should run at x1.00 real time once admitted; a track flowing next to another
+  // one is listed as such ("idle" when it is not delivering).
+  _logAudioHealth (now = Date.now()) {
+    if (!this.audioMixer || !this._audioHealth) return
+    const prev = this._audioHealth
+    const seconds = (now - prev.at) / 1000
+    if (seconds <= 0) return
+    const stats = this.audioMixer.getStats()
+    const perSecond = (samples) => Math.round(samples / seconds)
+    const output = stats.outputSamples - prev.outputSamples
+    const tracks = stats.tracks.map(t => `${t.id}${t.active ? '' : ' idle'} ${perSecond(t.inputSamples - (prev.inputSamples.get(t.id) || 0))}/s`)
+    logger.info(`Bot[${this.contextId}]: audio health over ${Math.round(seconds)}s: output ${perSecond(output)} samples/s ` +
+      `(x${(output / (seconds * AudioMixer.SAMPLE_RATE)).toFixed(2)} real time), ` +
+      `${stats.tracks.filter(t => t.active).length}/${stats.tracks.length} tracks flowing [${tracks.join(', ')}], ` +
+      `${stats.droppedSamples - prev.droppedSamples} samples dropped, ${stats.stalls - prev.stalls} stalls, ` +
+      `${this.ignoredAudioFrames - prev.ignoredFrames} frames of removed tracks ignored`)
+    this._audioHealth = this._audioHealthCounters(now, stats)
+  }
+
+  _cancelAudioHealthLog () {
+    if (!this.audioHealthTimer) return
+    clearInterval(this.audioHealthTimer)
+    this.audioHealthTimer = null
   }
 
   handleAudioData (trackIndex, pcmBuffer, connId = 0) {
@@ -226,6 +280,7 @@ class Bot extends EventEmitter {
   _noteRemovedTrackAudio (key) {
     const ignored = this.removedTracks.get(key) + 1
     this.removedTracks.set(key, ignored)
+    this.ignoredAudioFrames++
     if (ignored === 1) logger.warn(`Bot[${this.contextId}]: ignoring PCM of removed track ${key} (its in-page capture is still running)`)
   }
 
@@ -487,6 +542,7 @@ class Bot extends EventEmitter {
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
     this._cancelAudioSilenceWatchdog() // no timer outlives the bot
+    this._cancelAudioHealthLog()
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
     // Best-effort graceful leave before tearing the context down (skip if the page
     // is already gone). Guarded so a throwing leave-rule cannot skip the

@@ -1599,6 +1599,50 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.strictEqual(pub.calls, 4)
     })
 
+    // The backoff went up to 30 s: a publication refused, then allowed by its
+    // owner, could wait 30 s for the next subscription request.
+    describe('subscription retries', () => {
+      async function setup (pub) {
+        const lk = lkSetup()
+        lk.pubs.push(pub)
+        const ctx = runScript(s, Object.assign({ audioOpts: { sampleRate: 16000 } }, lk.page))
+        await openLoopback(ctx)
+        emitTrack(ctx, makeTrack('other'))
+        await flush(); await flush(); await flush()
+        // Somebody unmapped keeps speaking: polled every 250 ms throughout.
+        const speak = (ms) => { for (let t = 0; t < ms; t += 250) { feed(ctx, 0, new Float32Array(128).fill(0.05)); runFor(ctx, 250) } }
+        return { ctx, speak }
+      }
+      // A publication not subscribed yet, recording when it is asked to be.
+      const unsubscribed = (permissionStatus) => {
+        const pub = { kind: 'audio', isSubscribed: false, permissionStatus, track: null, at: [], clock: null }
+        pub.setSubscribed = () => pub.at.push(pub.clock.now())
+        return pub
+      }
+      const gaps = (at) => at.slice(1).map((t, i) => t - at[i])
+
+      it('backs off up to 8 s', async () => {
+        const pub = unsubscribed(undefined)
+        const { ctx, speak } = await setup(pub)
+        pub.clock = ctx.clock
+        speak(40000)
+        assert.deepStrictEqual(gaps(pub.at), [2000, 4000, 8000, 8000, 8000, 8000])
+      })
+
+      it('asks again at once when its owner allows it, whatever the backoff', async () => {
+        const pub = unsubscribed('not_allowed')
+        const { ctx, speak } = await setup(pub)
+        pub.clock = ctx.clock
+        speak(15000) // asked at 0, 2, 6, 14 s
+        pub.permissionStatus = 'allowed'
+        const before = pub.at.length
+        speak(250)
+        assert.strictEqual(pub.at.length, before + 1)
+        speak(1000)
+        assert.strictEqual(pub.at.length, before + 1, 'then the backoff starts over')
+      })
+    })
+
     it('warns that no Room was found after 20 searches (~30 s), not after 20 fast polls', async () => {
       const lk = lkSetup({ hidden: true })
       const ctx = runScript(s, lk.page)

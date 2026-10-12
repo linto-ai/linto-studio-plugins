@@ -651,15 +651,22 @@ const SFU_MAPPING_BLOCK = `
   // setSubscribed(true) sends the SFU a subscription update: once, then again for
   // a publication that stays unsubscribed only after SUBSCRIBE_RETRY_MS, doubling
   // up to SUBSCRIBE_RETRY_MAX_MS (the fast poll must not flood the signalling).
-  var SUBSCRIBE_RETRY_MS = 2000, SUBSCRIBE_RETRY_MAX_MS = 30000;
-  const subscribeRequests = new WeakMap(); // publication -> { next, delay }
+  // A publication its owner did not allow us to subscribe to is asked again as
+  // soon as it is allowed (its permissionStatus, read at each poll), whatever the
+  // backoff. The cap bounds the wait when nothing tells why a subscription does
+  // not happen: one small signalling message per 8 s per audio publication.
+  var SUBSCRIBE_RETRY_MS = 2000, SUBSCRIBE_RETRY_MAX_MS = 8000;
+  const subscribeRequests = new WeakMap(); // publication -> { next, delay, permission }
   function requestSubscription(pub, now) {
     if (pub.isSubscribed) { subscribeRequests.delete(pub); return; }
     if (typeof pub.setSubscribed !== 'function') return;
-    const previous = subscribeRequests.get(pub);
-    if (previous && now < previous.next) return;
+    let permission;
+    try { permission = pub.permissionStatus; } catch (e) { /* not exposed */ }
+    let previous = subscribeRequests.get(pub);
+    if (previous && previous.permission === 'not_allowed' && permission === 'allowed') previous = null;
+    if (previous && now < previous.next) { previous.permission = permission; return; }
     const delay = previous ? Math.min(previous.delay * 2, SUBSCRIBE_RETRY_MAX_MS) : SUBSCRIBE_RETRY_MS;
-    subscribeRequests.set(pub, { next: now + delay, delay: delay });
+    subscribeRequests.set(pub, { next: now + delay, delay: delay, permission: permission });
     try { pub.setSubscribed(true); } catch (e) { /* ignore */ }
   }
   function findLivekitRoom() {

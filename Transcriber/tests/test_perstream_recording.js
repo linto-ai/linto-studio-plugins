@@ -189,6 +189,9 @@ describe('K2 per-stream recording split', () => {
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
     inst.latestStreams = new Map();
+    inst.streamHandles = new Map();
+    inst.stoppingAsrs = new WeakSet();
+    inst.channelStops = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.pendingLeaves = new Map();
@@ -492,6 +495,7 @@ describe('K2 per-stream recording split', () => {
         segmentIdLimit: null,
         reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
         useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
+        reserveAudioSave() {},
         async flushFinals() { this.flushCount += 1; log.push(`flush:${name}`); },
         streamStopped() { this.markerCount += 1; log.push(`marker:${name}`); },
         removeAllListeners() { this.detached = true; },

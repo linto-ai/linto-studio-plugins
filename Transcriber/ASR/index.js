@@ -759,9 +759,8 @@ class ASR extends eventEmitter {
 
   // Save this stream's raw audio into the channel's audio file once `ready`
   // settles. The saves of a channel run one at a time, in the order they are
-  // requested (stream order): each appends to the same file through the same
-  // temporary files, and two streams of a channel overlap here when a client
-  // reconnects at once.
+  // requested: each appends to the same file, and two streams of a channel
+  // overlap here when a client reconnects at once.
   saveAudio(ready = Promise.resolve()) {
     const key = `${this.session.id}-${this.channel.id}`;
     const save = (audioSaves.get(key) || Promise.resolve())
@@ -775,7 +774,20 @@ class ASR extends eventEmitter {
     return save;
   }
 
+  // Takes this stream's place in the channel's saves now, when its stop
+  // starts: streams stopped in a row (a client reconnecting at once) are
+  // appended in stream order, whichever flush ends first. dispose() runs the
+  // save once the raw file is closed.
+  reserveAudioSave() {
+    if (!this.channel.keepAudio || this._reservedAudioSave) return;
+    let release;
+    const ready = new Promise((resolve) => { release = resolve; });
+    this._reservedAudioSave = { release, save: this.saveAudio(ready) };
+    this._reservedAudioSave.save.catch(() => {}); // awaited, and reported, by dispose()
+  }
+
   async _saveAudio() {
+    if (this._noAudioToSave) return;
     const fileExtension = this.channel.compressAudio ? '.mp3' : '.wav';
     const transcodeFn = this.channel.compressAudio ? this.transcodeToMp3.bind(this) : this.transcodeToWav.bind(this);
     const pcmFilePath = this.audioPcmPath;
@@ -877,7 +889,18 @@ class ASR extends eventEmitter {
         // stream that received no audio (K2: nobody ever spoke on a per-stream
         // channel, so its recorder's mixed flow stayed empty) saves nothing,
         // see _saveAudio.
-        await this.saveAudio(this._closeAudioFile());
+        const closed = this._closeAudioFile();
+        if (this._reservedAudioSave) {
+          this._reservedAudioSave.release(closed);
+          await this._reservedAudioSave.save;
+        } else {
+          await this.saveAudio(closed);
+        }
+      } else if (this._reservedAudioSave) {
+        // No raw file (init failed): nothing to save, free the channel's saves.
+        this._noAudioToSave = true;
+        this._reservedAudioSave.release();
+        await this._reservedAudioSave.save;
       }
       if (this.provider) {
         this.provider.removeAllListeners();

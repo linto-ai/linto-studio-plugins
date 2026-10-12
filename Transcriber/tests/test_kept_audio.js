@@ -202,6 +202,74 @@ describe('Kept audio across stream stops and reconnects', () => {
             ]);
         });
 
+        it('keeps stream order when the older stream\'s flush is the slower one', async () => {
+            // The session ends right after a reconnect: both streams stop, the
+            // older one's provider taking longer to flush (e.g. Azure).
+            streaming.on('final', (t) => events.push(t.locutor === 'bot' && t.aend ? 'marker' : `final ${t.text}`));
+            await start();
+            const older = streaming.ASRs.get('sess_7');
+            send([1, 2]);
+            older.provider.stop = function () {
+                return new Promise((resolve) => setTimeout(() => {
+                    this.emit('transcribed', { text: 'older flushed', astart: 0 });
+                    resolve();
+                }, 150));
+            };
+            ws.emit('session-stop', session, channel.id);
+            await start(); // reconnects at once
+            send([3, 4]);
+            ws.emit('session-stop', session, channel.id);
+            await wait(400);
+            assert.deepStrictEqual(events, [
+                'final older flushed', 'marker', 'transcode start 1,2', 'transcode end', // the older stream's stop
+                'marker', 'transcode start 3,4', 'transcode end', 'inactive', // then the newer one's
+            ]);
+            assert.deepStrictEqual(keptAudio(), [1, 2, 3, 4]);
+        });
+
+        it('stops each stream\'s own ASR when streams of two servers feed one channel', async () => {
+            // e.g. an SRT stream, then a WS stream on the same channel: each
+            // server stops its own stream, in any order.
+            const srt = {}, wsStream = {};
+            ws.emit('session-start', session, channel, srt);
+            const first = streaming.ASRs.get('sess_7');
+            await first._transitionLock;
+            send([1, 2]);
+            ws.emit('session-start', session, channel, wsStream);
+            const second = streaming.ASRs.get('sess_7');
+            await second._transitionLock;
+            send([3, 4]);
+            ws.emit('session-stop', session, channel.id, srt);
+            await wait(150);
+            assert.strictEqual(first.provider, null, 'the first stream\'s ASR is disposed');
+            assert.strictEqual(streaming.ASRs.get('sess_7'), second, 'the second stream still feeds the channel');
+            assert.deepStrictEqual(events, ['transcode start 1,2', 'transcode end'], 'no deactivation: the second stream is the latest');
+            ws.emit('session-stop', session, channel.id, wsStream);
+            await wait(150);
+            assert.deepStrictEqual(events.slice(2), ['transcode start 3,4', 'transcode end', 'inactive']);
+            assert.deepStrictEqual(keptAudio(), [1, 2, 3, 4]);
+        });
+
+        it('does not wait for an earlier stop past the stop budget, and warns', async () => {
+            const ORIG_FLUSH = process.env.ASR_STOP_FLUSH_TIMEOUT_MS;
+            process.env.ASR_STOP_FLUSH_TIMEOUT_MS = '100';
+            process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS = '50'; // budget: 100 + 20 + 50 ms
+            try {
+                await start();
+                send([1, 2]);
+                streaming.channelStops.set('sess_7', new Promise(() => {})); // an earlier stop that never ends
+                const stoppedAt = Date.now();
+                ws.emit('session-stop', session, channel.id);
+                await wait(300);
+                const inactive = events.indexOf('inactive');
+                assert.ok(inactive >= 0, events.join(' | '));
+                assert.ok(warns.some((w) => /earlier stream of the channel is still being stopped/.test(w)), warns.join(' | '));
+                assert.ok(Date.now() - stoppedAt >= 170);
+            } finally {
+                if (ORIG_FLUSH === undefined) delete process.env.ASR_STOP_FLUSH_TIMEOUT_MS; else process.env.ASR_STOP_FLUSH_TIMEOUT_MS = ORIG_FLUSH;
+            }
+        });
+
         it('does not wait longer than ASR_STOP_AUDIO_SAVE_TIMEOUT_MS, and warns', async () => {
             process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS = '50';
             transcodeDelayMs = 400;

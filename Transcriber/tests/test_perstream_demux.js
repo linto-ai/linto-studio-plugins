@@ -314,6 +314,9 @@ describe('StreamingServer per-stream demux', () => {
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
     inst.latestStreams = new Map();
+    inst.streamHandles = new Map();
+    inst.stoppingAsrs = new WeakSet();
+    inst.channelStops = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
     inst.emitted = [];
@@ -498,6 +501,7 @@ describe('StreamingServer per-stream demux', () => {
       segmentIdLimit: null,
       reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
       useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
+      reserveAudioSave() {},
       async flushFinals() { this.flushed = true; },
       streamStopped() { this.marked = true; },
       removeAllListeners() { this.detached = true; },

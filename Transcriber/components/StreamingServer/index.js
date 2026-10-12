@@ -55,9 +55,13 @@ class StreamingServer extends Component {
     // legacy ASR, or its per-stream channel context. Only its stop reports the
     // channel inactive (see _stopAsr).
     this.latestStreams = new Map();
-    // Legacy ASR -> the server's stream object it serves (see _stopAsr); a
-    // per-stream context carries its own (`ctx.stream`).
-    this.asrStreams = new WeakMap();
+    // The server's stream object -> what serves it until its stop: its legacy
+    // ASR or its per-stream context (see _stopAsr), and the legacy ASRs being
+    // stopped.
+    this.streamHandles = new Map();
+    this.stoppingAsrs = new WeakSet();
+    // Completion of each channel's latest stop (see _stopAsr).
+    this.channelStops = new Map();
     this.lastOrphanAudioSweep = 0;
     this.servers = [];
     this.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
@@ -147,9 +151,10 @@ class StreamingServer extends Component {
             // K9: `registeredAt` is the reaper's grace anchor — a channel marked
             // here but not yet streaming a single tagged frame must never be
             // collected as an orphan.
-            const ctx = { session, channel, allocator, registeredAt: Date.now(), stream };
+            const ctx = { session, channel, allocator, registeredAt: Date.now() };
             this.channels.set(ck, ctx);
             this.latestStreams.set(ck, ctx);
+            if (stream !== undefined) this.streamHandles.set(stream, ctx);
             // K9: arm the orphan-channel reaper on the first per-stream channel
             // (idempotent), so a deployment that never goes per-stream never
             // arms it at all.
@@ -187,10 +192,15 @@ class StreamingServer extends Component {
             ? server.getSpeakerTracker(session.id, channel.id)
             : null;
           const diarizationMode = speakerTracker ? 'native' : 'asr';
+          if (this.ASRs.has(`${session.id}_${channel.id}`)) {
+            // Another server's stream of the channel (e.g. SRT then WS): it runs
+            // until its own stop, the channel's audio now goes to this stream.
+            logger.warn(`Session ${session.id}, channel ${channel.id}: another stream already feeds the channel, its audio is no longer transcribed`);
+          }
           const asr = this._wireAsr(session, channel, { initialSegmentId, speakerTracker, diarizationMode },
             `${session.id}_${channel.id}`, session.id, channel.id);
           this.latestStreams.set(`${session.id}_${channel.id}`, asr);
-          if (stream !== undefined) this.asrStreams.set(asr, stream);
+          if (stream !== undefined) this.streamHandles.set(stream, asr);
           this.emit('session-start', session, channel);
           logger.info(`Session ${session.id}, channel ${channel.id} started`);
         } catch (error) {
@@ -507,135 +517,190 @@ class StreamingServer extends Component {
   }
 
 
-  // Tear down the ASR of a channel so the end-of-stream bot marker is provably
+  // Tear down the ASR of a stream so the end-of-stream bot marker is provably
   // the LAST final published for the stream, and the deactivate (streamStatus
   // 'inactive') is published strictly after it:
-  //   1. remove the ASR from the map synchronously (double session-stop guard)
+  //   1. take the stream's ASR off the maps synchronously (double session-stop
+  //      guard), reserve its last segment ids and its place in the channel's
+  //      audio saves (see below)
   //   2. flush in-flight provider finals with listeners still attached
-  //   3. publish the bot end-of-stream marker
-  //   4. keep the segment-id cursor: a newer stream of the channel, started
+  //   3. wait for the channel's earlier stops, if any (see below)
+  //   4. publish the bot end-of-stream marker
+  //   5. keep the segment-id cursor: a newer stream of the channel, started
   //      meanwhile, got the ids after the ones reserved for this one (below)
-  //   5. detach listeners and dispose; with kept audio, wait for the audio
-  //      file to be saved (bounded, see _awaitKeptAudio): the legacy ASR's,
-  //      or the per-stream recorder's
-  //   6. emit 'session-stop' -> controllers -> deactivate published last, but
+  //   6. detach listeners and dispose; with kept audio, wait for the audio
+  //      file to be saved (see _awaitKeptAudio): the legacy ASR's, or the
+  //      per-stream recorder's
+  //   7. emit 'session-stop' -> controllers -> deactivate published last, but
   //      ONLY when this stream is still the channel's latest one, running or
   //      being stopped (K1: a reconnect that superseded it during the stop
   //      must not have its successor deactivated, see _reportChannelStopped)
-  // Returns false when no ASR was registered for the channel, or when `stream`
-  // (the stream that stopped, if the server passes it) is not the one the
-  // channel's legacy ASR or per-stream context serves: a replaced connection
-  // whose own close or worker exit comes late must not stop the newer stream.
+  // Steps 3 to 7 end within the stop budget (_stopBudgetMs) from step 1.
+  // `stream` is the server's stream that stopped: its own ASR is stopped (its
+  // legacy ASR, or its per-stream context's sub-ASR), even when a stream of
+  // another server feeds the channel since (e.g. SRT then WS on one channel).
+  // Without `stream`, the channel's ASR are.
+  // A client that reconnects right away (e.g. a bot reopening its WS to switch
+  // diarization mode) starts a newer stream on this channel while this one is
+  // being stopped, and both may be stopping at once (the session ends). Each
+  // flushes its own ASR at once, but the rest follows stream order: this
+  // stream's audio is appended after the earlier streams', and its end-of-
+  // stream marker and deactivation come once their stops are over (their last
+  // finals, marker and audio file).
+  // Returns false when that stream is not found or already being stopped (e.g.
+  // a replaced connection whose own close or worker exit comes late).
   async _stopAsr(session, channelId, stream) {
     const ck = `${session.id}_${channelId}`;
-    // Per-stream channels keep their ASR under `${ck}#${tag}`; legacy under `${ck}`.
-    // Without a stream, match both so a channel's every sub-ASR is torn down
-    // (0 orphans); with one, only the keys of that stream.
-    let ofStream = (k) => k === ck || k.startsWith(`${ck}#`);
+    let legacyAsr = null;
+    let ctx;
     if (stream !== undefined) {
-      const legacy = this.ASRs.get(ck);
-      const ctx = this.channels.get(ck);
-      if (legacy && this.asrStreams.get(legacy) === stream) {
-        ofStream = (k) => k === ck;
-      } else if (ctx && ctx.stream === stream) {
-        ofStream = (k) => k.startsWith(`${ck}#`);
-      } else {
-        logger.info(`Session ${session.id}, channel ${channelId}: stop of a replaced stream ignored`);
+      const handle = this.streamHandles.get(stream);
+      this.streamHandles.delete(stream);
+      if (!handle) {
+        logger.info(`Session ${session.id}, channel ${channelId}: stop of an unknown or already stopped stream ignored`);
         return false;
       }
-    }
-    const subKeys = [...this.ASRs.keys()].filter(ofStream);
-
-    if (subKeys.length === 0) {
-      // D3a lazy hole: a per-stream channel that was marked at session-start but
-      // never received a single tagged frame created 0 ASR. We must still emit
-      // session-stop so the marker + deactivate (streamStatus inactive) are
-      // published — otherwise the session stays stuck. Legacy (no per-stream
-      // marker) returns false unchanged.
-      const lazyCtx = this.channels.get(ck);
-      if (lazyCtx && lazyCtx.allocator != null) {
-        // K10: a stop for THIS VERY context is already in flight. It emptied
-        // this.ASRs in its synchronous prefix and is parked on the flushes, so a
-        // DUPLICATE stop for the same connection lands here with 0 sub-keys. The
-        // in-flight stop owns the end-of-stream marker, the segment-id cursor
-        // and the deactivate; letting the duplicate proceed deleted the context
-        // out from under it, so its identity guard below failed, `lastSegmentIds`
-        // was never written (the next connection then re-used ids the trailing
-        // finals had just published) and the duplicate's deactivate was emitted
-        // BEFORE the marker it is contractually supposed to follow. A genuine
-        // successor is always a FRESH context object (session-start never reuses
-        // one), so `stopping` here can only mean a duplicate of this same stop.
-        if (lazyCtx.stopping) {
-          logger.info(`Channel ${ck} is already stopping; ignoring the duplicate stop`);
-          return false;
-        }
-        lazyCtx.stopping = true; // C4, same contract as the N-ASR branch below
-        // C9: the channel's only participant may have just left and still be
-        // flushing its trailing finals — the deactivate must not precede them.
-        const lazyLeaves = [...(this.pendingLeaves?.get(ck) || [])];
-        if (lazyLeaves.length > 0) await Promise.allSettled(lazyLeaves);
-        // K1: drop the context this stop owns, never a successor's; the
-        // deactivate is gated on the channel's latest stream (same rule as the
-        // tail below).
-        this._cleanupPerStream(ck, lazyCtx);
-        this._reportChannelStopped(session, channelId, lazyCtx);
-        logger.info(`Stopped per-stream channel ${ck} with 0 ASR (lazy hole closed)`);
-        return true;
+      if (handle.allocator !== undefined) ctx = handle;
+      else legacyAsr = handle;
+    } else {
+      // Per-stream channels keep their ASR under `${ck}#${tag}`; legacy under
+      // `${ck}`. The teardown ordering is decided by the KEYS actually being
+      // torn down, never by the channel context. A per-stream context that
+      // OUTLIVED its stream (a stop superseded by a reconnect, a context still
+      // awaiting the K9 reaper — which cannot collect it while the legacy ASR
+      // keeps _hasChannelAsr true) would otherwise hijack a genuinely LEGACY
+      // channel stop: the legacy ordering, and with it the live ASR's own
+      // segment-id cursor, would be skipped and the STALE allocator's cursor
+      // written over it, so the next stream on the channel resumes on segment
+      // ids whose captions are already stored. The mirror-image hole: with
+      // sub-ASR registered but no context, they are still torn down as one
+      // per-stream stream (ONE end-of-stream marker, concurrent K3 flushes),
+      // with no allocator to preserve.
+      const hasSubAsr = [...this.ASRs.keys()].some(k => k.startsWith(`${ck}#`));
+      if (hasSubAsr) {
+        ctx = this.channels.get(ck);
+      } else if (this.ASRs.has(ck)) {
+        legacyAsr = this.ASRs.get(ck);
+      } else {
+        // D3a lazy hole: a per-stream channel that was marked at session-start
+        // but never received a single tagged frame created 0 ASR. We must still
+        // emit session-stop so the deactivate (streamStatus inactive) is
+        // published — otherwise the session stays stuck. A legacy channel with
+        // no ASR returns false unchanged.
+        ctx = this.channels.get(ck);
+        if (!ctx || ctx.allocator == null) return false;
       }
+    }
+    if (legacyAsr) return this._stopLegacyStream(session, channelId, legacyAsr, stream);
+    return this._stopPerStream(session, channelId, ctx);
+  }
+
+  // A legacy stream: its single ASR (see _stopAsr).
+  async _stopLegacyStream(session, channelId, asr, stream) {
+    const ck = `${session.id}_${channelId}`;
+    if (this.stoppingAsrs.has(asr)) return false;
+    this.stoppingAsrs.add(asr);
+    if (this.ASRs.get(ck) === asr) this.ASRs.delete(ck);
+    // Without a stream (a caller that does not pass one), a stale per-stream
+    // context of the channel goes with its legacy stop, as it always did. With
+    // one, a per-stream context belongs to another stream of the channel.
+    const staleCtx = stream === undefined ? this.channels.get(ck) : undefined;
+    const deadline = Date.now() + this._stopBudgetMs(asr.channel);
+    // Before the first await: a client that reconnects at once starts the newer
+    // stream from this cursor while this ASR still flushes its last finals.
+    const reservedUpTo = asr.reserveSegmentIds(STOPPING_STREAM_SEGMENT_RESERVE);
+    this.lastSegmentIds.set(ck, Math.max(this.lastSegmentIds.get(ck) || 1, reservedUpTo));
+    asr.reserveAudioSave();
+    const stop = this._enterChannelStops(ck);
+    let disposed = false;
+    try {
+      await asr.flushFinals();
+      if (stop.earlier) await this._awaitEarlierStops(stop.earlier, deadline, session, channelId);
+      asr.streamStopped();
+      // No newer stream took the cursor: give back the ids this ASR did not
+      // use (asr.segmentId is still valid here, before dispose).
+      if (this.lastSegmentIds.get(ck) === reservedUpTo) {
+        this.lastSegmentIds.set(ck, asr.segmentId + 1);
+      }
+      asr.removeAllListeners();
+      const disposal = asr.dispose();
+      disposed = true;
+      if (asr.channel.keepAudio) {
+        await this._awaitKeptAudio(disposal, deadline, session, channelId);
+      }
+      if (staleCtx) this._cleanupPerStream(ck, staleCtx);
+      this._reportChannelStopped(session, channelId, asr);
+      logger.info(`Stopped 1 ASR for ${ck} (0 orphans)`);
+      return true;
+    } finally {
+      // Always disposed, so that its reserved audio save never holds the
+      // channel's next ones.
+      if (!disposed) {
+        asr.removeAllListeners();
+        asr.dispose();
+      }
+      stop.done();
+    }
+  }
+
+  // A per-stream stream: its context's sub-ASR and recorder (see _stopAsr).
+  // `ctx` is undefined only for sub-ASR registered without a context.
+  async _stopPerStream(session, channelId, ctx) {
+    const ck = `${session.id}_${channelId}`;
+    // K10: a stop for THIS VERY context is already in flight. It emptied
+    // this.ASRs in its synchronous prefix and is parked on the flushes, so a
+    // DUPLICATE stop for the same connection finds no sub-key. The in-flight
+    // stop owns the end-of-stream marker, the segment-id cursor and the
+    // deactivate; letting the duplicate proceed deleted the context out from
+    // under it, so its identity guard below failed, `lastSegmentIds` was never
+    // written (the next connection then re-used ids the trailing finals had just
+    // published) and the duplicate's deactivate was emitted BEFORE the marker it
+    // is contractually supposed to follow. A genuine successor is always a FRESH
+    // context object (session-start never reuses one), so `stopping` here can
+    // only mean a duplicate of this same stop.
+    if (ctx && ctx.stopping) {
+      logger.info(`Channel ${ck} is already stopping; ignoring the duplicate stop`);
       return false;
     }
-
-    const ctx = this.channels.get(ck);
-    // The teardown ordering is decided by the KEYS actually being torn down,
-    // never by the channel context. `subKeys` matches the bare legacy `${ck}` as
-    // well as `${ck}#*`, so a per-stream context that OUTLIVED its stream (a
-    // stop superseded by a reconnect, a context still awaiting the K9 reaper —
-    // which cannot collect it while the legacy ASR keeps _hasChannelAsr true)
-    // would otherwise hijack a genuinely LEGACY channel stop: the legacy
-    // ordering, and with it the live ASR's own segment-id cursor, would be
-    // skipped and the STALE allocator's cursor written over it, so the next
-    // stream on the channel resumes on segment ids whose captions are already
-    // stored. The context is still the source of the shared allocator, but only
-    // once this stop really is tearing per-stream sub-ASR down.
-    // The `ctx != null` half of that condition was the MIRROR-image hole: with
-    // sub-ASR registered but no context, the else-branch below ran the LEGACY
-    // single-ASR ordering over every one of them — N end-of-stream markers (N
-    // blank caption rows) instead of one, N sequential flushes instead of the
-    // concurrent K3 ones, and a legacy cursor written once per sub-ASR, the last
-    // iterated winning the channel cursor. Route on the keys ALONE and treat a
-    // missing context as the already-handled "nothing to preserve" case.
-    const perStreamKeys = subKeys.filter(k => k !== ck);
-    const isPerStreamStop = perStreamKeys.length > 0;
-    let legacyAsr;
-    if (isPerStreamStop) {
-      // Per-stream: a channel has N sub-ASR but ONE end-of-stream. Flush every
-      // sub-ASR's in-flight finals (listeners attached so trailing captions are
-      // published), then emit the bot end-of-stream marker EXACTLY ONCE via a
-      // single designated sub-ASR (#9) — emitting streamStopped() on each would
-      // store N blank caption rows. The marker is emitted AFTER every flush, so
-      // it stays the provably-last final, and BEFORE any removeAllListeners so it
-      // is still forwarded to the broker. Finally detach + dispose all.
-      //
-      // K2: the recorder (`${ck}#rec`) is NOT part of any of that. It has no
-      // finals to flush (flushing it would only add ASR_STOP_SETTLE_MS to every
-      // channel stop) and no marker to emit, and it is disposed LAST so its
-      // saveAudio() runs once, after everything else is quiesced.
-      //
-      // C4: mark the context as STOPPING in this synchronous prefix, before any
-      // await. _getOrCreatePerStreamAsr refuses to create a sub-ASR for a
-      // stopping channel, so no ASR can appear behind the snapshot below and
-      // outlive the teardown (leaked provider socket + captions published after
-      // the marker).
-      if (ctx) ctx.stopping = true;
-      const asrs = [], recorders = [];
-      for (const k of perStreamKeys) {
+    // Per-stream: a channel has N sub-ASR but ONE end-of-stream. Flush every
+    // sub-ASR's in-flight finals (listeners attached so trailing captions are
+    // published), then emit the bot end-of-stream marker EXACTLY ONCE via a
+    // single designated sub-ASR (#9) — emitting streamStopped() on each would
+    // store N blank caption rows. The marker is emitted AFTER every flush, so
+    // it stays the provably-last final, and BEFORE any removeAllListeners so it
+    // is still forwarded to the broker. Finally detach + dispose all.
+    //
+    // K2: the recorder (`${ck}#rec`) is NOT part of any of that. It has no
+    // finals to flush (flushing it would only add ASR_STOP_SETTLE_MS to every
+    // channel stop) and no marker to emit, and it is disposed LAST so its
+    // saveAudio() runs once, after everything else is quiesced.
+    //
+    // C4: mark the context as STOPPING in this synchronous prefix, before any
+    // await. _getOrCreatePerStreamAsr refuses to create a sub-ASR for a
+    // stopping channel, so no ASR can appear behind the snapshot below and
+    // outlive the teardown (leaked provider socket + captions published after
+    // the marker).
+    if (ctx) ctx.stopping = true;
+    const asrs = [], recorders = [];
+    // The sub-keys are this context's while it is the channel's (a newer
+    // per-stream context only registers after this stop took them).
+    if (!ctx || this.channels.get(ck) === ctx) {
+      for (const k of [...this.ASRs.keys()]) {
+        if (!k.startsWith(`${ck}#`)) continue;
         const asr = this.ASRs.get(k);
         this.ASRs.delete(k);
         (k.endsWith(RECORDER_SUFFIX) ? recorders : asrs).push(asr);
       }
-      // Before the first await: a client that reconnects at once starts a newer
-      // stream on this channel while these sub-ASR still flush their last finals.
-      const reservation = this._reservePerStreamSegmentIds(ctx, asrs);
+    }
+    // Before the first await: a client that reconnects at once starts a newer
+    // stream on this channel while these sub-ASR still flush their last finals.
+    const reservation = this._reservePerStreamSegmentIds(ctx, asrs);
+    for (const recorder of recorders) recorder.reserveAudioSave();
+    const channel = ctx ? ctx.channel : (asrs[0] || recorders[0]).channel;
+    const deadline = Date.now() + this._stopBudgetMs(channel);
+    const stop = this._enterChannelStops(ck);
+    let disposed = false;
+    try {
       // K3: the flushes are independent, each bounded by ASR_STOP_FLUSH_TIMEOUT_MS
       // + ASR_STOP_SETTLE_MS, so run them CONCURRENTLY — sequentially a channel
       // at the default cap took ~23 s to publish its marker and its deactivate
@@ -643,7 +708,8 @@ class StreamingServer extends Component {
       // contractual ordering is "marker after every flush", which allSettled
       // preserves even when one provider's stop() rejects.
       // C9: a participant LEAVE already flushing its own trailing finals is
-      // awaited here too, so the marker stays the provably-last final.
+      // awaited here too (also when nobody else spoke), so the marker and the
+      // deactivate stay after its last final.
       const pendingLeaves = [...(this.pendingLeaves?.get(ck) || [])];
       const settled = await Promise.allSettled([
         ...asrs.map(asr => asr.flushFinals()),
@@ -654,9 +720,10 @@ class StreamingServer extends Component {
           logger.error(`Error flushing a sub-ASR of ${ck} on stop: ${result.reason}`);
         }
       }
-      // Nobody ever spoke (only the recorder was created): emit NO marker, which
-      // is exactly what a per-stream channel with 0 ASR does today (D3a) — a
-      // marker here would store a new blank caption row.
+      if (stop.earlier) await this._awaitEarlierStops(stop.earlier, deadline, session, channelId);
+      // Nobody ever spoke (only the recorder was created, or no ASR at all, the
+      // D3a lazy hole): emit NO marker — a marker here would store a new blank
+      // caption row.
       if (asrs.length > 0) {
         asrs[0].streamStopped();
       }
@@ -678,13 +745,14 @@ class StreamingServer extends Component {
       // ASR-key-qualified log line that names which channel's archive died.
       // ASR.dispose() removes the listeners itself on its way out.
       const recorderSaves = recorders.map(recorder => recorder.dispose());
+      disposed = true;
       // K1: a RECONNECT can have re-registered a fresh context for this channel
       // while we were awaiting the flushes above — cleanupWebsocket emits
       // 'session-stop' SYNCHRONOUSLY from the new connection's handler, so the
       // successor's session-start lands inside that window. Everything below is
       // channel-keyed state that now belongs to the SUCCESSOR, so touch it only
       // while the entry is still the very object this stop owns.
-      if (this.channels.get(ck) === ctx) {
+      if (ctx && this.channels.get(ck) === ctx) {
         // C4 belt-and-braces: `stopping` closes the creation window today, but
         // re-scan for a straggler anyway. Detach BEFORE disposing so a straggler
         // can never publish after the marker.
@@ -707,62 +775,85 @@ class StreamingServer extends Component {
           straggler.removeAllListeners();
           straggler.dispose();
         }
-        // Preserve the segmentId cursor at the CHANNEL level (never per-ASR) from
-        // the shared allocator's next value. Guarded: with no context there is
-        // no shared allocator and so nothing to preserve (the identity check
-        // above holds for `ctx === undefined` only when the entry is genuinely
-        // absent, which is exactly that case).
-        if (ctx && ctx.allocator) {
-          this.lastSegmentIds.set(ck, ctx.allocator.next);
-        }
       }
       if (recorderSaves.length > 0) {
-        await this._awaitKeptAudio(Promise.all(recorderSaves), session, channelId);
+        await this._awaitKeptAudio(Promise.all(recorderSaves), deadline, session, channelId);
       }
-    } else {
-      legacyAsr = this.ASRs.get(ck);
-      // Legacy single ASR: the original ordering (flush, streamStopped,
-      // segment-id cursor, removeAllListeners, dispose).
-      for (const k of subKeys) {
-        const asr = this.ASRs.get(k);
-        this.ASRs.delete(k);
-        // Before the first await: a client that reconnects at once starts the
-        // newer stream from this cursor while this ASR still flushes its last
-        // finals.
-        const reservedUpTo = asr.reserveSegmentIds(STOPPING_STREAM_SEGMENT_RESERVE);
-        this.lastSegmentIds.set(ck, Math.max(this.lastSegmentIds.get(ck) || 1, reservedUpTo));
-        await asr.flushFinals();
-        asr.streamStopped();
-        // No newer stream took the cursor: give back the ids this ASR did not
-        // use (asr.segmentId is still valid here, before dispose).
-        if (this.lastSegmentIds.get(ck) === reservedUpTo) {
-          this.lastSegmentIds.set(ck, asr.segmentId + 1);
-        }
-        asr.removeAllListeners();
-        const disposed = asr.dispose();
-        if (asr.channel.keepAudio) {
-          await this._awaitKeptAudio(disposed, session, channelId);
+      // K1: drop the per-stream context this stop owns, never a successor's
+      // (it publishes the shared allocator's cursor).
+      if (ctx) this._cleanupPerStream(ck, ctx);
+      this._reportChannelStopped(session, channelId, ctx);
+      logger.info(asrs.length + recorders.length > 0
+        ? `Stopped ${asrs.length + recorders.length} ASR for ${ck} (0 orphans)`
+        : `Stopped per-stream channel ${ck} with 0 ASR (lazy hole closed)`);
+      return true;
+    } finally {
+      // Always disposed, so that the recorder's reserved audio save never holds
+      // the channel's next ones.
+      if (!disposed) {
+        for (const asr of [...asrs, ...recorders]) {
+          asr.removeAllListeners();
+          asr.dispose();
         }
       }
+      stop.done();
     }
+  }
 
-    // K1: drop the per-stream context this stop owns, never a successor's.
-    this._cleanupPerStream(ck, ctx);
-    this._reportChannelStopped(session, channelId, isPerStreamStop ? ctx : legacyAsr);
-    logger.info(`Stopped ${isPerStreamStop ? perStreamKeys.length : subKeys.length} ASR for ${ck} (0 orphans)`);
-    return true;
+  // Enters a stop in the channel's chain of stops: `earlier` settles once the
+  // channel's stops that started before this one are over, `done()` marks this
+  // one over.
+  _enterChannelStops(ck) {
+    const earlier = this.channelStops.get(ck);
+    let stopped;
+    const thisStop = new Promise((resolve) => { stopped = resolve; });
+    this.channelStops.set(ck, thisStop);
+    return {
+      earlier,
+      done: () => {
+        stopped();
+        if (this.channelStops.get(ck) === thisStop) this.channelStops.delete(ck);
+      },
+    };
+  }
+
+  // The longest a stop takes to report its channel inactive: its flush, the
+  // settle delay and, with kept audio, the audio save (see "Stop budget" in
+  // doc/production-topology.md).
+  _stopBudgetMs(channel) {
+    const flushMs = parseInt(process.env.ASR_STOP_FLUSH_TIMEOUT_MS, 10) || 3000;
+    const settleMs = parseInt(process.env.ASR_STOP_SETTLE_MS, 10) || 300;
+    const audioSaveMs = channel && channel.keepAudio ? (parseInt(process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS, 10) || 5000) : 0;
+    return flushMs + settleMs + audioSaveMs;
+  }
+
+  async _awaitEarlierStops(earlierStops, deadline, session, channelId) {
+    const timeoutMs = Math.max(0, deadline - Date.now());
+    let timer;
+    const done = await Promise.race([
+      earlierStops.then(() => true),
+      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
+    ]);
+    clearTimeout(timer);
+    if (!done) {
+      logger.warn(`Session ${session.id}, channel ${channelId}: an earlier stream of the channel is still being stopped, out of stop budget: its last captions and audio may follow this stream's`);
+    }
   }
 
   // Session-end drains (Scheduler, PUT /sessions/:id/stop?waitFinal=true) end
   // when the channel is reported inactive, and studio-api then reads the kept
   // audio file: it converts and deletes the WAV, and measures the MP3 once for
   // good. So the deactivation waits for the file to be complete, at most
-  // ASR_STOP_AUDIO_SAVE_TIMEOUT_MS so a slow transcode cannot hold it forever.
-  async _awaitKeptAudio(disposed, session, channelId) {
-    const timeoutMs = parseInt(process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS, 10) || 5000;
+  // ASR_STOP_AUDIO_SAVE_TIMEOUT_MS so a slow transcode cannot hold it forever,
+  // and within the stop budget.
+  async _awaitKeptAudio(disposed, deadline, session, channelId) {
+    const timeoutMs = Math.min(
+      parseInt(process.env.ASR_STOP_AUDIO_SAVE_TIMEOUT_MS, 10) || 5000,
+      Math.max(0, deadline - Date.now()),
+    );
     let timer;
     const saved = await Promise.race([
-      disposed.catch(() => {}).then(() => true),
+      Promise.resolve(disposed).catch(() => {}).then(() => true),
       new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs, false); }),
     ]);
     clearTimeout(timer);
@@ -779,15 +870,15 @@ class StreamingServer extends Component {
   // activation is already published, and this deactivation, carrying the same
   // transcriberId, would mark the channel inactive under it (the Scheduler only
   // ignores another transcriber's stale deactivation), or before its captions
-  // and audio are saved if it is being stopped too. So only the channel's LATEST stream,
-  // running or being stopped (`latestStreams`: its legacy ASR or its per-stream
-  // context), reports it inactive, after its own captions; an older stream's
-  // stop never does. This replaces the evidence the stop used to look for (a
+  // and audio are saved if it is being stopped too. So only the channel's
+  // LATEST stream, running or being stopped (`latestStreams`: its legacy ASR or
+  // its per-stream context), reports it inactive, after its own captions; an
+  // older stream's stop never does. This replaces the evidence the stop used to look for (a
   // re-registered context, a bare-key ASR), which missed a newer stream that is
   // itself already being stopped.
-  _reportChannelStopped(session, channelId, stream) {
+  _reportChannelStopped(session, channelId, handle) {
     const ck = `${session.id}_${channelId}`;
-    if (this.latestStreams.get(ck) !== stream) {
+    if (this.latestStreams.get(ck) !== handle) {
       logger.info(`Session ${session.id}, channel ${channelId}: a newer stream took over during the stop, channel kept active`);
       return false;
     }
@@ -874,6 +965,9 @@ class StreamingServer extends Component {
       logger.info(`Reaping orphan channel context ${ck} (no ASR, no live stream)`);
       this.channels.delete(ck);
       if (this.latestStreams.get(ck) === ctx) this.latestStreams.delete(ck);
+      for (const [stream, handle] of this.streamHandles) {
+        if (handle === ctx) this.streamHandles.delete(stream);
+      }
       this._noRecorderWarned?.delete(ck);
     }
     this._reapNoRecorderWarned();

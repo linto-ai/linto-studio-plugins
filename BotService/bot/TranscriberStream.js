@@ -13,12 +13,22 @@ const DROP_WARN_EVERY = 100
 // otherwise buffer to maxBuffer and silently drop the start of the transcript.
 const ACK_TIMEOUT_MS = parseInt(process.env.TRANSCRIBER_ACK_TIMEOUT_SECONDS || '10', 10) * 1000
 
+// How a platform's speaker events relate in time to the speech they are about,
+// advertised in `init` (speakerEvents) for the Transcriber to line them up with
+// the ASR segments: an SFU's come from the mixer's VAD on the captured audio
+// itself, ahead of the ASR partials of that speech (by the ASR latency); Teams'
+// are polled from the page (its speaking indicator, every 200 ms), behind it.
+// None for the platforms that send no speaker events (MCU: ASR diarization).
+const SPEAKER_EVENT_TIMING = { sfu: 'leading', teams: 'lagging' }
+
 /**
  * TranscriberStream — bridges one Bot's output to one Transcriber over the
  * existing WS ingest protocol, decoupled from how the socket is created so it
  * can be unit-tested with a fake ws.
  *
- * Handshake: on socket open it sends the `init` frame and then holds audio until
+ * Handshake: on socket open it sends the `init` frame ({type, encoding,
+ * sampleRate, diarizationMode, participants, and speakerEvents: 'leading' |
+ * 'lagging' when diarizationMode is 'native'}) and then holds audio until
  * the Transcriber replies `{type:'ack'}` (ACK-gating), at which point buffered
  * frames are flushed. Speaker/participant control messages are forwarded as JSON,
  * on a socket whose `init` advertised native diarization only.
@@ -156,13 +166,17 @@ class TranscriberStream {
 
   _sendInit () {
     this._diarizationMode = (this.bot.manifest && this.bot.manifest.diarizationMode) || 'asr'
-    this.ws.send(JSON.stringify({
+    const init = {
       type: 'init',
       encoding: 'pcm',
       sampleRate: 16000,
       diarizationMode: this._diarizationMode,
       participants: this.bot.getParticipantsList()
-    }))
+    }
+    // Only a socket told 'native' receives speaker events (see _sendControl).
+    const timing = this._diarizationMode === 'native' && this.bot.manifest && SPEAKER_EVENT_TIMING[this.bot.manifest.platformType]
+    if (timing) init.speakerEvents = timing
+    this.ws.send(JSON.stringify(init))
   }
 
   _sendAudio (buffer) {

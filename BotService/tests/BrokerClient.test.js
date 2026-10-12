@@ -382,6 +382,7 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
   // advertises the (now ASR) diarization mode.
   it('reconnects the transcriber when the bot reports diarization degraded', async () => {
     const bot = fakeBot()
+    bot.manifest.platformType = 'teams'
     const record = makeRecord(bot)
     ctx.instance.bots.set('s_c', record)
     ctx.instance.stopBot = async () => {}
@@ -389,6 +390,8 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
     ctx.instance._connectTranscriber('s_c', record, record.websocketUrl)
     const ws1 = created[0]
     ws1.emit('open')
+    const init1 = ws1.sent.filter(x => typeof x === 'string').map(JSON.parse).find(f => f.type === 'init')
+    assert.equal(init1.speakerEvents, 'lagging', 'native Teams: page-polled speaker events')
     // The bot flips its own manifest mode (as _onDiarizationDegraded does) then
     // emits the event the BrokerClient now listens for.
     bot.manifest.diarizationMode = 'asr'
@@ -401,6 +404,7 @@ describe('BotService BrokerClient — transcriber WS reconnect resilience', () =
     const init = ws2.sent.filter(x => typeof x === 'string').map(JSON.parse).find(f => f.type === 'init')
     assert.ok(init, 'init re-sent on the new socket')
     assert.equal(init.diarizationMode, 'asr', 'reconnected init advertises ASR diarization')
+    assert.equal('speakerEvents' in init, false, 'and no speaker events')
     // The ASR-mode Transcriber would read JSON control frames as audio.
     ws2.emit('message', JSON.stringify({ type: 'ack' }))
     bot.emit('speakerChanged', { type: 'speakerChanged', position: 0, speaker: { id: 'm1', name: 'Carol' } })

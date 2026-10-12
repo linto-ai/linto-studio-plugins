@@ -60,6 +60,38 @@ describe('TranscriberStream', () => {
     assert.deepEqual(init.participants, [{ id: 'u1', name: 'Alice' }])
   })
 
+  // The Transcriber lines speaker events up with the ASR segments: an SFU's
+  // (mixer VAD) precede the speech's partials, Teams' (page-polled) follow it.
+  describe('init.speakerEvents', () => {
+    const Bot = require('../bot')
+    const initOf = (manifestBot) => {
+      const ws2 = new FakeWs()
+      new TranscriberStream(ws2, manifestBot)
+      ws2.emit('open')
+      return jsonFrames(ws2)[0]
+    }
+    const realBot = (botType) => new Bot({ session: { id: 's' }, channel: { id: 'c' }, address: 'https://x', botType, browserPool: {}, audioServer: {} })
+
+    it("'leading' for the SFU platforms, 'lagging' for Teams, absent for BBB (no speaker events)", () => {
+      const got = {}
+      for (const type of ['visio', 'jitsi', 'teams', 'bigbluebutton']) got[type] = initOf(realBot(type)).speakerEvents
+      assert.deepEqual(got, { visio: 'leading', jitsi: 'leading', teams: 'lagging', bigbluebutton: undefined })
+    })
+
+    it("absent whenever the socket's diarizationMode is not native, or the platform is unknown", () => {
+      const teams = realBot('teams')
+      teams.manifest.diarizationMode = 'asr' // degraded
+      assert.equal('speakerEvents' in initOf(teams), false)
+      const odd = fakeBot()
+      odd.manifest.platformType = 'other'
+      assert.equal('speakerEvents' in initOf(odd), false)
+      const none = fakeBot()
+      none.manifest = null
+      none.getParticipantsList = () => []
+      assert.equal('speakerEvents' in initOf(none), false)
+    })
+  })
+
   it('buffers audio until ack, then flushes in order', () => {
     ws.emit('open')
     bot.emit('audio', Buffer.from([1]))

@@ -1455,6 +1455,24 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.strictEqual(lk.stats.walks, 3)
     })
 
+    // Each setSubscribed(true) is a subscription update sent to the SFU: the fast
+    // poll used to repeat it every 250 ms for a publication not subscribed yet.
+    it('asks to subscribe once, then backs off while the publication stays unsubscribed', async () => {
+      const lk = lkSetup()
+      const pub = { kind: 'audio', isSubscribed: false, calls: 0, setSubscribed () { this.calls++ }, track: null }
+      lk.pubs.push(pub)
+      const ctx = runScript(s, lk.page)
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('other')) // an unmapped track: fast polling
+      runFor(ctx, 10000)
+      assert.strictEqual(pub.calls, 3, 'at 0, 2 and 6 s, not 40 times')
+      pub.isSubscribed = true
+      runFor(ctx, 250)
+      pub.isSubscribed = false // unsubscribed later on: asked again at once
+      runFor(ctx, 250)
+      assert.strictEqual(pub.calls, 4)
+    })
+
     it('warns that no Room was found after 20 searches (~30 s), not after 20 fast polls', async () => {
       const lk = lkSetup({ hidden: true })
       const ctx = runScript(s, lk.page)

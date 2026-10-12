@@ -583,6 +583,20 @@ const SFU_MAPPING_BLOCK = `
   // left, so emit 'participantLeft' for them (the Node side no-ops ids it never
   // mapped, so this is safe even for participants who never published audio).
   const livekitRoster = new Map();
+  // setSubscribed(true) sends the SFU a subscription update: once, then again for
+  // a publication that stays unsubscribed only after SUBSCRIBE_RETRY_MS, doubling
+  // up to SUBSCRIBE_RETRY_MAX_MS (the fast poll must not flood the signalling).
+  var SUBSCRIBE_RETRY_MS = 2000, SUBSCRIBE_RETRY_MAX_MS = 30000;
+  const subscribeRequests = new WeakMap(); // publication -> { next, delay }
+  function requestSubscription(pub, now) {
+    if (pub.isSubscribed) { subscribeRequests.delete(pub); return; }
+    if (typeof pub.setSubscribed !== 'function') return;
+    const previous = subscribeRequests.get(pub);
+    if (previous && now < previous.next) return;
+    const delay = previous ? Math.min(previous.delay * 2, SUBSCRIBE_RETRY_MAX_MS) : SUBSCRIBE_RETRY_MS;
+    subscribeRequests.set(pub, { next: now + delay, delay: delay });
+    try { pub.setSubscribed(true); } catch (e) { /* ignore */ }
+  }
   function findLivekitRoom() {
     try {
       const els = document.querySelectorAll('*');
@@ -636,9 +650,7 @@ const SFU_MAPPING_BLOCK = `
         p.trackPublications.forEach(function (pub) {
           if (pub.kind !== 'audio') return;
           // Force subscription to every remote audio track (adaptive-stream off).
-          if (!pub.isSubscribed && typeof pub.setSubscribed === 'function') {
-            try { pub.setSubscribed(true); } catch (e) { /* ignore */ }
-          }
+          requestSubscription(pub, now);
           if (pub.track && pub.track.mediaStreamTrack) {
             mapTrack(pub.track.mediaStreamTrack.id, { id: p.identity, name: p.name || p.identity });
           }

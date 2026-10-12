@@ -17,7 +17,7 @@ EMPTY_MEETING_TIMEOUT_SECONDS=60
 BOT_DISPLAY_NAME=LinTO Bot
 STREAMING_WS_BOT_HOST=transcriber
 BOTSERVICE_HEALTHCHECK_HTTP=8080
-# JOIN_TIMEOUT_SECONDS=120 # leave if no participant is seen this long after join
+# JOIN_TIMEOUT_SECONDS=120 # leave if not admitted this long after join: no participant seen (BBB: no meeting audio)
 # AUDIO_SILENCE_TIMEOUT_SECONDS=30 # tear down if no PCM for this long after admission (0 = disabled)
 # TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init ack before failing the handshake
 # BOTSERVICE_MAX_RSS_MB= # memory ceiling (MB): above it the replica advertises capabilities=[] and refuses bots (0 = disabled). It counts the container working set under a memory limit, else the process tree's PSS. Unset: 85% of the memory limit; without a limit, 2048 MB of the Node process RSS (former behaviour)

@@ -23,6 +23,9 @@ const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
 // Room, Jitsi's conference) only look in the page's top-level document.
 const NO_PARTICIPANT_WARN_MS = 30000
 
+// How often a manifest's meetingEndedSelector is looked for, once admitted.
+const MEETING_END_CHECK_MS = 5000
+
 // Period of the per-bot audio health log: one line summing up the audio path
 // (each track's input rate, the output rate against the wall clock, drops,
 // stalls, PCM of removed tracks), so that a capture or mixing fault shows in the
@@ -87,6 +90,11 @@ class Bot extends EventEmitter {
     this.removedTracks = new Map() // trackKey -> PCM frames received after its removal
     this.ignoredAudioFrames = 0 // PCM frames of removed tracks, in total
     this.participants = new Map() // participantId -> { id, name }
+    this.loginComplete = false // the login rules ran to the end
+    // In the meeting: a participant was found (the platforms with a participant
+    // poller), or the meeting audio flows after the login rules (manifest
+    // admission 'audio': platforms without one, BBB).
+    this.admitted = false
     this.hasSeenParticipant = false
     this.hasSeenAudio = false // one-shot latch for the "first audio frame" log
     this.lastAudioAt = 0 // ts of the most recent PCM frame (silence watchdog)
@@ -99,6 +107,9 @@ class Bot extends EventEmitter {
     this.diarizationDegraded = false // native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
     this.joinWatchdog = null
+    this.meetingEndCheckMs = MEETING_END_CHECK_MS
+    this.meetingEndTimer = null
+    this.checkingMeetingEnd = false
     this.disposed = false
 
     this.manifest = this._loadManifest(botType)
@@ -107,6 +118,14 @@ class Bot extends EventEmitter {
 
   get isSfu () {
     return this.manifest && this.manifest.platformType === 'sfu'
+  }
+
+  // A platform without a participant poller (BBB: one mixed MCU stream, no roster
+  // the page script can read) declares `admission: 'audio'` in its manifest: the
+  // meeting audio, not a participant, tells that the bot is in the meeting, and
+  // that the meeting is over once it is gone.
+  get admitsOnAudio () {
+    return !!this.manifest && this.manifest.admission === 'audio'
   }
 
   _loadManifest (botType) {
@@ -179,6 +198,7 @@ class Bot extends EventEmitter {
       await this.page.goto(this.address, { timeout: 50000 })
       await this.execRules(this.manifest.loginRules)
       logger.info(`Bot[${this.contextId}]: login rules completed (${this.manifest.loginRules?.length || 0} rules)`)
+      this.loginComplete = true
       this._armJoinWatchdog()
 
       this._startMixer()
@@ -281,7 +301,8 @@ class Bot extends EventEmitter {
     }
     // note every PCM frame for the silence watchdog.
     this.lastAudioAt = Date.now()
-    if (!this.hasSeenParticipant) this._noteTrackWithoutParticipant(key)
+    if (this.admitsOnAudio) this._noteMeetingAudio()
+    else if (!this.hasSeenParticipant) this._noteTrackWithoutParticipant(key)
     if (!this.audioMixer) return
     // Teams puts anonymous bots in a LOBBY where the page carries no meeting audio;
     // forwarding it there would push lobby silence to the ASR. Hold until a
@@ -291,6 +312,21 @@ class Bot extends EventEmitter {
     // An SFU track is mixed from its first frame, before the poller maps it to its
     // participant (~2 s after join): only the speaker attribution waits for that.
     this.audioMixer.addAudio(key, pcmBuffer)
+  }
+
+  // Meeting audio on a platform admitting on audio: past the login rules (the BBB
+  // client only plays the meeting audio once in it: "Listen only" was clicked),
+  // the first frame is the admission; audio back after it was gone (the client
+  // reconnecting its audio) cancels the leave.
+  _noteMeetingAudio () {
+    if (!this.admitted) {
+      if (this.loginComplete) this._admit('meeting audio flowing after the login rules')
+      return
+    }
+    if (this.emptyMeetingTimer) {
+      logger.info(`Bot[${this.contextId}]: meeting audio back, staying`)
+      this._cancelEmptyMeetingTimer()
+    }
   }
 
   // Tracks stream but no participant was found: normal while waiting in a lobby,
@@ -369,14 +405,21 @@ class Bot extends EventEmitter {
     // the one speaking, the mixer announces its participant as the speaker now.
     if (this.isSfu && this.audioMixer && !this.removedTracks.has(key)) this.audioMixer.setTrackParticipant(key, participant)
     // latched "admitted" milestone — the bot is in the meeting (first mapping).
-    if (!this.hasSeenParticipant) {
-      logger.info(`Bot[${this.contextId}]: admitted to meeting, first participant mapped (${participant.name})`)
-      clearTimeout(this.noParticipantTimer)
-      this._armAudioSilenceWatchdog() // from now on we expect a steady PCM flow
-    }
+    this._admit(`first participant mapped (${participant.name})`)
     this.hasSeenParticipant = true
-    this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
+  }
+
+  // The bot is in the meeting (once): the join watchdog is over, a steady PCM flow
+  // is expected from now on, and the meeting-end check starts.
+  _admit (how) {
+    if (this.admitted) return
+    this.admitted = true
+    logger.info(`Bot[${this.contextId}]: admitted to meeting, ${how}`)
+    clearTimeout(this.noParticipantTimer)
+    this._cancelJoinWatchdog()
+    this._armAudioSilenceWatchdog()
+    this._armMeetingEndCheck()
   }
 
   // The page no longer knows whose the track is (its receiver was reused): stop
@@ -394,6 +437,7 @@ class Bot extends EventEmitter {
     this.trackParticipants.delete(key)
     this.removedTracks.set(key, 0)
     if (this.audioMixer) this.audioMixer.removeTrack(key)
+    this._checkMeetingAudioGone()
     if (!this.isSfu || !removed) return
     // SFU: a participant is gone once they have no remaining mapped tracks.
     const stillPresent = [...this.trackParticipants.values()].some(p => p.id === removed.id)
@@ -436,12 +480,64 @@ class Bot extends EventEmitter {
 
   _checkEmptyMeeting () {
     if (!this.hasSeenParticipant || this.participants.size > 0) return
+    this._armEmptyMeetingTimer('meeting empty')
+  }
+
+  // A platform admitting on audio has no roster: its meeting is over when the
+  // meeting audio is gone, every inbound track ended (the client closes its audio
+  // connection when the meeting ends or the bot is removed: measured, a local
+  // RTCPeerConnection close() ends its inbound tracks) or the page left the
+  // meeting (its loopback connection closed). The same grace as an empty meeting
+  // lets a client that reconnects its audio come back.
+  _checkMeetingAudioGone () {
+    if (!this.admitsOnAudio || !this.admitted || this.disposed) return
+    if (this.audioMixer && this.audioMixer.trackIds().length > 0) return
+    this._armEmptyMeetingTimer('meeting audio gone (every inbound track ended, or the page left the meeting)')
+  }
+
+  _armEmptyMeetingTimer (why) {
     if (this.emptyMeetingTimer) return
-    logger.info(`Bot[${this.contextId}]: meeting empty, auto-leave in ${this.emptyMeetingTimeoutMs / 1000}s`)
+    logger.info(`Bot[${this.contextId}]: ${why}, auto-leave in ${this.emptyMeetingTimeoutMs / 1000}s`)
     this.emptyMeetingTimer = setTimeout(() => {
       this.emptyMeetingTimer = null
       this.emit('meeting-empty')
     }, this.emptyMeetingTimeoutMs)
+  }
+
+  // A manifest may name the page element that shows the meeting has ended
+  // (meetingEndedSelector, e.g. BBB's meeting-ended screen): looked for every
+  // meetingEndCheckMs once admitted, and the bot leaves (ending the session, as
+  // an empty meeting) as soon as it is shown. Fail-soft: a selector that never
+  // matches (another client version) only leaves the other end signals, and a
+  // check that fails (page navigating, closing) is skipped.
+  _armMeetingEndCheck () {
+    const selector = this.manifest && this.manifest.meetingEndedSelector
+    if (!selector || this.meetingEndTimer || this.disposed) return
+    this.meetingEndTimer = setInterval(() => this._checkMeetingEnded(selector), this.meetingEndCheckMs)
+    if (typeof this.meetingEndTimer.unref === 'function') this.meetingEndTimer.unref()
+  }
+
+  async _checkMeetingEnded (selector) {
+    if (this.checkingMeetingEnd || !this.page || this.disposed) return
+    this.checkingMeetingEnd = true
+    try {
+      const shown = await this.page.locator(selector).count()
+      if (shown > 0 && !this.disposed) {
+        logger.info(`Bot[${this.contextId}]: the meeting has ended (${selector} shown), leaving`)
+        this._cancelMeetingEndCheck()
+        this.emit('meeting-empty')
+      }
+    } catch (e) {
+      logger.debug(`Bot[${this.contextId}]: meeting-end check failed: ${e.message}`)
+    } finally {
+      this.checkingMeetingEnd = false
+    }
+  }
+
+  _cancelMeetingEndCheck () {
+    if (!this.meetingEndTimer) return
+    clearInterval(this.meetingEndTimer)
+    this.meetingEndTimer = null
   }
 
   _cancelEmptyMeetingTimer () {
@@ -451,11 +547,12 @@ class Bot extends EventEmitter {
   }
 
   _armJoinWatchdog () {
-    if (this.joinWatchdog || this.hasSeenParticipant) return
+    if (this.joinWatchdog || this.admitted) return
     this.joinWatchdog = setTimeout(() => {
       this.joinWatchdog = null
-      if (!this.hasSeenParticipant) {
-        logger.warn(`Bot[${this.contextId}]: join watchdog fired — no participant within ${this.joinTimeoutMs / 1000}s (wrong link / not admitted / empty room), leaving`)
+      if (!this.admitted) {
+        const missing = this.admitsOnAudio ? 'no meeting audio' : 'no participant'
+        logger.warn(`Bot[${this.contextId}]: join watchdog fired — ${missing} within ${this.joinTimeoutMs / 1000}s (wrong link / not admitted / empty room), leaving`)
         // a never-admitted leave is a failure, not a clean empty-meeting leave —
         // emit a distinct event so it is recorded as a join timeout, not success.
         this.emit('join-timeout')
@@ -483,6 +580,9 @@ class Bot extends EventEmitter {
 
   _checkAudioSilence (now = Date.now()) {
     if (this.disposed || !AUDIO_SILENCE_TIMEOUT_MS) return
+    // Leaving an empty meeting (or one whose audio is gone) already: no audio
+    // then is no dead pipe, and the session ends cleanly at the timer.
+    if (this.emptyMeetingTimer) return
     if (now - this.lastAudioAt < AUDIO_SILENCE_TIMEOUT_MS) return
     logger.warn(`Bot[${this.contextId}]: no audio for ${AUDIO_SILENCE_TIMEOUT_MS / 1000}s after admission — capture pipe appears dead, tearing down`)
     this._cancelAudioSilenceWatchdog()
@@ -518,6 +618,7 @@ class Bot extends EventEmitter {
     for (const key of [...this.removedTracks.keys()]) {
       if (key.startsWith(prefix)) this.removedTracks.delete(key)
     }
+    this._checkMeetingAudioGone()
   }
 
   getParticipantsList () {
@@ -596,6 +697,7 @@ class Bot extends EventEmitter {
     this._cancelEmptyMeetingTimer()
     this._cancelAudioSilenceWatchdog() // no timer outlives the bot
     this._cancelAudioHealthLog()
+    this._cancelMeetingEndCheck()
     clearTimeout(this.noParticipantTimer)
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
     // Best-effort graceful leave before tearing the context down (skip if the page

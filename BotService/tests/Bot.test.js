@@ -20,7 +20,9 @@ function makeFakePage (opts = {}) {
     selectOption: async (value) => { calls.locatorActions.push({ action: 'select', selector, value }); if (rejectFor('select', selector)) throw new Error('select failed') },
     hover: async () => { calls.locatorActions.push({ action: 'hover', selector }); if (rejectFor('hover', selector)) throw new Error('hover failed') },
     focus: async () => { calls.locatorActions.push({ action: 'focus', selector }); if (rejectFor('focus', selector)) throw new Error('focus failed') },
-    clear: async () => { calls.locatorActions.push({ action: 'clearInput', selector }); if (rejectFor('clearInput', selector)) throw new Error('clear failed') }
+    clear: async () => { calls.locatorActions.push({ action: 'clearInput', selector }); if (rejectFor('clearInput', selector)) throw new Error('clear failed') },
+    // opts.count(selector): how many elements match (0 by default); may throw.
+    count: async () => (opts.count ? opts.count(selector) : 0)
   })
   return {
     calls,
@@ -1239,11 +1241,144 @@ describe('Bot._armJoinWatchdog guards', () => {
     bot._cancelJoinWatchdog()
   })
 
-  it('does not arm if a participant was already seen', () => {
+  it('does not arm once admitted', () => {
     const bot = makeBot('visio')
-    bot.hasSeenParticipant = true
+    bot.admitted = true
     bot._armJoinWatchdog()
     assert.equal(bot.joinWatchdog, null)
+  })
+})
+
+// BBB has no participant poller (one mixed MCU stream, no roster the page script
+// reads): no participant was ever found, so the join watchdog made every BBB bot
+// leave with join-timeout, the "no participant found" warning fired on every one,
+// and nothing ever told that the meeting was over.
+describe('Bot admission and meeting end without a participant poller (BBB)', () => {
+  const { logger } = require('live-srt-lib')
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  let warns, realWarn
+  beforeEach(() => { warns = []; realWarn = logger.warn; logger.warn = (m) => { warns.push(String(m)) } })
+  afterEach(() => { logger.warn = realWarn })
+
+  // A BBB bot past its login rules, with its loopback handlers.
+  async function joinedBbb (pageOpts = {}) {
+    const { bot, record } = makeInitBot('bigbluebutton', pageOpts, { address: 'https://bbb.example.com/room' })
+    bot.joinTimeoutMs = 60
+    bot.noParticipantWarnMs = 30
+    assert.equal(await bot.init(), true)
+    const { onBinary, onJson, onClose } = record.registerBot[0].handlers
+    return { bot, pcm: onBinary, json: onJson, closed: onClose }
+  }
+
+  it('declares it in its manifest; the platforms with a participant poller do not', () => {
+    assert.equal(require('../bot/manifests/bigbluebutton.json').admission, 'audio')
+    for (const name of ['jitsi', 'teams', 'visio']) assert.equal(require(`../bot/manifests/${name}.json`).admission, undefined)
+  })
+
+  it('is admitted by the meeting audio after the login rules: no join timeout, no no-participant warning', async () => {
+    const { bot, pcm } = await joinedBbb()
+    let timedOut = false
+    bot.on('join-timeout', () => { timedOut = true })
+    for (let i = 0; i < 10; i++) pcm(0, frame(1000), 1)
+    assert.equal(bot.admitted, true)
+    assert.equal(bot.joinWatchdog, null)
+    assert.notEqual(bot.audioSilenceWatchdog, null, 'a steady PCM flow is expected from now on')
+    await sleep(100)
+    assert.equal(timedOut, false)
+    assert.deepEqual(warns.filter((w) => /no participant found|join watchdog/.test(w)), [])
+    await bot.dispose()
+  })
+
+  it('audio before the login rules completed is no admission, and no participant is looked for', () => {
+    const bot = makeBot('bigbluebutton')
+    bot._startMixer()
+    bot.handleAudioData(0, frame(1000), 1)
+    assert.equal(bot.admitted, false)
+    assert.equal(bot.noParticipantTimer, null)
+    bot._cancelAudioHealthLog()
+  })
+
+  it('without meeting audio, the join watchdog still ends it, saying what was missing', async () => {
+    const { bot } = await joinedBbb()
+    await new Promise((resolve) => bot.on('join-timeout', resolve))
+    assert.ok(warns.some((w) => w.includes('no meeting audio within')), warns.join(' | '))
+    await bot.dispose()
+  })
+
+  it('leaves (meeting-empty) once every inbound track ended, unless the audio comes back meanwhile', async () => {
+    const { bot, pcm, json } = await joinedBbb()
+    bot.emptyMeetingTimeoutMs = 40
+    const events = []
+    bot.on('meeting-empty', () => events.push('meeting-empty'))
+    pcm(0, frame(1000), 1)
+    json({ type: 'trackRemoved', trackIndex: 0 }, 1)
+    assert.notEqual(bot.emptyMeetingTimer, null)
+    pcm(1, frame(1000), 1) // the client reconnected its audio: a new track
+    assert.equal(bot.emptyMeetingTimer, null)
+    await sleep(60)
+    assert.deepEqual(events, [])
+    json({ type: 'trackRemoved', trackIndex: 1 }, 1)
+    await sleep(60)
+    assert.deepEqual(events, ['meeting-empty'])
+    await bot.dispose()
+  })
+
+  it('leaves once the page left the meeting (its loopback connection closed)', async () => {
+    const { bot, pcm, closed } = await joinedBbb()
+    bot.emptyMeetingTimeoutMs = 40
+    const left = new Promise((resolve) => bot.on('meeting-empty', resolve))
+    pcm(0, frame(1000), 1)
+    closed(1)
+    await left
+    await bot.dispose()
+  })
+
+  it('the silence watchdog reports no dead pipe while that leave is pending', async () => {
+    const { bot, pcm, json } = await joinedBbb()
+    const errors = []
+    bot.on('error', (e) => errors.push(e.message))
+    pcm(0, frame(1000), 1)
+    json({ type: 'trackRemoved', trackIndex: 0 }, 1)
+    bot._checkAudioSilence(Date.now() + 10 * 60 * 1000)
+    assert.deepEqual(errors, [])
+    await bot.dispose()
+  })
+
+  it("leaves as soon as the manifest's meeting-ended element is shown; a failing check is skipped", async () => {
+    let shown = 0
+    const { bot, pcm } = await joinedBbb({
+      count: (selector) => {
+        if (shown < 0) throw new Error('navigating')
+        return selector === '[data-test="meetingEndedModal"]' ? shown : 0
+      }
+    })
+    bot.meetingEndCheckMs = 10
+    const ended = []
+    bot.on('meeting-empty', () => ended.push('meeting-empty'))
+    pcm(0, frame(1000), 1) // admitted: the check starts
+    shown = -1
+    await sleep(40)
+    shown = 0
+    await sleep(40)
+    assert.deepEqual(ended, [])
+    shown = 1
+    await sleep(40)
+    assert.deepEqual(ended, ['meeting-empty'], 'once')
+    assert.equal(bot.meetingEndTimer, null)
+    await bot.dispose()
+  })
+
+  it('Teams and SFU bots are still admitted by a participant only', async () => {
+    for (const type of ['visio', 'teams']) {
+      const { bot, record } = makeInitBot(type)
+      bot.joinTimeoutMs = 10000
+      assert.equal(await bot.init(), true)
+      record.registerBot[0].handlers.onBinary(0, frame(1000), 1)
+      assert.equal(bot.admitted, false, type)
+      assert.notEqual(bot.joinWatchdog, null, type)
+      assert.notEqual(bot.noParticipantTimer, null, `${type}: a participant is looked for`)
+      await bot.dispose()
+    }
   })
 })
 

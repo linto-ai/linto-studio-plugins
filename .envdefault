@@ -23,7 +23,7 @@ VISIOBOT_COMPONENTS=BrokerClient,Healthcheck # Comma separated list of component
 # ── BotService (dedicated meeting-bot service) ───────────────────────────────
 MAX_CONCURRENT_BOTS=10 # max simultaneous browser bots per BotService replica
 BOTSERVICE_HEALTHCHECK_HTTP=8080 # HTTP port for the liveness endpoint (JSON: status/activeBots/browserConnected/audioServerListening)
-EMPTY_MEETING_TIMEOUT_SECONDS=60 # auto-leave a meeting this long after the last participant leaves
+EMPTY_MEETING_TIMEOUT_SECONDS=60 # auto-leave a meeting this long after the last participant leaves (BBB: after the meeting audio is gone)
 BOT_DISPLAY_NAME=LinTO Bot # name the bot shows when joining a meeting
 # BOT_CAPABILITIES=jitsi,bigbluebutton,teams,visio # advertised providers (defaults to all)
 # ⚠ BOT_CAPABILITIES is read by BOTH bot services (this web one and the
@@ -35,7 +35,7 @@ BOT_DISPLAY_NAME=LinTO Bot # name the bot shows when joining a meeting
 # Internal host a BotService bot uses to reach a Transcriber WS ingest (used by the
 # Scheduler to mint the websocketUrl). Defaults to the 'transcriber' compose service.
 STREAMING_WS_BOT_HOST=transcriber
-# JOIN_TIMEOUT_SECONDS=120 # leave if no participant is seen this long after join (absolute watchdog)
+# JOIN_TIMEOUT_SECONDS=120 # leave if not admitted this long after join: no participant seen (BBB: no meeting audio) (absolute watchdog)
 # AUDIO_SILENCE_TIMEOUT_SECONDS=30 # tear down if no PCM arrives for this long after admission (0 = disabled)
 # TRANSCRIBER_ACK_TIMEOUT_SECONDS=10 # wait for the Transcriber init {type:ack} before failing the handshake
 # BOTSERVICE_MAX_RSS_MB= # memory ceiling (MB): above it the replica advertises capabilities=[] and refuses bots (0 = disabled). It counts the container working set under a memory limit, else the process tree's PSS. Unset: 85% of the memory limit; without a limit, 2048 MB of the Node process RSS (former behaviour)

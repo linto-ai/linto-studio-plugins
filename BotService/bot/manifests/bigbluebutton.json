@@ -2,6 +2,8 @@
   "platformType": "mcu",
   "diarizationMode": "asr",
   "blockExternalDomains": true,
+  "admission": "audio",
+  "meetingEndedSelector": "[data-test=\"meetingEndedModal\"]",
   "loginRules": [
     {
       "action": "fill",

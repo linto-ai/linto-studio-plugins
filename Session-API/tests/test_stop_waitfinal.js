@@ -121,14 +121,27 @@ describe('PUT /sessions/:id/stop — drain barrier (waitFinal)', () => {
         };
     });
 
-    it('takes the ending over: clears the Scheduler\'s owed sessions/ended in the terminating UPDATE', async () => {
+    // Studio's storing stop (DELETE /organizations/:id/sessions/:id, quick
+    // meetings) is the only caller using waitFinal=true: it stores the
+    // conversation itself.
+    it('waitFinal (Studio\'s storing stop) takes the ending over: clears the Scheduler\'s owed sessions/ended', async () => {
         const sessionUpdates = [];
         mockModel.Session.update = async (values, opts) => { sessionUpdates.push({ values, opts }); return [1]; };
         await route.controller(makeReq({ force: 'true', waitFinal: 'true' }), makeRes(), () => {});
         assert.strictEqual(sessionUpdates.length, 1);
         assert.strictEqual(sessionUpdates[0].values.status, 'terminated');
         assert.strictEqual(sessionUpdates[0].values.endedNotice, null);
+        assert.strictEqual(sessionUpdates[0].values.endedNoticeLeaseUntil, null);
         assert.deepStrictEqual(sessionUpdates[0].opts.where, { id: 'sess-1' });
+    });
+
+    it('a plain stop (API clients, nothing stored) leaves the Scheduler\'s owed sessions/ended', async () => {
+        const sessionUpdates = [];
+        mockModel.Session.update = async (values, opts) => { sessionUpdates.push({ values, opts }); return [1]; };
+        await route.controller(makeReq({ force: 'true' }), makeRes(), () => {});
+        assert.strictEqual(sessionUpdates.length, 1);
+        assert.strictEqual(sessionUpdates[0].values.status, 'terminated');
+        assert.ok(!('endedNotice' in sessionUpdates[0].values), JSON.stringify(sessionUpdates[0].values));
     });
 
     it('legacy (no waitFinal): forces all channels inactive immediately, no polling', async () => {

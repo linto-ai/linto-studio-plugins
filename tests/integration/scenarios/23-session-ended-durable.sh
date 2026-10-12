@@ -7,7 +7,8 @@
 #
 # Reference: Scheduler/components/BrokerClient/index.js endBotSession() ->
 # endSessions() -> publishSessionEnded(), recoverEndedNotices(); Session-API's
-# PUT /sessions/:id/stop clears the marker.
+# PUT /sessions/:id/stop?waitFinal=true (Studio's storing stop) clears the
+# marker.
 #
 # Scenario (FAKE asr, SRT, no BotService). The Transcriber is paused so that
 # the channel stays active and the Scheduler's drain lasts:
@@ -15,9 +16,11 @@
 #      crashes in the middle of the drain (SIGKILL). Once started again, it
 #      finishes the end: sessions/ended is published exactly once, and the
 #      marker cleared.
-#   B. Studio stops the session itself (PUT /sessions/:id/stop) while the
-#      Scheduler drains: Studio takes the ending over, and the Scheduler
-#      publishes no sessions/ended.
+#   B. Studio stops the session to store it (PUT /sessions/:id/stop with
+#      waitFinal=true) while the Scheduler drains: Studio takes the ending
+#      over, and the Scheduler publishes no sessions/ended.
+#   C. A plain stop (PUT /sessions/:id/stop, nothing stored) while the
+#      Scheduler drains: the Scheduler's sessions/ended still goes out, once.
 
 set -euo pipefail
 
@@ -102,17 +105,21 @@ sleep 5   # a duplicate would follow closely
 harness::ok "sessions/ended published exactly once after the restart, marker cleared"
 kill -9 "${STREAM_PID}" 2>/dev/null || true
 
-# ── B. Studio stops the session while the Scheduler drains ──────────────────
-harness::log "=== B: Studio takes the ending over during the drain ==="
+# ── B. Studio's storing stop while the Scheduler drains ─────────────────────
+harness::log "=== B: Studio takes the ending over during the drain (storing stop) ==="
 streaming_bot_session takeover
 session_b=${SESSION_ID}
 bot_b=${BOT_ID}
 harness::_compose pause transcriber >/dev/null
 bot_leaves "${bot_b}"
 sleep 1
-harness::put "/sessions/${session_b}/stop?force=true" >/dev/null || fail "PUT /sessions/${session_b}/stop failed"
-[[ "$(ended_notice "${session_b}")" == "NULL" ]] || fail "endedNotice is '$(ended_notice "${session_b}")' after the stop, expected NULL"
+# Studio's stopSessionAndFetch: the stop waits for the drain, so it runs aside.
+harness::put "/sessions/${session_b}/stop?force=true&waitFinal=true" >/dev/null &
+storing_stop=$!
+sleep 1
+[[ "$(ended_notice "${session_b}")" == "NULL" ]] || fail "endedNotice is '$(ended_notice "${session_b}")' after the storing stop, expected NULL"
 harness::_compose unpause transcriber >/dev/null
+wait "${storing_stop}" || fail "PUT /sessions/${session_b}/stop?waitFinal=true failed"
 # The Scheduler's drain runs to its end (SESSION_STOP_FLUSH_TIMEOUT_MS, 10 s) before it checks the marker.
 deadline=$(( $(date +%s) + 30 ))
 until harness::scheduler_log_contains "Session ${session_b}: sessions/ended no longer owed"; do
@@ -122,6 +129,28 @@ done
 sleep 2
 [[ "$(ended_count "${session_b}")" -eq 0 ]] || fail "the Scheduler published sessions/ended for a session Studio stopped"
 harness::ok "no sessions/ended from the Scheduler: Studio took the ending over"
+kill -9 "${STREAM_PID}" 2>/dev/null || true
+
+# ── C. A plain stop while the Scheduler drains ──────────────────────────────
+harness::log "=== C: a plain stop during the drain stores nothing: sessions/ended still goes out ==="
+streaming_bot_session plainstop
+session_c=${SESSION_ID}
+bot_c=${BOT_ID}
+harness::_compose pause transcriber >/dev/null
+bot_leaves "${bot_c}"
+sleep 1
+harness::put "/sessions/${session_c}/stop?force=true" >/dev/null || fail "PUT /sessions/${session_c}/stop failed"
+[[ "$(ended_notice "${session_c}")" != "NULL" ]] || fail "the plain stop cleared endedNotice"
+harness::_compose unpause transcriber >/dev/null
+deadline=$(( $(date +%s) + 30 ))
+until [[ "$(ended_count "${session_c}")" -ge 1 ]]; do
+    [[ $(date +%s) -lt ${deadline} ]] || { harness::logs scheduler 80 || true; fail "no sessions/ended for ${session_c} within 30s"; }
+    sleep 0.5
+done
+sleep 3
+[[ "$(ended_count "${session_c}")" -eq 1 ]] || fail "sessions/ended published $(ended_count "${session_c}") times, expected once"
+[[ "$(ended_notice "${session_c}")" == "NULL" ]] || fail "endedNotice is '$(ended_notice "${session_c}")' after the publication, expected NULL"
+harness::ok "the Scheduler's sessions/ended went out once despite the plain stop"
 kill -9 "${STREAM_PID}" 2>/dev/null || true
 
 harness::ok "session ended durable scenario PASSED"

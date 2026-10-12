@@ -752,14 +752,19 @@ module.exports = (webserver) => {
                 const waitFinal = req.query.waitFinal === 'true';
 
                 // If session is not active or force is true, proceed with update.
-                // The caller (Studio's manual stop) takes the ending over: clearing
-                // endedNotice in the same UPDATE makes the Scheduler, if it was
-                // ending this session itself, publish no system/out/sessions/ended.
-                await Model.Session.update({
-                    status: 'terminated',
-                    endTime: new Date(),
-                    endedNotice: null
-                }, {
+                // A stop with waitFinal is Studio's storing stop (it drains, then
+                // stores the conversation and deletes the session): that caller
+                // takes the ending over. Clearing endedNotice in the same UPDATE
+                // makes the Scheduler, if it was ending this session itself,
+                // publish no system/out/sessions/ended, which would store the
+                // conversation a second time. Any other stop stores nothing, so
+                // the Scheduler's notification still goes out.
+                const values = { status: 'terminated', endTime: new Date() };
+                if (waitFinal) {
+                    values.endedNotice = null;
+                    values.endedNoticeLeaseUntil = null;
+                }
+                await Model.Session.update(values, {
                     where: {
                         'id': sessionId
                     }

@@ -337,7 +337,6 @@ describe('StreamingServer per-stream teardown hardening', () => {
     const inst = Object.create(StreamingServer.prototype);
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
-    inst.stoppingStreams = new Map();
     inst.latestStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
@@ -395,7 +394,11 @@ describe('StreamingServer per-stream teardown hardening', () => {
   function fakeAsr(name, log, delayMs = 0) {
     return {
       name, flushed: false, detached: false, disposed: false,
-      channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
+      segmentId: 1, channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
+      // Segment-id reservation at stop, as the ASR does it.
+      segmentIdLimit: null,
+      reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
+      useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
       async flushFinals() {
         if (delayMs) await sleep(delayMs);
         this.flushed = true;
@@ -557,8 +560,10 @@ describe('StreamingServer per-stream teardown hardening', () => {
       assert.notStrictEqual(ctxB, ctxA, 'a fresh context was registered');
       assert.strictEqual(ctxB.allocator, ctxA.allocator,
         'the successor shares the live allocator instead of re-reading a stale cursor');
-      assert.strictEqual(ctxB.allocator.next, 12,
-        'the successor does not restart on ids the outgoing connection already published');
+      // The outgoing sub-ASR draw the ids of their trailing finals from a
+      // reserve of 10 taken off the allocator when their stop started.
+      assert.strictEqual(ctxB.allocator.next, 22,
+        'the successor does not restart on ids the outgoing connection already published or reserved');
       await stopP;
       inst.stopChannelReaper();
     });
@@ -590,7 +595,9 @@ describe('StreamingServer per-stream teardown hardening', () => {
       await inst._stopAsr(session, 'chan');           // B never spoke -> lazy branch
       await stopP;
 
-      assert.strictEqual(inst.lastSegmentIds.get(ck), 42,
+      // A's stop reserved 10 ids for its trailing finals (42..51); B took the
+      // cursor over, so they are not given back.
+      assert.strictEqual(inst.lastSegmentIds.get(ck), 52,
         'the shared cursor survives the lazy teardown of the successor');
       inst.stopChannelReaper();
     });
@@ -747,7 +754,9 @@ describe('StreamingServer per-stream teardown hardening', () => {
       assert.strictEqual(successor.detached, false, 'nor detached');
       assert.strictEqual(successor.disposed, false, 'nor disposed (the C4 sweep restriction holds)');
       assert.ok(log.includes('marker'), 'the outgoing stream still publishes its end-of-stream marker');
-      assert.strictEqual(inst.lastSegmentIds.get(ck), 42, 'and still preserves its own cursor');
+      // Past the 10 ids reserved for its trailing finals (42..51), not given
+      // back: the legacy successor started after them.
+      assert.strictEqual(inst.lastSegmentIds.get(ck), 52, 'and still preserves its own cursor');
       assert.strictEqual(inst.channels.has(ck), false,
         'the stale per-stream context is still dropped (nobody owns it any more)');
     });

@@ -50,16 +50,10 @@ class ASR extends eventEmitter {
     // Both default to the legacy values, so a legacy ASR is bit-exact.
     this.record = options.record !== false;
     this.recordOnly = options.recordOnly === true;
-    // options.initialSegmentId is a number, or a promise of one when the
-    // channel's previous stream is still stopping on this Transcriber (see
-    // StreamingServer#initialSegmentIdFor): that stream's ASR may still publish
-    // finals, so this one starts its provider, hence emits anything, only once
-    // the id following them is known. Audio received meanwhile is buffered.
-    const initialSegmentId = options.initialSegmentId;
-    const pendingSegmentId = initialSegmentId && typeof initialSegmentId.then === 'function'
-      ? initialSegmentId
-      : null;
-    this.segmentId = pendingSegmentId ? null : (initialSegmentId || 1);
+    this.segmentId = options.initialSegmentId || 1;
+    // Last segment id this ASR may still use once its stream is being stopped
+    // (see reserveSegmentIds), null while it streams.
+    this.segmentIdLimit = null;
     // Segment the most recent primary final/partial was assigned to. Used to
     // align dual-mode secondary (translation-only) results onto the same
     // segment as the primary that produced the source text. Before any primary
@@ -125,16 +119,11 @@ class ASR extends eventEmitter {
     // state stays CLOSED until init(), so transcribe() still forwards nothing to
     // a provider that does not exist yet, and the frame is forwarded with the
     // rest once the provider is READY. init() keeps the buffer it finds so those
-    // early frames are never discarded. The same holds for a legacy ASR whose
-    // provider waits for a pending initial segment id (see above).
+    // early frames are never discarded. The same holds for any ASR: ws emits
+    // the frames of one socket read synchronously, so audio right behind the
+    // init frame reaches transcribe() before init() runs.
     this.audioBuffer = new CircularBuffer();
     this._transitionLock = Promise.resolve();
-    if (pendingSegmentId) {
-      this._chainTransition(async () => {
-        this.segmentId = await pendingSegmentId;
-        this._lastPrimarySegmentId = this.segmentId;
-      });
-    }
     // Chain init() into the transition lock so any pause()/resume() queued
     // right after construction runs *after* init() has set up provider/state.
     this._chainTransition(() => this.init());
@@ -317,6 +306,33 @@ class ASR extends eventEmitter {
     } else {
       this.segmentId++;
     }
+  }
+
+  // The stream is being stopped, and a client that reconnects at once starts a
+  // newer stream on the channel while this ASR may still emit results (stop
+  // flush). Give this ASR `count` ids from its current segment on, and return
+  // the first id after them, left to the newer stream: neither waits for the
+  // other, and no id is used twice (gaps are harmless). A primary result that
+  // would need an id past the reserve is dropped. Legacy (own counter) only:
+  // per-stream sub-ASR share their reserve, see useSegmentReserve.
+  reserveSegmentIds(count) {
+    this.segmentIdLimit = this.segmentId + count - 1;
+    return this.segmentIdLimit + 1;
+  }
+
+  // Per-stream twin of reserveSegmentIds: the channel's sub-ASR being stopped
+  // draw their next ids from `reserve` (a private allocator) up to `limit`,
+  // while a newer stream continues on the shared allocator past it.
+  useSegmentReserve(reserve, limit) {
+    this.segmentAllocator = reserve;
+    this.segmentIdLimit = limit;
+  }
+
+  // Whether the next primary result needs an id past the reserve (secondary
+  // results reuse the latest primary's id, always within it).
+  _pastSegmentReserve(transcription) {
+    return transcription.isPrimary !== false
+      && this.segmentIdLimit !== null && this.segmentId > this.segmentIdLimit;
   }
 
   // Native diarization: stamp the segment's speaker from the bot-fed
@@ -554,17 +570,19 @@ class ASR extends eventEmitter {
       // echo the credential). Redact it before it reaches the logs.
       this.logger.error(this._redactSecrets(error));
       const msg = ASR_ERROR[error] || ASR_ERROR['RUNTIME_ERROR'];
-      const final = {
-        "segmentId": this.segmentId,
-        "astart": this.provider.startedAt,
-        "text": msg,
-        "start": 0,
-        "end": 0,
-        "lang": 'EN-en',
-        "locutor": process.env.TRANSCRIBER_BOT_NAME
+      if (!this._pastSegmentReserve({})) {
+        const final = {
+          "segmentId": this.segmentId,
+          "astart": this.provider.startedAt,
+          "text": msg,
+          "start": 0,
+          "end": 0,
+          "lang": 'EN-en',
+          "locutor": process.env.TRANSCRIBER_BOT_NAME
+        }
+        this.emit('final', final)
+        this._advanceSegmentId();
       }
-      this.emit('final', final)
-      this._advanceSegmentId();
       this.logger.error(msg);
       this.state = ASR.states.ERROR
     })
@@ -581,7 +599,7 @@ class ASR extends eventEmitter {
     });
     this.provider.on('transcribing', (transcription) => {
       this.state = ASR.states.TRANSCRIBING;
-      if (transcription.text.trim().length > 0) {
+      if (transcription.text.trim().length > 0 && !this._pastSegmentReserve(transcription)) {
         transcription.segmentId = this._segmentIdFor(transcription);
         this._applyNativeSpeaker(transcription);
         this._applyTimeline(transcription);
@@ -590,6 +608,10 @@ class ASR extends eventEmitter {
     });
     this.provider.on('transcribed', (transcription) => {
       if (transcription.text.trim().length > 0) {
+        if (this._pastSegmentReserve(transcription)) {
+          this.logger.warn(`Final dropped: this stopping stream used up its reserved segment ids (up to ${this.segmentIdLimit})`);
+          return;
+        }
         transcription.segmentId = this._segmentIdFor(transcription);
         this._applyNativeSpeaker(transcription, true);
         this._applyTimeline(transcription);

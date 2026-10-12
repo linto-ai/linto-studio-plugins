@@ -174,7 +174,6 @@ describe('K2 per-stream recording split', () => {
     inst.app = {};
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
-    inst.stoppingStreams = new Map();
     inst.latestStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
@@ -474,7 +473,11 @@ describe('K2 per-stream recording split', () => {
     function fakeAsr(name, log) {
       return {
         name, flushCount: 0, markerCount: 0, detached: false, disposed: false,
-        channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
+        segmentId: 1, channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
+        // Segment-id reservation at stop, as the ASR does it.
+        segmentIdLimit: null,
+        reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
+        useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
         async flushFinals() { this.flushCount += 1; log.push(`flush:${name}`); },
         streamStopped() { this.markerCount += 1; log.push(`marker:${name}`); },
         removeAllListeners() { this.detached = true; },

@@ -129,7 +129,7 @@ describe('Kept audio across stream stops and reconnects', () => {
         send([3, 4]);
         ws.emit('session-stop', session, channel.id);
         ws.emit('session-start', session, channel); // reconnects at once
-        send([5, 6]); // held until the first stream's cursor is final
+        send([5, 6]); // before the new ASR's init(): buffered
         await wait(60);
         send([7, 8]);
         ws.emit('session-stop', session, channel.id);

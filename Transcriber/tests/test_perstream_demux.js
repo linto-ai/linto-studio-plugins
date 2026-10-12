@@ -313,7 +313,6 @@ describe('StreamingServer per-stream demux', () => {
     const inst = Object.create(StreamingServer.prototype);
     inst.ASRs = new Map();
     inst.lastSegmentIds = new Map();
-    inst.stoppingStreams = new Map();
     inst.latestStreams = new Map();
     inst.maxAsrPerChannel = StreamingServer._resolveCap(process.env.MAX_CONCURRENT_ASR_PER_CHANNEL);
     inst.channels = new Map();
@@ -495,6 +494,10 @@ describe('StreamingServer per-stream demux', () => {
     return {
       name, segmentId: 1, flushed: false, detached: false, disposed: false, marked: false,
       channel: { keepAudio: false }, // like every ASR: the stop reads whether its stream keeps audio
+      // Segment-id reservation at stop, as the ASR does it.
+      segmentIdLimit: null,
+      reserveSegmentIds(count) { this.segmentIdLimit = this.segmentId + count - 1; return this.segmentIdLimit + 1; },
+      useSegmentReserve(reserve, limit) { this.segmentAllocator = reserve; this.segmentIdLimit = limit; },
       async flushFinals() { this.flushed = true; },
       streamStopped() { this.marked = true; },
       removeAllListeners() { this.detached = true; },

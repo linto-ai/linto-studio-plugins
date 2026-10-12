@@ -9,8 +9,9 @@
  *     instance, see doc/production-topology.md).
  * A client that reconnects at once to the same instance starts the new stream
  * while the previous one is still flushing its ASR, which can still publish a
- * final: the new stream must number its segments after it, not from the
- * snapshot (stale: it is not republished on every caption).
+ * final: the stream being stopped keeps a reserve of ids and the new one starts
+ * right after it, at once, not from the snapshot (stale: it is not republished
+ * on every caption).
  *
  * Drives the real StreamingServer, WebsocketServer (no socket opened) and ASR
  * wrapper with the FakeTranscriber provider (enableLiveTranscripts:false).
@@ -86,60 +87,95 @@ describe('Segment-id continuity across reconnects', () => {
         let streaming, ws, finals;
         beforeEach(async () => ({ streaming, ws, finals } = await instance()));
 
-        it('numbers the new stream after the last final of the stream still stopping', async () => {
+        // The stop flush of the first stream returns these finals, as Azure does.
+        function flushReturns(asr, texts) {
+            asr.provider.stop = function () {
+                this.stopCount += 1;
+                for (const text of texts) this.emit('transcribed', { text, astart: 0, locutor: 'test' });
+                this.emit('closed');
+            };
+        }
+
+        it('starts the new stream at once, after the ids reserved for the stream being stopped', async () => {
             // The snapshot was taken at activation: no caption stored yet.
             const channel = channelWith(0);
             const first = await startStream(ws, streaming, channel);
             for (const text of ['one', 'two', 'three']) first.provider.simulateFinal({ text, astart: 0 });
-            // Its stop flush returns one more final, as Azure does.
-            first.provider.stop = function () {
-                this.stopCount += 1;
-                this.emit('transcribed', { text: 'flushed at stop', astart: 0, locutor: 'test' });
-                this.emit('closed');
-            };
+            flushReturns(first, ['flushed at stop']);
 
             ws.emit('session-stop', session, channel.id); // flush in progress
             ws.emit('session-start', session, channel);   // the client reconnects at once
             const second = streaming.ASRs.get(KEY);
-            assert.strictEqual(second.provider, null, 'the new provider waits for the previous cursor');
-
-            await wait(100);
+            await second._transitionLock;
+            assert.ok(second.provider, 'the new provider starts at once');
+            assert.strictEqual(second.segmentId, 14, 'after the 10 ids reserved from segment 4');
             second.provider.simulateFinal({ text: 'after reconnect', astart: 0 });
 
+            await wait(100);
             assert.deepStrictEqual(finals, [
                 { id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' },
-                { id: 4, text: 'flushed at stop' },
-                { id: 6, text: 'after reconnect' }, // after the cursor kept by the stop (4 + 2)
+                { id: 4, text: 'flushed at stop' }, // within the first stream's reserve
+                { id: 14, text: 'after reconnect' },
             ]);
         });
 
-        it('keeps the audio received while the new provider waits', async () => {
+        it('never reuses an id, even when the stream being stopped runs out of reserved ids', async () => {
+            const channel = channelWith(0);
+            const first = await startStream(ws, streaming, channel);
+            flushReturns(first, Array.from({ length: 12 }, (_, i) => `late ${i + 1}`));
+            ws.emit('session-stop', session, channel.id);
+            ws.emit('session-start', session, channel);
+            const second = streaming.ASRs.get(KEY);
+            await second._transitionLock;
+            second.provider.simulateFinal({ text: 'after reconnect', astart: 0 });
+            await wait(100);
+            const ids = finals.map((f) => f.id);
+            assert.deepStrictEqual(finals.find((f) => f.text === 'after reconnect'), { id: 11, text: 'after reconnect' });
+            assert.deepStrictEqual(finals.filter((f) => f.text.startsWith('late')).map((f) => f.id),
+                [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'the 10 reserved ids, the last 2 finals dropped');
+            assert.strictEqual(new Set(ids).size, ids.length, `no id used twice: ${ids}`);
+        });
+
+        it('feeds the new stream\'s audio to its provider at once, none lost', async () => {
             const channel = channelWith(0);
             await startStream(ws, streaming, channel);
             ws.emit('session-stop', session, channel.id);
             ws.emit('session-start', session, channel);
+            // Same tick as the start (ws emits the frames of one socket read at
+            // once): before the ASR's init() ran, so buffered.
+            ws.emit('data', Buffer.from([1, 2]), session.id, channel.id);
             const second = streaming.ASRs.get(KEY);
-            ws.emit('data', Buffer.from([1, 2, 3, 4]), session.id, channel.id); // during the hold
-            await wait(100);
-            assert.ok(second.provider, 'provider started once the cursor is known');
-            assert.strictEqual(second.provider.byteCount, 0, 'nothing sent before the next audio frame');
-            ws.emit('data', Buffer.from([5]), session.id, channel.id);
-            assert.strictEqual(second.provider.byteCount, 5, 'the held audio goes out first, nothing lost');
+            await wait(0); // init() ran; the previous stream is still flushing (40 ms settle)
+            assert.ok(second.provider, 'the new provider is up while the previous stream stops');
+            ws.emit('data', Buffer.from([3, 4]), session.id, channel.id);
+            assert.strictEqual(second.provider.byteCount, 4, 'no hold while the previous stream stops');
         });
 
-        it('chains successive immediate reconnects', async () => {
+        it('gives back the unused reserved ids when no newer stream started meanwhile', async () => {
             const channel = channelWith(0);
             const first = await startStream(ws, streaming, channel);
             first.provider.simulateFinal({ text: 'one', astart: 0 });
             ws.emit('session-stop', session, channel.id);
-            ws.emit('session-start', session, channel); // second stream, held
-            ws.emit('session-stop', session, channel.id); // ...and dropped at once
-            ws.emit('session-start', session, channel); // third stream, held behind the second
+            await wait(100);
+            const second = await startStream(ws, streaming, channel);
+            assert.strictEqual(second.segmentId, 3, 'right after the in-progress segment 2, no gap');
+        });
+
+        it('chains successive immediate reconnects without waiting', async () => {
+            const channel = channelWith(0);
+            const first = await startStream(ws, streaming, channel);
+            first.provider.simulateFinal({ text: 'one', astart: 0 });
+            ws.emit('session-stop', session, channel.id);
+            ws.emit('session-start', session, channel); // second stream...
+            ws.emit('session-stop', session, channel.id); // ...dropped at once
+            ws.emit('session-start', session, channel); // third stream
             const third = streaming.ASRs.get(KEY);
-            await wait(200);
+            await third._transitionLock;
+            assert.ok(third.provider, 'started at once');
             third.provider.simulateFinal({ text: 'three', astart: 0 });
-            const ids = finals.map((f) => f.id);
-            assert.deepStrictEqual(ids, [1, 4], `ids ${ids}: the third stream continues after both stops`);
+            await wait(100);
+            assert.deepStrictEqual(finals.map((f) => f.id), [1, 22],
+                'after the reserves of the first (2-11) and second (12-21) streams');
         });
     });
 

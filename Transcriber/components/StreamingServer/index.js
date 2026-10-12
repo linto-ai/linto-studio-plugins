@@ -12,6 +12,13 @@ const SERVER_MAPPING = {
   "RTMP": MultiplexedRTMPServer,
 }
 
+// Segment ids a stream being stopped may still use (see _stopAsr): the stop
+// flush finalizes what the provider already received, in practice the segment
+// in progress. 10 makes running out practically impossible; a result past them
+// is dropped rather than given an id a newer stream may use, and the unused
+// ones are given back when no newer stream started meanwhile.
+const STOPPING_STREAM_SEGMENT_RESERVE = 10;
+
 // Per-stream overflow: tags beyond the per-channel ASR cap collapse onto this
 // single shared "mixed" sub-ASR. 255 is reserved by the tagged-frame protocol
 // (see WebsocketServer._parseTaggedFrame) and is never a real participant tag.
@@ -37,10 +44,6 @@ class StreamingServer extends Component {
     this.state = StreamingServer.states.CLOSED;
     this.ASRs = new Map();
     this.lastSegmentIds = new Map();
-    // Channels whose legacy stream is being stopped on this instance, mapped to
-    // a promise that settles once that stream's segment cursor is final (see
-    // _stopAsr and initialSegmentIdFor).
-    this.stoppingStreams = new Map();
     // Latest stream started on each channel, running or being stopped: its
     // legacy ASR, or its per-stream channel context. Only its stop reports the
     // channel inactive (see _stopAsr).
@@ -115,16 +118,15 @@ class StreamingServer extends Component {
             // K1 (segment-id continuity across a connection replacement): a
             // reconnect's session-start lands INSIDE the outgoing stop's flush
             // window — cleanupWebsocket emits 'session-stop' synchronously from
-            // the new connection's handler. At that instant the outgoing
-            // channel's allocator is still LIVE (its sub-ASR draw the ids of
-            // their trailing finals from it) and `lastSegmentIds` has not been
-            // written yet — it is only written after the flushes, and then only
-            // if the context is still ours. resolveInitialSegmentId would
-            // therefore hand the successor the OUTGOING connection's starting
-            // id, and both connections would publish the same segment ids. Reuse
-            // the predecessor's allocator OBJECT instead: one shared monotonic
-            // source for the trailing finals and for the successor's sub-ASR,
-            // whatever order they draw in.
+            // the new connection's handler. At that instant `lastSegmentIds`
+            // has not been written yet — it is only written once the outgoing
+            // context is dropped. resolveInitialSegmentId would therefore hand
+            // the successor the OUTGOING connection's starting id, and both
+            // connections would publish the same segment ids. Reuse the
+            // predecessor's allocator OBJECT instead: the outgoing sub-ASR draw
+            // the ids of their trailing finals from a reserve taken off it when
+            // their stop started (see _stopAsr), and the successor's sub-ASR
+            // continue on it past that reserve.
             const previous = this.channels.get(ck);
             const allocator = (previous && previous.allocator)
               ? previous.allocator
@@ -155,20 +157,17 @@ class StreamingServer extends Component {
           // K1: a LEGACY successor can land inside a per-stream stop's flush
           // window — a keepAudio bot DEMOTED by the mixedRecording gate, the
           // native->web re-route, or any plain WS client. The outgoing shared
-          // allocator is still LIVE (the trailing finals draw their ids from it)
-          // and sits far above `channel.lastSegmentId` from the retained
+          // allocator sits far above `channel.lastSegmentId` from the retained
           // broadcast, which is only republished on activate/deactivate; seeding
           // from that stale value re-uses ids whose captions are already stored.
           // A legacy ASR owns an integer counter and cannot share the allocator
-          // OBJECT the per-stream branch reuses, so snapshot its cursor instead.
-          // Residual: the predecessor's trailing finals keep drawing from the
-          // allocator after this snapshot, so a handful of ids can still overlap
-          // — closing that fully would mean giving the legacy ASR the shared
-          // allocator, which is out of scope here.
+          // OBJECT the per-stream branch reuses, so snapshot its cursor instead:
+          // the outgoing stop already moved it past the ids reserved for its
+          // trailing finals (see _stopAsr), so no id is used twice.
           const liveCtx = this.channels.get(`${session.id}_${channel.id}`);
           const initialSegmentId = (liveCtx && liveCtx.allocator)
             ? liveCtx.allocator.next
-            : this.initialSegmentIdFor(session, channel);
+            : this.resolveInitialSegmentId(session.id, channel.id, channel);
           // Native diarization: bot WS streams register a SpeakerTracker on the
           // WS server at init. Non-bot sources (SRT/RTMP/non-native WS) have none.
           const speakerTracker = typeof server.getSpeakerTracker === 'function'
@@ -500,9 +499,8 @@ class StreamingServer extends Component {
   //   1. remove the ASR from the map synchronously (double session-stop guard)
   //   2. flush in-flight provider finals with listeners still attached
   //   3. publish the bot end-of-stream marker
-  //   4. preserve the segment-id cursor (it now includes the flushed finals);
-  //      a newer legacy stream of the channel waits for it to number its
-  //      segments (a per-stream one shares the allocator instead, see K1)
+  //   4. keep the segment-id cursor: a newer stream of the channel, started
+  //      meanwhile, got the ids after the ones reserved for this one (below)
   //   5. detach listeners and dispose; with kept audio, wait for the audio
   //      file to be saved (bounded, see _awaitKeptAudio): the legacy ASR's,
   //      or the per-stream recorder's
@@ -563,8 +561,8 @@ class StreamingServer extends Component {
     // stop superseded by a reconnect, a context still awaiting the K9 reaper —
     // which cannot collect it while the legacy ASR keeps _hasChannelAsr true)
     // would otherwise hijack a genuinely LEGACY channel stop: the legacy
-    // ordering, and with it preserveSegmentId, would be skipped and the STALE
-    // allocator's cursor written over the live ASR's own counter, so the next
+    // ordering, and with it the live ASR's own segment-id cursor, would be
+    // skipped and the STALE allocator's cursor written over it, so the next
     // stream on the channel resumes on segment ids whose captions are already
     // stored. The context is still the source of the shared allocator, but only
     // once this stop really is tearing per-stream sub-ASR down.
@@ -572,7 +570,7 @@ class StreamingServer extends Component {
     // sub-ASR registered but no context, the else-branch below ran the LEGACY
     // single-ASR ordering over every one of them — N end-of-stream markers (N
     // blank caption rows) instead of one, N sequential flushes instead of the
-    // concurrent K3 ones, and preserveSegmentId once per sub-ASR, the last
+    // concurrent K3 ones, and a legacy cursor written once per sub-ASR, the last
     // iterated winning the channel cursor. Route on the keys ALONE and treat a
     // missing context as the already-handled "nothing to preserve" case.
     const perStreamKeys = subKeys.filter(k => k !== ck);
@@ -604,6 +602,9 @@ class StreamingServer extends Component {
         this.ASRs.delete(k);
         (k.endsWith(RECORDER_SUFFIX) ? recorders : asrs).push(asr);
       }
+      // Before the first await: a client that reconnects at once starts a newer
+      // stream on this channel while these sub-ASR still flush their last finals.
+      const reservation = this._reservePerStreamSegmentIds(ctx, asrs);
       // K3: the flushes are independent, each bounded by ASR_STOP_FLUSH_TIMEOUT_MS
       // + ASR_STOP_SETTLE_MS, so run them CONCURRENTLY — sequentially a channel
       // at the default cap took ~23 s to publish its marker and its deactivate
@@ -631,6 +632,11 @@ class StreamingServer extends Component {
       for (const asr of asrs) {
         asr.removeAllListeners();
         asr.dispose();
+      }
+      // No newer stream took the cursor: give back the ids the sub-ASR did not
+      // use (they can emit nothing any more).
+      if (reservation && this.latestStreams.get(ck) === ctx && reservation.allocator.next === reservation.upTo) {
+        reservation.allocator.next = reservation.reserve.next;
       }
       // The recorder is NOT pre-detached, unlike the participant sub-ASR above
       // where detaching before dispose is load-bearing (it stops a late
@@ -685,24 +691,21 @@ class StreamingServer extends Component {
     } else {
       legacyAsr = this.ASRs.get(ck);
       // Legacy single ASR: the original ordering (flush, streamStopped,
-      // preserveSegmentId, removeAllListeners, dispose). A client that
-      // reconnects at once starts a newer stream while this one flushes: its
-      // first segment id waits for this stream's cursor (initialSegmentIdFor).
+      // segment-id cursor, removeAllListeners, dispose).
       for (const k of subKeys) {
         const asr = this.ASRs.get(k);
         this.ASRs.delete(k);
-        let cursorFinal;
-        const stopping = new Promise((resolve) => { cursorFinal = resolve; });
-        this.stoppingStreams.set(ck, stopping);
-        try {
-          await asr.flushFinals();
-          asr.streamStopped();
-          // subKeys === [ck]; preserve the single ASR's own counter BEFORE dispose
-          // (asr.segmentId is still valid here).
-          this.preserveSegmentId(session.id, channelId, asr);
-        } finally {
-          if (this.stoppingStreams.get(ck) === stopping) this.stoppingStreams.delete(ck);
-          cursorFinal();
+        // Before the first await: a client that reconnects at once starts the
+        // newer stream from this cursor while this ASR still flushes its last
+        // finals.
+        const reservedUpTo = asr.reserveSegmentIds(STOPPING_STREAM_SEGMENT_RESERVE);
+        this.lastSegmentIds.set(ck, Math.max(this.lastSegmentIds.get(ck) || 1, reservedUpTo));
+        await asr.flushFinals();
+        asr.streamStopped();
+        // No newer stream took the cursor: give back the ids this ASR did not
+        // use (asr.segmentId is still valid here, before dispose).
+        if (this.lastSegmentIds.get(ck) === reservedUpTo) {
+          this.lastSegmentIds.set(ck, asr.segmentId + 1);
         }
         asr.removeAllListeners();
         const disposed = asr.dispose();
@@ -762,6 +765,23 @@ class StreamingServer extends Component {
     return true;
   }
 
+  // Per-stream twin of ASR#reserveSegmentIds, for the sub-ASR of a stream
+  // being stopped (`asrs`): they draw the ids of their last finals from a
+  // private reserve of STOPPING_STREAM_SEGMENT_RESERVE ids taken off the
+  // channel's shared allocator, which moves past it. A newer stream of the
+  // channel starts at once after the reserve, whether it shares the allocator
+  // (per-stream) or snapshots its cursor (legacy), and no id is used twice.
+  // Returns null when there is nothing to reserve.
+  _reservePerStreamSegmentIds(ctx, asrs) {
+    if (!ctx || !ctx.allocator || asrs.length === 0) return null;
+    const allocator = ctx.allocator;
+    const reserve = { next: allocator.next };
+    const upTo = allocator.next + STOPPING_STREAM_SEGMENT_RESERVE;
+    for (const asr of asrs) asr.useSegmentReserve(reserve, upTo - 1);
+    allocator.next = upTo;
+    return { allocator, reserve, upTo };
+  }
+
   // K1: drop the channel context this stop owns. `ctx` is the identity captured
   // BEFORE the multi-second flush awaits: if a reconnect re-registered the
   // channel meanwhile, the map now holds the SUCCESSOR's context and deleting it
@@ -785,8 +805,8 @@ class StreamingServer extends Component {
     // activate/deactivate, never per stored caption, so it can be hundreds of
     // ids stale and the new stream overwrites captions already stored.
     // Monotonic: never regress a cursor a later connection already published.
-    // Legacy passes ctx === undefined and writes nothing (preserveSegmentId
-    // stays its only writer).
+    // Legacy passes ctx === undefined and writes nothing (its stop writes its
+    // own cursor).
     if (ctx && ctx.allocator) {
       this.lastSegmentIds.set(ck, Math.max(this.lastSegmentIds.get(ck) || 0, ctx.allocator.next));
     }
@@ -944,20 +964,6 @@ class StreamingServer extends Component {
     logger.info(`clearSession ${sessionId}: purged ${purged}/${channelIds.length} cached segmentId(s)`);
   }
 
-  // First segment id of a new legacy stream on a channel. A client that
-  // reconnects at once (e.g. a bot reopening its WS) starts the new stream while
-  // the previous one is still being stopped on this instance, and that stream's
-  // ASR may still publish finals (stop flush): the id is then a promise,
-  // resolved once that stream's cursor is final, and the new ASR holds its
-  // provider until then.
-  initialSegmentIdFor(session, channel) {
-    const stopping = this.stoppingStreams && this.stoppingStreams.get(`${session.id}_${channel.id}`);
-    if (!stopping) {
-      return this.resolveInitialSegmentId(session.id, channel.id, channel);
-    }
-    return stopping.then(() => this.resolveInitialSegmentId(session.id, channel.id, channel));
-  }
-
   // Both sources are lower bounds of the next free segment id: the cursor of a
   // stream this instance stopped, and the last id the Scheduler stored as of
   // the latest statuses snapshot, ahead of the former when the channel streamed
@@ -968,11 +974,6 @@ class StreamingServer extends Component {
     this.lastSegmentIds.delete(key);
     const mqttSegmentId = channel.lastSegmentId;
     return Math.max(memorySegmentId || 1, mqttSegmentId ? mqttSegmentId + 1 : 1);
-  }
-
-  preserveSegmentId(sessionId, channelId, asr) {
-    const key = `${sessionId}_${channelId}`;
-    this.lastSegmentIds.set(key, asr.segmentId + 1);
   }
 
   async startServers() {

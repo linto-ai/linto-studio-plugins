@@ -1,5 +1,12 @@
 const { MqttClient, Component, Model, logger } = require('live-srt-lib')
 
+// Captions and translated captions reference their channel, deleted with its
+// session (ON DELETE CASCADE): a foreign-key violation on insert means the
+// channel no longer exists.
+function isChannelGone(err) {
+  return err && err.name === 'SequelizeForeignKeyConstraintError';
+}
+
 class BrokerClient extends Component {
 
   static states = {
@@ -783,6 +790,13 @@ class BrokerClient extends Component {
         await Model.Caption.create(captionData);
       }
     } catch (err) {
+      if (isChannelGone(err)) {
+        const caption = transcription.segmentId !== undefined
+          ? `final caption (segment ${transcription.segmentId})`
+          : 'end-of-stream marker';
+        logger.warn(`[TRANSCRIPTION_SAVE_ERROR]: ${caption} dropped: channel ${channelId} of session ${sessionId} no longer exists (session deleted before the caption could be stored)`);
+        return;
+      }
       logger.error(`[TRANSCRIPTION_SAVE_ERROR]: ${err.message}`, JSON.stringify(transcription));
     }
   }
@@ -798,6 +812,10 @@ class BrokerClient extends Component {
         text: translation.text,
       });
     } catch (err) {
+      if (isChannelGone(err)) {
+        logger.warn(`[TRANSLATION_SAVE_ERROR]: ${translation.targetLang} translation of segment ${translation.segmentId} dropped: channel ${channelId} of session ${sessionId} no longer exists (session deleted before the translation could be stored)`);
+        return;
+      }
       logger.error(`[TRANSLATION_SAVE_ERROR]: ${err.message}`, JSON.stringify(translation));
     }
   }

@@ -929,6 +929,51 @@ describe('Bot audio health log', () => {
   })
 })
 
+// The participant pollers only look in the page's top-level document: a meeting
+// client living in a sub-frame would leave the bot hearing tracks and finding
+// nobody (until the join watchdog), with nothing in the logs saying why.
+describe('Bot tracks heard but no participant found', () => {
+  const { logger } = require('live-srt-lib')
+  let warns, realWarn
+  beforeEach(() => { warns = []; realWarn = logger.warn; logger.warn = (m) => { warns.push(String(m)) } })
+  afterEach(() => { logger.warn = realWarn })
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const noParticipant = () => warns.filter(w => w.includes('no participant found'))
+
+  it('warns once when tracks stream and no participant is found in time', async () => {
+    const bot = makeBot('teams')
+    bot.noParticipantWarnMs = 20
+    bot.handleAudioData(0, frame(0), 1)
+    bot.handleAudioData(1, frame(0), 1)
+    await wait(40)
+    bot.handleAudioData(0, frame(0), 1)
+    await wait(40)
+    assert.equal(noParticipant().length, 1)
+    assert.ok(noParticipant()[0].includes('2 track(s) heard for 0.02s') && noParticipant()[0].includes('top-level document'), noParticipant()[0])
+    await bot.dispose()
+  })
+
+  it('does not warn once a participant is found', async () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    bot.noParticipantWarnMs = 20
+    bot.handleAudioData(0, frame(0), 1)
+    bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 0, participant: { id: 'u1', name: 'A' } }, 1)
+    await wait(40)
+    assert.equal(noParticipant().length, 0)
+    await bot.dispose()
+  })
+
+  it('does not warn after dispose', async () => {
+    const bot = makeBot('visio')
+    bot.noParticipantWarnMs = 20
+    bot.handleAudioData(0, frame(0), 1)
+    await bot.dispose()
+    await wait(40)
+    assert.equal(noParticipant().length, 0)
+  })
+})
+
 describe('Bot while disposing', () => {
   it('ignores loopback messages once disposing (no empty-meeting timer outliving the bot)', async () => {
     const { bot, page } = makeInitBot('visio')

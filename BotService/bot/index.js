@@ -18,6 +18,11 @@ const AUDIO_SILENCE_TIMEOUT_MS = (() => {
 // How often the silence watchdog re-checks the last-audio timestamp.
 const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
 
+// Once tracks stream, how long without any participant found before warning
+// (once): the pollers that find participants (Teams callingDebug, the LiveKit
+// Room, Jitsi's conference) only look in the page's top-level document.
+const NO_PARTICIPANT_WARN_MS = 30000
+
 // Period of the per-bot audio health log: one line summing up the audio path
 // (each track's input rate, the output rate against the wall clock, drops,
 // stalls, PCM of removed tracks), so that a capture or mixing fault shows in the
@@ -88,6 +93,9 @@ class Bot extends EventEmitter {
     this.audioSilenceWatchdog = null
     this.audioHealthTimer = null
     this._audioHealth = null // counters at the start of the current health window
+    this.noParticipantWarnMs = NO_PARTICIPANT_WARN_MS
+    this.noParticipantTimer = null
+    this.unidentifiedTracks = new Set() // keys of the tracks heard before any participant was found
     this.diarizationDegraded = false // native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
     this.joinWatchdog = null
@@ -273,6 +281,7 @@ class Bot extends EventEmitter {
     }
     // note every PCM frame for the silence watchdog.
     this.lastAudioAt = Date.now()
+    if (!this.hasSeenParticipant) this._noteTrackWithoutParticipant(key)
     if (!this.audioMixer) return
     // Teams puts anonymous bots in a LOBBY where the page carries no meeting audio;
     // forwarding it there would push lobby silence to the ASR. Hold until a
@@ -282,6 +291,20 @@ class Bot extends EventEmitter {
     // An SFU track is mixed from its first frame, before the poller maps it to its
     // participant (~2 s after join): only the speaker attribution waits for that.
     this.audioMixer.addAudio(key, pcmBuffer)
+  }
+
+  // Tracks stream but no participant was found: normal while waiting in a lobby,
+  // a wrong assumption about the page if it lasts (the meeting client outside the
+  // top-level document, where the pollers look): warn once if it does.
+  _noteTrackWithoutParticipant (key) {
+    this.unidentifiedTracks.add(key)
+    if (this.noParticipantTimer || this.disposed) return
+    this.noParticipantTimer = setTimeout(() => {
+      if (this.hasSeenParticipant || this.disposed) return
+      logger.warn(`Bot[${this.contextId}]: ${this.unidentifiedTracks.size} track(s) heard for ${this.noParticipantWarnMs / 1000}s but no participant found: ` +
+        'still in a lobby, or the meeting client (Teams callingDebug, LiveKit Room, Jitsi conference) is not in the top-level document, where the participant pollers run')
+    }, this.noParticipantWarnMs)
+    if (typeof this.noParticipantTimer.unref === 'function') this.noParticipantTimer.unref()
   }
 
   // Count PCM of a removed track; warn on the first frame only, per track.
@@ -345,6 +368,7 @@ class Bot extends EventEmitter {
     // latched "admitted" milestone — the bot is in the meeting (first mapping).
     if (!this.hasSeenParticipant) {
       logger.info(`Bot[${this.contextId}]: admitted to meeting, first participant mapped (${participant.name})`)
+      clearTimeout(this.noParticipantTimer)
       this._armAudioSilenceWatchdog() // from now on we expect a steady PCM flow
     }
     this.hasSeenParticipant = true
@@ -560,6 +584,7 @@ class Bot extends EventEmitter {
     this._cancelEmptyMeetingTimer()
     this._cancelAudioSilenceWatchdog() // no timer outlives the bot
     this._cancelAudioHealthLog()
+    clearTimeout(this.noParticipantTimer)
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
     // Best-effort graceful leave before tearing the context down (skip if the page
     // is already gone). Guarded so a throwing leave-rule cannot skip the

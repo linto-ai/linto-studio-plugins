@@ -422,13 +422,14 @@ class Bot extends EventEmitter {
     this._armMeetingEndCheck()
   }
 
-  // The page no longer knows whose the track is (its receiver was reused): stop
-  // attributing its audio; it is mapped again once its new owner is found. Its
-  // former participant may still be present (on another track, or listening).
+  // The page no longer knows whose the track is (its receiver was reused, or its
+  // owner is no longer among those claiming it): stop attributing its audio, under
+  // a new tag; it is mapped again once its new owner is found. Its former
+  // participant may still be present (on another track, or listening).
   _onTrackUnmapped (trackIndex, connId = 0) {
     const key = trackKey(connId, trackIndex)
     this.trackParticipants.delete(key)
-    if (this.isSfu && this.audioMixer && this.audioMixer.hasTrack(key)) this.audioMixer.setTrackParticipant(key, null)
+    if (this.isSfu && this.audioMixer && this.audioMixer.hasTrack(key)) this.audioMixer.unmapTrack(key)
   }
 
   _onTrackRemoved (trackIndex, connId = 0) {

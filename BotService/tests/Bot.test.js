@@ -838,6 +838,19 @@ describe('Bot trackUnmapped', () => {
     bot._cancelAudioHealthLog()
   })
 
+  it('gives a track whose owner was never found a new tag when its receiver is reused', () => {
+    const bot = makeBot('visio')
+    bot._startMixer()
+    const ev = []
+    bot.on('speakerChanged', (e) => ev.push([e.speaker && e.speaker.id, e.reason, e.track]))
+    for (let i = 0; i < 25; i++) bot.handleAudioData(0, frame(3000), 1) // A, never mapped
+    bot.handleJsonMessage({ type: 'trackUnmapped', trackIndex: 0 }, 1)
+    for (let i = 0; i < 25; i++) bot.handleAudioData(0, frame(3000), 1) // B
+    bot.handleJsonMessage({ type: 'participantMapping', trackIndex: 0, participant: { id: 'bob', name: 'Bob' } }, 1)
+    assert.deepEqual(ev, [[null, 'unattributed', 'c1:0.0'], [null, 'unattributed', 'c1:0.1'], ['bob', 'mapped', 'c1:0.1']])
+    bot._cancelAudioHealthLog()
+  })
+
   it('is a no-op for an unknown track, and on MCU/Teams', () => {
     const bot = makeBot('teams')
     bot._startMixer()

@@ -1441,6 +1441,17 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.deepStrictEqual(sent(ws), ['participantMapping:alice', 'participantMapping:bob'])
     })
 
+    it("a re-fired 'track' never mapped yet is reported as changing hands too", async () => {
+      const lk = room([])
+      const ctx = runScript(s, { elements: lk.elements })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('rx')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      emitTrack(ctx, track) // reused before its first owner was found
+      assert.deepStrictEqual(sent(ws), ['trackUnmapped:0'])
+    })
+
     it('Jitsi: a track claimed by two participants in a poll is not mapped to either', async () => {
       const jt = (id) => ({ getType: () => 'audio', track: { id } })
       const parts = ['p1', 'p2'].map((id) => ({ getId: () => id, getDisplayName: () => id, getTracks: () => [jt('rx')] }))

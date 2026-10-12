@@ -471,7 +471,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
       // The SFU reused the receiver for another subscription: Chromium fires
       // 'track' again with the same MediaStreamTrack (its capture goes on), which
       // now carries somebody else, or the same participant back: find out again.
-      forgetMapping(tracks.get(track.id));
+      forgetMapping(tracks.get(track.id), true);
       return;
     }
     processedTracks.add(track.id);
@@ -557,8 +557,10 @@ function getInterceptScript (localWsUrl, platformConfig) {
   // polled for fast), never re-announced on a reconnect, and the Node side stops
   // attributing it at once (its participant may still be in the meeting, e.g.
   // after unpublishing, while the receiver already carries somebody else).
-  function forgetMapping(info) {
-    if (!info || !info.participantId) return;
+  // changedHands: the receiver was reused, so even a track whose owner was never
+  // found now carries somebody else (the Node side gives it a new tag).
+  function forgetMapping(info, changedHands) {
+    if (!info || (!info.participantId && !changedHands)) return;
     info.participantId = null;
     info.unmappedAt = Date.now();
     sentMappings.delete(info.index);

@@ -592,12 +592,12 @@ describe('AudioMixer', () => {
 
     // The Bot relays the mixer's speaker events on SFU platforms only (see
     // 'never derives speakers from the mixer on Teams').
-    it('nothing attributed (MCU/Teams): never a participant, one null per track and run', () => {
+    it('nothing attributed (MCU/Teams): never a participant, one null per takeover', () => {
       const ev = events(mixer)
       open(mixer, ['t0', 't1'], false)
       for (let i = 0; i < 10; i++) feed(mixer, { t0: frame(0), t1: frame(9000) })
       for (let i = 0; i < 4; i++) feed(mixer, { t0: frame(i % 2 ? 9000 : 0), t1: frame(i % 2 ? 0 : 9000) })
-      assert.deepEqual(ev, [[0, null], [220, null]])
+      assert.deepEqual(ev, [[0, null], [220, null], [240, null], [260, null]], 'one per takeover, none in between')
     })
 
     // Round-3 review: one null per takeover split U1's episode on a 20 ms cough of
@@ -610,21 +610,67 @@ describe('AudioMixer', () => {
         return list
       }
 
-      it("a cough on another unmapped track does not re-announce the one speaking, whose mapping then names its episode", () => {
+      // The Transcriber stamps each segment with the latest tag it received, and
+      // names a tag's segments with that tag's 'mapped': a track speaking again
+      // after another one (a cough, cross-talk) must say so, or its resumed words
+      // would stay under the other track's tag, and be named after it.
+      it('a track taking over again is re-announced (U1, U2, U1), and each mapping names its own track', () => {
         const ev = tagged(mixer)
         open(mixer, ['u1', 'u2'], false)
-        feed(mixer, { u1: frame(5000), u2: frame(0) }) // 0
-        feed(mixer, { u1: frame(5000), u2: frame(9000) }) // 20: u2 coughs
-        feed(mixer, { u1: frame(5000), u2: frame(0) }) // 40: u1 again
+        feed(mixer, { u1: frame(5000), u2: frame(0) }) // 0: U1
+        feed(mixer, { u1: frame(5000), u2: frame(9000) }) // 20: U2 coughs
+        feed(mixer, { u1: frame(5000), u2: frame(0) }) // 40: U1 again
         mixer.setTrackParticipant('u1', { id: 'bob', name: 'Bob' })
-        assert.deepEqual(ev, [[0, null, 'unattributed', 'u1.0'], [20, null, 'unattributed', 'u2.0'], [60, 'bob', 'mapped', 'u1.0']])
+        feed(mixer, { u1: frame(0), u2: frame(5000) }) // 60: U2
+        mixer.setTrackParticipant('u2', { id: 'carol', name: 'Carol' })
+        assert.deepEqual(ev, [
+          [0, null, 'unattributed', 'u1.0'],
+          [20, null, 'unattributed', 'u2.0'],
+          [40, null, 'unattributed', 'u1.0'],
+          [60, 'bob', 'mapped', 'u1.0'],
+          [60, null, 'unattributed', 'u2.0'],
+          [80, 'carol', 'mapped', 'u2.0']
+        ])
       })
 
-      it('cross-talk between two unmapped tracks: one null per track, not per dominance change', () => {
+      it('cross-talk between two unmapped tracks: one null per dominance change, never twice in a row', () => {
         const ev = tagged(mixer)
         open(mixer, ['u1', 'u2'], false)
         for (let i = 0; i < 150; i++) feed(mixer, i % 10 < 5 ? { u1: frame(9000), u2: frame(5000) } : { u1: frame(5000), u2: frame(9000) })
-        assert.deepEqual(ev, [[0, null, 'unattributed', 'u1.0'], [100, null, 'unattributed', 'u2.0']])
+        assert.equal(ev.length, 30, 'a takeover every 100 ms for 3 s')
+        ev.forEach((e, i) => assert.deepEqual([e[0], e[3]], [i * 100, i % 2 ? 'u2.0' : 'u1.0']))
+      })
+
+      it('worst case, a takeover at every 20 ms frame: one speakerChanged per frame, no more', () => {
+        const ev = tagged(mixer)
+        open(mixer, ['u1', 'u2'], false)
+        for (let i = 0; i < 50; i++) feed(mixer, i % 2 ? { u1: frame(5000), u2: frame(9000) } : { u1: frame(9000), u2: frame(5000) })
+        assert.equal(ev.length, 50, '50 per second, 5 per 100 ms')
+      })
+
+      it('a pause under the grace sends nothing, no silence null either: the track is still the current speaker', () => {
+        const ev = tagged(mixer)
+        open(mixer, ['alice', 'bob'])
+        open(mixer, ['u1'], false)
+        const step = (a, u1) => feed(mixer, { alice: frame(a), bob: frame(0), u1: frame(u1) })
+        step(5000, 0) // 0: Alice
+        step(0, 5000) // 20: U1
+        for (let i = 0; i < 90; i++) step(0, 0) // 1.8 s pause
+        step(0, 5000) // 1840: U1 resumes
+        mixer.setTrackParticipant('u1', { id: 'dan', name: 'Dan' })
+        assert.deepEqual(ev, [[0, 'alice', undefined, undefined], [20, null, 'unattributed', 'u1.0'], [1860, 'dan', 'mapped', 'u1.0']])
+      })
+
+      it('after a silence past the grace (the run is over), the next unattributed speech starts with a fresh null', () => {
+        const ev = tagged(mixer)
+        open(mixer, ['alice', 'bob'])
+        open(mixer, ['u1'], false)
+        const step = (a, u1) => feed(mixer, { alice: frame(a), bob: frame(0), u1: frame(u1) })
+        step(5000, 0) // 0: Alice
+        step(0, 5000) // 20: U1
+        for (let i = 0; i < 100; i++) step(0, 0) // 2 s: the grace is over, nothing sent
+        step(0, 5000) // 2040: U1 again
+        assert.deepEqual(ev, [[0, 'alice', undefined, undefined], [20, null, 'unattributed', 'u1.0'], [2040, null, 'unattributed', 'u1.0']])
       })
 
       it('a track that lost its participant (recycled receiver) is announced under a new tag', () => {
@@ -638,6 +684,18 @@ describe('AudioMixer', () => {
         mixer.removeParticipant('bob')
         feed(mixer, { rx: frame(5000) }) // 40
         assert.deepEqual(ev, [[0, 'alice', undefined, undefined], [20, null, 'unattributed', 'rx.1'], [40, 'bob', 'mapped', 'rx.1'], [40, null, 'unattributed', 'rx.2']])
+      })
+
+      // A receiver whose owner was never found, reused for somebody else: the
+      // new owner's mapping must not name the previous one's words.
+      it('a track that changed hands gets a new tag, even with no owner known before', () => {
+        const ev = tagged(mixer)
+        open(mixer, ['rx'], false)
+        feed(mixer, { rx: frame(5000) }) // 0: A, never mapped
+        mixer.unmapTrack('rx') // the receiver is reused
+        feed(mixer, { rx: frame(5000) }) // 20: B
+        mixer.setTrackParticipant('rx', { id: 'bob', name: 'Bob' })
+        assert.deepEqual(ev, [[0, null, 'unattributed', 'rx.0'], [20, null, 'unattributed', 'rx.1'], [40, 'bob', 'mapped', 'rx.1']])
       })
 
       it('a new run, after a named speaker or a silence past the grace, announces a track again', () => {

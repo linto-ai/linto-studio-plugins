@@ -180,6 +180,8 @@ function runScript (script, opts = {}) {
     callingDebug: opts.callingDebug,
     addEventListener (ev, cb) { (winListeners[ev] = winListeners[ev] || []).push(cb) }
   }
+  // opts.subFrame runs the script as in an iframe (window.top is another window).
+  fakeWindow.top = opts.subFrame ? {} : fakeWindow
   const fakeDocument = {
     createElement (tag) {
       const el = {
@@ -293,16 +295,6 @@ describe('webrtc-intercept getInterceptScript()', () => {
     assert.ok(getInterceptScript(WS, { platformType: 'sfu' }).includes('const DEBUG = false'))
   })
 
-  // Loopback WS resync after LocalAudioServer restart.
-  it('remembers sent mappings and replays them only on a reconnect (not first connect)', () => {
-    const s = getInterceptScript(WS, { platformType: 'sfu' })
-    assert.ok(s.includes('sentMappings'), 'records mappings already sent')
-    assert.ok(s.includes('hasConnectedOnce'), 'gates replay behind the first connect')
-    assert.ok(/hasConnectedOnce\s*&&\s*sentMappings\.size/.test(s), 'replays only after first connect')
-    assert.ok(s.includes('replaying'))
-    assert.ok(s.includes('hasConnectedOnce = true'))
-    assert.doesNotThrow(() => new Function(s))
-  })
 
   // Teams native-diar fallback + logging.
   it('logs and signals a degrade when Teams callingDebug disappears', () => {
@@ -783,6 +775,72 @@ describe('webrtc-intercept getInterceptScript()', () => {
       assert.notStrictEqual(ws2, ws)
       ws2._open(); await flush()
       assert.strictEqual(jsonFrames(ws2).filter((f) => f.type === 'participantMapping').length, 0)
+    })
+  })
+
+  // addInitScript runs the script in every frame of the page: a live Teams join
+  // opened 8 loopback sockets on one path within 3 s.
+  describe('frames (behavioral)', () => {
+    const lkRoom = (trackId) => ({
+      state: 'connected',
+      localParticipant: {},
+      remoteParticipants: [{ identity: 'id1', name: 'Alice', trackPublications: { forEach (cb) { [{ kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: { id: trackId } } }].forEach(cb) } } }]
+    })
+    const fiber = (room) => [{ __reactFiber$x: { memoizedProps: { room }, memoizedState: null, return: null } }]
+
+    it('the top frame connects at once', () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }))
+      assert.strictEqual(ctx.FakeWebSocket.instances.length, 1)
+    })
+
+    it('a sub-frame opens no socket until it captures a track, then announces it on open', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { subFrame: true })
+      await flush()
+      assert.strictEqual(ctx.FakeWebSocket.instances.length, 0, 'no socket for a frame without media')
+      emitTrack(ctx, makeTrack('sub-t'))
+      emitTrack(ctx, makeTrack('sub-t2'))
+      assert.strictEqual(ctx.FakeWebSocket.instances.length, 1, 'one socket once it captures')
+      const ws = await openLoopback(ctx)
+      assert.deepStrictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').map((f) => [f.trackId, f.trackIndex]),
+        [['sub-t', 0], ['sub-t2', 1]], 'the tracks added before the socket opened are announced')
+    })
+
+    it('a sub-frame runs no Teams poller: no participantLeft, no degrade', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }), { subFrame: true, callingDebug: undefined })
+      emitTrack(ctx, makeTrack('sub-t'))
+      const ws = await openLoopback(ctx)
+      ctx.clock.advance(3000)
+      assert.strictEqual(ctx.clock.intervals.size, 0, 'no poller started')
+      for (let i = 0; i < 40; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) }
+      assert.deepStrictEqual(jsonFrames(ws).map((f) => f.type), ['trackAdded'])
+    })
+
+    it('a sub-frame runs no SFU poller', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { subFrame: true, elements: fiber(lkRoom('sub-t')) })
+      emitTrack(ctx, makeTrack('sub-t'))
+      const ws = await openLoopback(ctx)
+      ctx.clock.advance(3000)
+      assert.strictEqual(ctx.clock.intervals.size, 0, 'no poller started')
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantMapping').length, 0)
+    })
+
+    it('every (re)connect announces the live tracks and their mappings, not the ended ones', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { elements: fiber(lkRoom('t-live')) })
+      await flush()
+      emitTrack(ctx, makeTrack('t-live')) // before the first open: not sent yet
+      const ended = makeTrack('t-ended')
+      emitTrack(ctx, ended)
+      const ws1 = await openLoopback(ctx)
+      assert.deepStrictEqual(jsonFrames(ws1).map((f) => [f.type, f.trackIndex]), [['trackAdded', 0], ['trackAdded', 1]])
+      ctx.clock.advance(3000)
+      ctx.clock.tickIntervals() // maps t-live
+      ended.fire('ended')
+      ws1.readyState = 3; ws1.onclose() // the Node side restarts
+      ctx.clock.advance(1000); await flush()
+      const ws2 = await openLoopback(ctx)
+      assert.notStrictEqual(ws2, ws1)
+      assert.deepStrictEqual(jsonFrames(ws2).map((f) => [f.type, f.trackIndex]), [['trackAdded', 0], ['participantMapping', 0]])
+      assert.strictEqual(jsonFrames(ws2)[1].participant.name, 'Alice')
     })
   })
 

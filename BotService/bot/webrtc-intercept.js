@@ -12,6 +12,10 @@
  * Binary frame: [uint16BE trackIndex][uint16BE reserved=0][...PCM]. Control
  * messages are sent as JSON text frames.
  *
+ * The script runs in every document of the page (addInitScript injects it into
+ * each frame). Only the top-level document runs the platform pollers and connects
+ * at once; a sub-frame connects only if it captures a track.
+ *
  * Only the block for the requested platform is emitted, so a Visio bot never
  * ships Teams introspection and vice-versa. The participant-mapping pollers
  * depend on each platform's (undocumented) client internals — Jitsi's
@@ -35,6 +39,8 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const LOCAL_WS_URL = ${JSON.stringify(localWsUrl)};
   const PLATFORM_TYPE = ${JSON.stringify(platformType)};
   const DEBUG = ${JSON.stringify(debug)};
+  // The top-level document, where the meeting client runs; false in a sub-frame.
+  const IS_TOP = (function () { try { return window === window.top; } catch (e) { return false; } })();
 
   // getUserMedia shim. Headless Chromium has no real capture device, so the
   // meeting SPA's getUserMedia throws NotFoundError and the join never finalizes
@@ -122,10 +128,10 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   // ── Loopback WebSocket to the Node LocalAudioServer ───────────────────────
   let ws = null, wsReady = false, reconnectAttempts = 0, reconnectTimer = null, disposed = false;
-  // Remember mappings already announced (trackIndex -> participant) so that after
-  // a Node-side LocalAudioServer crash/restart we can re-emit them on reconnect
-  // (the browser kept its mappings; the Node AudioMixer lost them).
-  let hasConnectedOnce = false;
+  // Mappings already made (trackIndex -> participant), re-announced on every
+  // connect along with the live tracks: control messages are not queued while the
+  // socket is down, and after a reconnect (Node side restarted) the Node state is
+  // keyed by the new connection.
   const sentMappings = new Map(); // trackIndex -> participant (sanitized)
   const headerBuf = new ArrayBuffer(4);
   const headerView = new DataView(headerBuf);
@@ -138,15 +144,13 @@ function getInterceptScript (localWsUrl, platformConfig) {
       ws.binaryType = 'arraybuffer';
       ws.onopen = function () {
         wsReady = true; reconnectAttempts = 0; log('ws connected');
-        // On a RE-open (Node side restarted), replay mappings ONLY — no audio —
-        // so already-mapped tracks are re-announced to the new mixer.
-        if (hasConnectedOnce && sentMappings.size > 0) {
-          log('ws reconnected, replaying', sentMappings.size, 'participant mappings');
-          sentMappings.forEach(function (participant, trackIndex) {
-            sendJson({ type: 'participantMapping', trackIndex: trackIndex, participant: participant });
-          });
-        }
-        hasConnectedOnce = true;
+        // Announce what this document captures (control only, no audio replay).
+        captures.forEach(function (capture) {
+          sendJson({ type: 'trackAdded', trackId: capture.trackId, trackIndex: capture.index });
+        });
+        sentMappings.forEach(function (participant, trackIndex) {
+          sendJson({ type: 'participantMapping', trackIndex: trackIndex, participant: participant });
+        });
       };
       ws.onclose = function () {
         wsReady = false;
@@ -253,7 +257,7 @@ function getInterceptScript (localWsUrl, platformConfig) {
   let trackIndexSeq = 0;
   const tracks = new Map(); // trackId -> { index, participantId }
   const processedTracks = new Set();
-  // trackIndex -> capture graph of a live track: { index, ended, sink, source, node, resample },
+  // trackIndex -> capture graph of a live track: { index, trackId, ended, sink, source, node, resample },
   // filled in as setupTrackCapture() progresses. Also what keeps the sink element
   // referenced (and playing) for as long as the track is captured.
   const captures = new Map();
@@ -406,9 +410,11 @@ function getInterceptScript (localWsUrl, platformConfig) {
   function handleNewTrack(track) {
     if (!track || track.kind !== 'audio' || track.readyState === 'ended' || processedTracks.has(track.id)) return;
     processedTracks.add(track.id);
-    const capture = { index: trackIndexSeq++, ended: false, sink: null, source: null, node: null, resample: null };
+    const capture = { index: trackIndexSeq++, trackId: track.id, ended: false, sink: null, source: null, node: null, resample: null };
     captures.set(capture.index, capture);
     tracks.set(track.id, { index: capture.index, participantId: null });
+    // A sub-frame connects on its first track (announced once the socket opens).
+    if (!ws) connectWs();
     sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });
     setupTrackCapture(track, capture).catch(function (e) { log('capture setup failed', e && e.message); });
     track.addEventListener('ended', function () {
@@ -449,7 +455,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
     log('mapped track', info.index, '->', clean.name);
   }
 
+  // The pollers read the meeting client's state, which lives in the top-level
+  // document: in a sub-frame they would only find "no call / no room" and report
+  // it (participantLeft, a native-diarization degrade) as if the meeting were gone.
+  if (IS_TOP) {
   ${platformBlock}
+  }
 
   window.addEventListener('beforeunload', function () {
     disposed = true;
@@ -457,8 +468,11 @@ function getInterceptScript (localWsUrl, platformConfig) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
   });
 
-  connectWs();
-  log('initialised for platform', PLATFORM_TYPE);
+  // The top-level document connects at once (its pollers report participants); a
+  // sub-frame only when it captures a track, so the many frames of a meeting SPA
+  // that never carry media do not each open a loopback socket.
+  if (IS_TOP) connectWs();
+  log('initialised for platform', PLATFORM_TYPE, IS_TOP ? 'in the top frame' : 'in a sub-frame');
 })();
 `
 }

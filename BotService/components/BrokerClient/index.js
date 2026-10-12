@@ -9,6 +9,11 @@ const { processTreeMemory } = require('./processTree')
 const { readCgroupMemory, memoryBudget } = require('./memory')
 
 const HEARTBEAT_MS = 15000
+
+// How long a stopped bot may take to leave and close its browser context (its
+// leave rules take up to ~8 s) before its context is closed by force and it no
+// longer counts as load.
+const DISPOSE_TIMEOUT_MS = 30000
 // ACK-gated audio buffer: the Transcriber WS sends 'ack' after init; until then
 // we hold frames (≈10 s at 20 ms) so the first words spoken during the handshake
 // are not lost. Beyond the cap we drop oldest to bound memory.
@@ -67,6 +72,7 @@ class BrokerClient extends Component {
     // or a newer startbot, cancels it, even while it waits for the previous bot
     // to leave (there is no record to stop yet then).
     this.pendingStarts = new Map()
+    this.disposeTimeoutMs = DISPOSE_TIMEOUT_MS
     this.heartbeatTimer = null
     this.lastPublishedCount = -1
 
@@ -403,15 +409,39 @@ class BrokerClient extends Component {
   }
 
   // Run a stopped bot's teardown, counted in `disposing` until it is over (once
-  // per record: a second call waits for the first).
+  // per record: a second call waits for the first), or until disposeTimeoutMs:
+  // a teardown that never completes (a Playwright close stuck on a wedged
+  // browser) would otherwise count as load forever, and keep every later start
+  // of the channel waiting. Its context is then closed by force (see
+  // _forceRelease) and the teardown left to finish, or not, on its own.
   async _dispose (key, record, teardown) {
     if (this.disposing.has(record)) return this.disposing.get(record)
     record.key = key
-    const done = (async () => {
-      try { await teardown() } finally { this.disposing.delete(record) }
-    })()
+    let timer
+    const timedOut = new Promise((resolve) => {
+      timer = setTimeout(() => { this._forceRelease(key, record); resolve() }, this.disposeTimeoutMs)
+      if (typeof timer.unref === 'function') timer.unref()
+    })
+    const done = Promise.race([teardown(), timedOut]).finally(() => {
+      clearTimeout(timer)
+      this.disposing.delete(record)
+    })
     this.disposing.set(record, done)
     return done
+  }
+
+  // Release what a bot stuck in its teardown still holds: its loopback path, and
+  // its browser context (the pool frees the slot at once, whatever the close
+  // then does).
+  _forceRelease (key, record) {
+    const bot = record.bot
+    logger.warn(`BotService: bot ${key} (botId ${record.botId}) not disposed after ${this.disposeTimeoutMs / 1000}s, closing its browser context by force`)
+    if (!bot) return
+    try { if (bot.wsPath) this.audioServer.unregisterBot(bot.wsPath) } catch (e) { /* best effort */ }
+    if (bot.contextId) {
+      Promise.resolve(this.browserPool.destroyContext(bot.contextId))
+        .catch((e) => logger.debug(`BotService: forced close of ${bot.contextId}: ${e.message}`))
+    }
   }
 
   // Settled once every bot of the channel being disposed has released its context.

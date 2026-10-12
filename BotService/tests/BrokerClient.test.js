@@ -1055,6 +1055,48 @@ describe('BotService BrokerClient — a bot replaced while it leaves', () => {
     leaving()
     await last
   })
+
+  // A teardown that never completed (a Playwright close stuck on a wedged
+  // browser) kept the bot counted as load forever, and every later start of the
+  // channel waiting for it.
+  it('a teardown that never completes is cut short: its context is closed by force, a replacement joins', async () => {
+    const LocalAudioServer = require('../bot/LocalAudioServer')
+    const BrowserPool = require('../bot/BrowserPool')
+    const audioServer = new LocalAudioServer()
+    audioServer.getPort = () => 1
+    ctx.instance.audioServer = audioServer
+    const never = () => new Promise(() => {})
+    const page = () => ({
+      on () {},
+      async addInitScript () {},
+      async goto () {},
+      close: never,
+      async waitForTimeout () {},
+      locator: (selector) => ({ fill: async () => {}, click: () => selector === "[data-attr='controls-leave']" ? never() : Promise.resolve() })
+    })
+    const pool = new BrowserPool({ maxContexts: 1 })
+    pool._ensureBrowser = async () => ({ newContext: async () => ({ close: never, newPage: async () => page() }) })
+    ctx.instance.browserPool = pool
+    ctx.instance._connectTranscriber = () => {}
+    ctx.instance.disposeTimeoutMs = 50
+    const args = (botId) => ({ session: { id: 's' }, channel: { id: 'c' }, address: 'https://visio.example/room', botType: 'visio', websocketUrl: 'ws://t', botId })
+
+    await ctx.instance.startBot(args(1))
+    const oldBot = ctx.instance.bots.get('s_c').bot
+    const stopping = ctx.instance.stopBot('s', 'c') // stuck clicking leave
+    await tick()
+    const starting = ctx.instance.startBot(args(2))
+    await stopping
+    await starting
+    const newBot = ctx.instance.bots.get('s_c').bot
+    assert.equal(ctx.instance.bots.get('s_c').botId, 2, 'the replacement joined')
+    assert.deepEqual([...pool.contexts.keys()], [newBot.contextId], 'the stuck context was released')
+    assert.equal(audioServer.handlers.has(oldBot.wsPath), false)
+    ctx.instance._publishStatus(true)
+    assert.equal(ctx.statuses[ctx.statuses.length - 1].activeBots, 1)
+    assert.ok(ctx.logs.some((l) => /by force/.test(l.msg)), 'reported')
+    await ctx.instance.stopBot('s', 'c')
+  })
 })
 
 describe('BotService BrokerClient — startBot lifecycle', () => {

@@ -214,15 +214,21 @@ function getInterceptScript (localWsUrl, platformConfig) {
   let trackIndexSeq = 0;
   const tracks = new Map(); // trackId -> { index, participantId }
   const processedTracks = new Set();
-  let sharedCtx = null, workletReady = false, audioSinks = [];
+  // trackIndex -> capture graph of a live track: { index, ended, sink, source, node },
+  // filled in as setupTrackCapture() progresses. Also what keeps the sink element
+  // referenced (and playing) for as long as the track is captured.
+  const captures = new Map();
+  let sharedCtx = null, workletReady = false;
 
-  async function setupTrackCapture(track, tIdx) {
+  async function setupTrackCapture(track, capture) {
     if (!sharedCtx) sharedCtx = new AudioContext();
     const ctx = sharedCtx;
     // Headless Chromium starts the AudioContext suspended (no audio output to
     // drive it); without resuming, the AudioWorklet never pulls samples and no
     // PCM is ever captured.
     try { if (ctx.state !== 'running') await ctx.resume(); } catch (e) {}
+    // The track may have ended while we waited: build nothing for it.
+    if (capture.ended) return;
     const sourceRate = ctx.sampleRate;
     const ms = new MediaStream([track]);
     // Chrome quirk: a remote WebRTC audio track does NOT feed a
@@ -232,9 +238,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
       const sink = document.createElement('audio');
       sink.srcObject = ms; sink.muted = true; sink.autoplay = true;
       sink.play().catch(function () {});
-      (audioSinks = audioSinks || []).push(sink);
+      capture.sink = sink;
     } catch (e) {}
-    const source = ctx.createMediaStreamSource(ms);
+    capture.source = ctx.createMediaStreamSource(ms);
 
     try {
       if (!workletReady) {
@@ -244,35 +250,60 @@ function getInterceptScript (localWsUrl, platformConfig) {
         URL.revokeObjectURL(url);
         workletReady = true;
       }
+      // Same check after the module load: tear down the source and sink built above.
+      if (capture.ended) { teardownCapture(capture); return; }
       const node = new AudioWorkletNode(ctx, 'pcm-capture');
-      source.connect(node);
+      capture.node = node;
+      capture.source.connect(node);
       node.connect(ctx.destination); // keeps the graph pulling
-      node.port.onmessage = function (e) { sendBinary(tIdx, float32ToInt16(resample(e.data, sourceRate))); };
-      log('AudioWorklet capture for track', tIdx);
+      node.port.onmessage = function (e) { sendBinary(capture.index, float32ToInt16(resample(e.data, sourceRate))); };
+      log('AudioWorklet capture for track', capture.index);
     } catch (e) {
+      if (capture.ended) { teardownCapture(capture); return; }
       // The ScriptProcessor path is deprecated and degraded — surface the
       // fallback at warn (independent of DEBUG) so it is visible in the Node logs.
-      warn('AudioWorklet unavailable, falling back to ScriptProcessor (track ' + tIdx + '): ' + (e && e.message ? e.message : 'unknown'));
+      warn('AudioWorklet unavailable, falling back to ScriptProcessor (track ' + capture.index + '): ' + (e && e.message ? e.message : 'unknown'));
       const proc = ctx.createScriptProcessor(4096, 1, 1);
-      source.connect(proc);
+      capture.node = proc;
+      capture.source.connect(proc);
       proc.connect(ctx.destination);
       proc.onaudioprocess = function (ev) {
-        sendBinary(tIdx, float32ToInt16(resample(ev.inputBuffer.getChannelData(0), sourceRate)));
+        sendBinary(capture.index, float32ToInt16(resample(ev.inputBuffer.getChannelData(0), sourceRate)));
       };
     }
   }
 
+  // Dismantle a track's capture graph. An ended track keeps feeding its source
+  // node (Chromium renders it as silence, at the full rate), so its PCM only stops
+  // once the processing node, the source and the sink element are all released.
+  function teardownCapture(capture) {
+    capture.ended = true;
+    captures.delete(capture.index);
+    const node = capture.node, source = capture.source, sink = capture.sink;
+    capture.node = capture.source = capture.sink = null;
+    if (node) {
+      if (node.port) node.port.onmessage = null; else node.onaudioprocess = null;
+      try { node.disconnect(); } catch (e) {}
+    }
+    if (source) { try { source.disconnect(); } catch (e) {} }
+    if (sink) { try { sink.pause(); sink.srcObject = null; } catch (e) {} }
+  }
+
   function handleNewTrack(track) {
-    if (!track || track.kind !== 'audio' || processedTracks.has(track.id)) return;
+    if (!track || track.kind !== 'audio' || track.readyState === 'ended' || processedTracks.has(track.id)) return;
     processedTracks.add(track.id);
-    const tIdx = trackIndexSeq++;
-    tracks.set(track.id, { index: tIdx, participantId: null });
-    sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: tIdx });
-    setupTrackCapture(track, tIdx).catch(function (e) { log('capture setup failed', e && e.message); });
+    const capture = { index: trackIndexSeq++, ended: false, sink: null, source: null, node: null };
+    captures.set(capture.index, capture);
+    tracks.set(track.id, { index: capture.index, participantId: null });
+    sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });
+    setupTrackCapture(track, capture).catch(function (e) { log('capture setup failed', e && e.message); });
     track.addEventListener('ended', function () {
-      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: tIdx });
+      // Tear down first: nothing of this track is sent after its trackRemoved.
+      teardownCapture(capture);
+      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: capture.index });
       tracks.delete(track.id);
       processedTracks.delete(track.id);
+      sentMappings.delete(capture.index); // never replay the mapping of a dead track
     });
   }
 

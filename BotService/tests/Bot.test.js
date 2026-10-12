@@ -784,6 +784,57 @@ describe('Bot._onTrackRemoved', () => {
   })
 })
 
+describe('Bot removed tracks', () => {
+  const { logger } = require('live-srt-lib')
+  let warns, realWarn
+  beforeEach(() => { warns = []; realWarn = logger.warn; logger.warn = (m) => { warns.push(String(m)) } })
+  afterEach(() => { logger.warn = realWarn })
+
+  it('ignores PCM of a removed SFU track, counts it and warns once', () => {
+    const bot = makeBot('visio'); const mixer = makeFakeMixer(); bot.audioMixer = mixer
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' })
+    bot.handleAudioData(0, Buffer.alloc(640))
+    bot._onTrackRemoved(0)
+    bot.handleAudioData(0, Buffer.alloc(640))
+    bot.handleAudioData(0, Buffer.alloc(640))
+    assert.equal(mixer.added.length, 1, 'only the live frame was mixed')
+    assert.equal(bot.earlyAudio.size, 0, 'nor buffered as early audio')
+    assert.equal(bot.removedTracks.get('c0:0'), 2)
+    assert.equal(warns.filter(w => w.includes('removed track c0:0')).length, 1)
+  })
+
+  it('ignores PCM of a removed Teams track (the lobby track Teams replaces on admission)', () => {
+    const bot = makeBot('teams')
+    bot.hasSeenParticipant = true
+    const got = []
+    bot.on('audio', (buf) => got.push(buf))
+    bot.handleAudioData(0, Buffer.alloc(640))
+    bot.handleJsonMessage({ type: 'trackRemoved', trackIndex: 0 })
+    bot.handleAudioData(0, Buffer.alloc(640)) // the ended track keeps rendering zeros
+    bot.handleAudioData(1, Buffer.alloc(640)) // its replacement
+    assert.equal(got.length, 2)
+  })
+
+  it('does not count ignored PCM as live audio for the silence watchdog', () => {
+    const bot = makeBot('visio'); bot.audioMixer = makeFakeMixer()
+    bot._onTrackRemoved(0)
+    bot.lastAudioAt = 0
+    bot.handleAudioData(0, Buffer.alloc(640))
+    assert.equal(bot.lastAudioAt, 0)
+  })
+
+  it('only the removed track of that connection is ignored, and the state goes with the connection', () => {
+    const bot = makeBot('visio'); const mixer = makeFakeMixer(); bot.audioMixer = mixer
+    bot._onParticipantMapping(0, { id: 'u1', name: 'A' }, 1)
+    bot._onParticipantMapping(0, { id: 'u2', name: 'B' }, 2)
+    bot._onTrackRemoved(0, 1)
+    bot.handleAudioData(0, Buffer.alloc(640), 2)
+    assert.deepEqual(mixer.added.map(a => a.id), ['u2'])
+    bot.notifyAudioPipeClosed(1)
+    assert.equal(bot.removedTracks.has('c1:0'), false)
+  })
+})
+
 describe('Bot loopback connections', () => {
   let bot, mixer
   beforeEach(() => { bot = makeBot('visio'); mixer = makeFakeMixer(); bot.audioMixer = mixer })

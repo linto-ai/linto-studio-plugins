@@ -77,10 +77,11 @@ function makeFakeWS (clock) {
 // A fake AudioContext/MediaStream graph. Records nodes/sinks; the test triggers
 // worklet/scriptprocessor callbacks to feed PCM through the pipeline.
 function makeAudioEnv (opts = {}) {
-  const env = { workletNodes: [], scriptProcessors: [], sinks: [], sampleRate: opts.sampleRate || 48000 }
+  const env = { workletNodes: [], scriptProcessors: [], sources: [], sampleRate: opts.sampleRate || 48000 }
   class FakeAudioWorkletNode {
-    constructor () { this.port = { onmessage: null }; this.connected = []; env.workletNodes.push(this) }
+    constructor () { this.port = { onmessage: null }; this.connected = []; this.disconnected = false; env.workletNodes.push(this) }
     connect (n) { this.connected.push(n) }
+    disconnect () { this.disconnected = true }
   }
   class FakeAudioContext {
     constructor () {
@@ -89,16 +90,21 @@ function makeAudioEnv (opts = {}) {
       this.sampleRate = env.sampleRate
       this.destination = { id: 'dest' }
       this.audioWorklet = {
-        addModule: async () => { if (opts.workletThrows) throw new Error('no worklet') }
+        // opts.addModule lets a test hold the module load pending.
+        addModule: opts.addModule || (async () => { if (opts.workletThrows) throw new Error('no worklet') })
       }
     }
     async resume () { this.state = 'running' }
-    createMediaStreamSource () { return { connect () {} } }
+    createMediaStreamSource () {
+      const source = { disconnected: false, connect () {}, disconnect () { this.disconnected = true } }
+      env.sources.push(source)
+      return source
+    }
     createMediaStreamDestination () { return { stream: { getAudioTracks: () => [{ id: 'gum-a' }] } } }
     createOscillator () { return { connect () {}, start () {} } }
     createGain () { return { gain: {}, connect () {} } }
     createScriptProcessor () {
-      const proc = { onaudioprocess: null, connect () {} }
+      const proc = { onaudioprocess: null, disconnected: false, connect () {}, disconnect () { this.disconnected = true } }
       env.scriptProcessors.push(proc)
       return proc
     }
@@ -145,6 +151,7 @@ function runScript (script, opts = {}) {
   }
 
   const elements = opts.elements || []
+  const sinks = [] // <audio> elements the capture attached tracks to
   const winListeners = {}
   const fakeWindow = {
     AudioContext: audio.AudioContext,
@@ -157,13 +164,16 @@ function runScript (script, opts = {}) {
     addEventListener (ev, cb) { (winListeners[ev] = winListeners[ev] || []).push(cb) }
   }
   const fakeDocument = {
-    createElement () {
-      return {
-        srcObject: null, muted: false, autoplay: false,
+    createElement (tag) {
+      const el = {
+        srcObject: null, muted: false, autoplay: false, paused: false,
         getContext () { return { fillRect () {} } },
         captureStream () { return { getVideoTracks: () => [{ id: 'v' }] } },
-        play () { return Promise.resolve() }
+        play () { return Promise.resolve() },
+        pause () { this.paused = true }
       }
+      if (tag === 'audio') sinks.push(el)
+      return el
     },
     querySelectorAll () { return elements }
   }
@@ -196,7 +206,7 @@ function runScript (script, opts = {}) {
   )
 
   const fireWindow = (ev) => (winListeners[ev] || []).forEach((cb) => cb())
-  return { clock, FakeWebSocket, audio, warnings, logs, pcInstances, fakeWindow, fakeNavigator, fakeDocument, OriginalRTCPeerConnection, fireWindow }
+  return { clock, FakeWebSocket, audio, sinks, warnings, logs, pcInstances, fakeWindow, fakeNavigator, fakeDocument, OriginalRTCPeerConnection, fireWindow }
 }
 
 // Parse the JSON text frames a fake WS received (binary frames are ArrayBuffers).
@@ -494,6 +504,113 @@ describe('webrtc-intercept getInterceptScript()', () => {
       emitTrack(ctx, track)
       await flush()
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 2)
+    })
+  })
+
+  // An ended track keeps feeding its source node in Chromium (silence, at the full
+  // rate): a live Teams call streamed 170 s of zeros for a replaced track. The
+  // capture graph must be dismantled so the track's PCM stops.
+  describe('ended track teardown (behavioral)', () => {
+    async function capturedTrack (audioOpts) {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { audioOpts })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-end')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      return { ctx, ws, track }
+    }
+
+    it('AudioWorklet path: drops the message handler, disconnects node and source, releases the sink', async () => {
+      const { ctx, ws, track } = await capturedTrack({ sampleRate: 16000 })
+      const node = ctx.audio.workletNodes[0]
+      const onmessage = node.port.onmessage
+      onmessage({ data: new Float32Array(8) })
+      assert.strictEqual(binaryFrames(ws).length, 1, 'captured while live')
+      track.fire('ended')
+      assert.strictEqual(node.port.onmessage, null, 'no handler left for in-flight messages')
+      assert.strictEqual(node.disconnected, true)
+      assert.strictEqual(ctx.audio.sources[0].disconnected, true)
+      assert.strictEqual(ctx.sinks[0].paused, true)
+      assert.strictEqual(ctx.sinks[0].srcObject, null)
+      const removedAt = ws.sent.findIndex((f) => typeof f === 'string' && JSON.parse(f).type === 'trackRemoved')
+      assert.strictEqual(removedAt, ws.sent.length - 1, 'trackRemoved is the last frame of the track')
+    })
+
+    it('ScriptProcessor path: drops onaudioprocess and disconnects', async () => {
+      const { ctx, track } = await capturedTrack({ sampleRate: 16000, workletThrows: true })
+      const proc = ctx.audio.scriptProcessors[0]
+      assert.strictEqual(typeof proc.onaudioprocess, 'function')
+      track.fire('ended')
+      assert.strictEqual(proc.onaudioprocess, null)
+      assert.strictEqual(proc.disconnected, true)
+      assert.strictEqual(ctx.audio.sources[0].disconnected, true)
+      assert.strictEqual(ctx.sinks[0].srcObject, null)
+    })
+
+    it('builds nothing for a track that ends while the AudioContext resumes', async () => {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s) // context starts suspended: setup awaits resume()
+      await openLoopback(ctx)
+      const track = makeTrack('t-early-end')
+      emitTrack(ctx, track)
+      track.fire('ended') // before resume() settles
+      await flush(); await flush()
+      assert.strictEqual(ctx.audio.sources.length, 0, 'no source node')
+      assert.strictEqual(ctx.sinks.length, 0, 'no sink element')
+      assert.strictEqual(ctx.audio.workletNodes.length, 0, 'no capture node')
+    })
+
+    it('tears down what was built when the track ends while the worklet module loads', async () => {
+      let loaded
+      const addModule = () => new Promise((resolve) => { loaded = resolve })
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { audioOpts: { addModule } })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-mid-end')
+      emitTrack(ctx, track)
+      await flush(); await flush() // resumed, source + sink built, module load pending
+      assert.strictEqual(ctx.audio.sources.length, 1)
+      track.fire('ended')
+      loaded()
+      await flush(); await flush()
+      assert.strictEqual(ctx.audio.workletNodes.length, 0, 'no capture node for an ended track')
+      assert.strictEqual(ctx.audio.scriptProcessors.length, 0, 'no fallback either')
+      assert.strictEqual(ctx.audio.sources[0].disconnected, true)
+      assert.strictEqual(ctx.sinks[0].srcObject, null)
+      assert.strictEqual(binaryFrames(ws).length, 0)
+    })
+
+    it('ignores a track that is already ended when it is announced', async () => {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s)
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-dead')
+      track.readyState = 'ended'
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 0)
+      assert.strictEqual(ctx.audio.sources.length, 0)
+    })
+
+    it('does not replay the participant mapping of an ended track after a reconnect', async () => {
+      const room = { state: 'connected', localParticipant: {}, remoteParticipants: [{ identity: 'id1', name: 'Alice', trackPublications: { forEach (cb) { [{ kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: { id: 't-map' } } }].forEach(cb) } } }] }
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { elements: [{ __reactFiber$x: { memoizedProps: { room }, memoizedState: null, return: null } }] })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-map')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      ctx.clock.advance(3000)
+      ctx.clock.tickIntervals()
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantMapping').length, 1)
+      track.fire('ended')
+      ws.readyState = 3; ws.onclose() // loopback drops
+      ctx.clock.advance(1000); await flush()
+      const ws2 = ctx.FakeWebSocket.instances[ctx.FakeWebSocket.instances.length - 1]
+      assert.notStrictEqual(ws2, ws)
+      ws2._open(); await flush()
+      assert.strictEqual(jsonFrames(ws2).filter((f) => f.type === 'participantMapping').length, 0)
     })
   })
 

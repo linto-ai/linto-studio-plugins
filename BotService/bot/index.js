@@ -76,6 +76,7 @@ class Bot extends EventEmitter {
     this.joinTimeoutMs = envTimeoutMs('JOIN_TIMEOUT_SECONDS', 120)
 
     this.trackParticipants = new Map() // trackKey -> { id, name }
+    this.removedTracks = new Map() // trackKey -> PCM frames received after its removal
     this.participants = new Map() // participantId -> { id, name }
     this.earlyAudio = new Map() // trackKey -> [Buffer] buffered until mapped (SFU)
     this.earlyAudioFirstSeen = new Map() // trackKey -> ts of first buffered frame (reaper)
@@ -211,12 +212,19 @@ class Bot extends EventEmitter {
   }
 
   handleAudioData (trackIndex, pcmBuffer, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    // The page tears a track's capture down when the track ends, so PCM still
+    // tagged with a removed track comes from a leaked capture: an ended track
+    // keeps rendering silence, which must never reach the mix.
+    if (this.removedTracks.has(key)) {
+      this._noteRemovedTrackAudio(key)
+      return
+    }
     // note every PCM frame for the silence watchdog.
     this.lastAudioAt = Date.now()
     if (this.isSfu) {
       this._noteFirstAudio()
       if (!this.audioMixer) return
-      const key = trackKey(connId, trackIndex)
       const mapping = this.trackParticipants.get(key)
       if (mapping) {
         this.audioMixer.addAudio(mapping.id, pcmBuffer, Date.now(), mapping.name)
@@ -232,6 +240,13 @@ class Bot extends EventEmitter {
       this._noteFirstAudio()
       this.emit('audio', pcmBuffer)
     }
+  }
+
+  // Count PCM of a removed track; warn on the first frame only, per track.
+  _noteRemovedTrackAudio (key) {
+    const ignored = this.removedTracks.get(key) + 1
+    this.removedTracks.set(key, ignored)
+    if (ignored === 1) logger.warn(`Bot[${this.contextId}]: ignoring PCM of removed track ${key} (its in-page capture is still running)`)
   }
 
   // Latch + log the first PCM frame we actually forward. Gated by the callers so
@@ -343,6 +358,7 @@ class Bot extends EventEmitter {
     const key = trackKey(connId, trackIndex)
     const removed = this.trackParticipants.get(key)
     this.trackParticipants.delete(key)
+    this.removedTracks.set(key, 0)
     // always clean the early-audio buffer for a removed track, mapped or not.
     this._dropEarlyAudio(key)
     if (!this.isSfu || !removed) return
@@ -458,6 +474,9 @@ class Bot extends EventEmitter {
     }
     for (const key of [...this.earlyAudio.keys()]) {
       if (key.startsWith(prefix)) this._dropEarlyAudio(key)
+    }
+    for (const key of [...this.removedTracks.keys()]) {
+      if (key.startsWith(prefix)) this.removedTracks.delete(key)
     }
   }
 

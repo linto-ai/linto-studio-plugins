@@ -759,7 +759,11 @@ describe('StreamingServer per-stream teardown hardening', () => {
       assert.strictEqual(successor.disposed, false);
     });
 
-    it('a LEGACY stop taken over by a legacy successor still deactivates exactly as today', async () => {
+    // A legacy client reconnecting at once (e.g. a bot reopening its WS to
+    // switch diarization mode) is the same takeover on a legacy channel: its
+    // activation is already published, so the outgoing stop's deactivation
+    // (same transcriberId) would mark the channel inactive under it.
+    it('a LEGACY stop taken over by a legacy successor emits NO session-stop', async () => {
       const log = [];
       const inst = makeServer(log);
       const ck = 'sess_chan';
@@ -773,10 +777,10 @@ describe('StreamingServer per-stream teardown hardening', () => {
       await stopP;
 
       assert.deepStrictEqual(log,
-        ['flush:legacy-outgoing', 'marker', 'dispose:legacy-outgoing', 'emit:session-stop'],
-        'byte-for-byte the legacy ordering, deactivate included');
-      assert.strictEqual(inst.emitted.filter(e => e[0] === 'session-stop').length, 1,
-        'the legacy path keeps deactivating exactly as it does today');
+        ['flush:legacy-outgoing', 'marker', 'dispose:legacy-outgoing'],
+        'the legacy ordering, without the deactivate');
+      assert.strictEqual(inst.emitted.filter(e => e[0] === 'session-stop').length, 0,
+        'the successor deactivates the channel when it stops');
       assert.strictEqual(inst.lastSegmentIds.get(ck), 58, "the outgoing ASR's own counter is preserved");
       assert.strictEqual(inst.ASRs.get(ck), successor, "the successor's ASR is left alone");
       assert.strictEqual(successor.disposed, false);

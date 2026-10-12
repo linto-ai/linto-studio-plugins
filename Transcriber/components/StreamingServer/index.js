@@ -493,7 +493,8 @@ class StreamingServer extends Component {
   //   5. detach listeners and dispose (audio save stays fire-and-forget)
   //   6. emit 'session-stop' -> controllers -> deactivate published last, but
   //      ONLY when this stop still owns the channel (K1: a reconnect that
-  //      superseded it must not have its successor deactivated)
+  //      superseded it during the flush must not have its successor
+  //      deactivated, whether that successor is per-stream or legacy)
   // Returns false when no ASR was registered for the channel.
   async _stopAsr(session, channelId) {
     const ck = `${session.id}_${channelId}`;
@@ -706,17 +707,21 @@ class StreamingServer extends Component {
     // registers no channel context at all (session-start's legacy branch), so
     // the identity check passed and the stop deactivated a LIVE stream. That
     // successor is not exotic: it is what the mixedRecording gate produces when
-    // it DEMOTES a keepAudio bot, what the native->web re-route sends, and what
-    // any plain WS client is. The one piece of evidence it leaves behind is its
-    // ASR under the bare `${ck}` key — which a PER-STREAM stop never tears down
-    // (it only touches `${ck}#*`), so its presence here always means somebody
-    // else owns the channel. Scoped to the per-stream branch: a LEGACY stop
-    // deletes `${ck}` in its own synchronous prefix, and must keep deactivating
-    // exactly as it does today.
-    const takenOverByLegacy = isPerStreamStop && this.ASRs.has(ck);
+    // it DEMOTES a keepAudio bot, what the native->web re-route sends, what
+    // any plain WS client is, and what a legacy client reconnecting at once
+    // starts (e.g. a bot reopening its WS to switch diarization mode). The one
+    // piece of evidence it leaves behind is its ASR under the bare `${ck}` key —
+    // which this stop no longer holds: a PER-STREAM stop never tears it down (it
+    // only touches `${ck}#*`), and a LEGACY stop deleted its own in its
+    // synchronous prefix, before the flush. Its presence here always means
+    // somebody else owns the channel: its activation is already published, and
+    // this deactivation, carrying the same transcriberId, would mark the channel
+    // inactive under it (the Scheduler only ignores another transcriber's stale
+    // deactivation). The newer stream deactivates the channel when it stops.
+    const takenOverByLegacy = this.ASRs.has(ck);
     const owns = this._cleanupPerStream(ck, ctx);
     if (takenOverByLegacy) {
-      logger.info(`Channel ${ck} was taken over by a non-per-stream connection while stopping; not deactivating it`);
+      logger.info(`Session ${session.id}, channel ${channelId}: a newer stream took over during the stop flush, channel kept active`);
     } else if (owns) {
       this.emit('session-stop', session, channelId);
     }

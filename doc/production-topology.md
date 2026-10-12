@@ -52,6 +52,8 @@ Within a *single* instance the same collision is resolved locally instead: the W
 
 The window is short (sub-second) and produces at most a few duplicated MQTT partials on the loser before it sees its own deactivation. It is **not currently exercised by the test suite** — see the failover scenario in `tests/integration/scenarios/`.
 
+The same thing can happen on a **single instance**: a client may reconnect while its previous stream is still being stopped (the ASR flush takes up to `ASR_STOP_FLUSH_TIMEOUT_MS` + `ASR_STOP_SETTLE_MS`). For example, a bot reopens its WS to switch diarization mode. The newer stream's activation then goes out before the old stream's deactivation, and both carry the same `transcriberId`, so the Scheduler guard cannot filter them. The Transcriber therefore does not publish a stopped stream's deactivation when a newer stream already holds the channel (`Transcriber/components/StreamingServer/index.js#_stopAsr`). The old stream's finals and end-of-stream marker are still published. Session-end drains rely on this: a channel that is not `active` has stored all its captions.
+
 ## Implications for design and ops
 
 - **State placement.** Any state that must survive a Transcriber switch belongs in MQTT (retained topics) or the database — never solely in a Transcriber's process memory. New features that introduce in-memory state on the Transcriber should add a corresponding MQTT/DB anchor.

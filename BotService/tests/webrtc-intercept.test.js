@@ -75,30 +75,53 @@ function makeFakeWS (clock) {
 }
 
 // A fake AudioContext/MediaStream graph. Records nodes/sinks; the test triggers
-// worklet/scriptprocessor callbacks to feed PCM through the pipeline.
+// worklet/scriptprocessor callbacks to feed PCM through the pipeline. By default a
+// context runs at opts.sampleRate whatever rate is asked for (the JS resampling
+// path); opts.honorsRate grants a requested rate like Chromium does, and
+// opts.rateRefused makes asking for one throw.
 function makeAudioEnv (opts = {}) {
-  const env = { workletNodes: [], scriptProcessors: [], sinks: [], sampleRate: opts.sampleRate || 48000 }
+  // workletNodes: the per-track capture nodes; transports: the 'pcm-transport' nodes.
+  const env = { workletNodes: [], transports: [], scriptProcessors: [], sources: [], contextOptions: [], addModuleCalls: 0, sampleRate: opts.sampleRate || 48000 }
   class FakeAudioWorkletNode {
-    constructor () { this.port = { onmessage: null }; this.connected = []; env.workletNodes.push(this) }
+    constructor (ctx, name, options) {
+      this.name = name
+      this.options = options
+      this.port = { onmessage: null, posted: [], postMessage (m) { this.posted.push(m) } }
+      this.connected = []
+      this.disconnected = false
+      if (name === 'pcm-transport') env.transports.push(this); else env.workletNodes.push(this)
+    }
     connect (n) { this.connected.push(n) }
+    disconnect () { this.disconnected = true }
   }
   class FakeAudioContext {
-    constructor () {
+    constructor (ctxOpts) {
       if (opts.ctorThrows) throw new Error('AudioContext boom')
+      const requested = ctxOpts && ctxOpts.sampleRate
+      if (requested && opts.rateRefused) throw new Error('sample rate not supported')
+      env.contextOptions.push(ctxOpts)
       this.state = opts.state || 'suspended'
-      this.sampleRate = env.sampleRate
+      this.sampleRate = requested && opts.honorsRate ? requested : env.sampleRate
       this.destination = { id: 'dest' }
       this.audioWorklet = {
-        addModule: async () => { if (opts.workletThrows) throw new Error('no worklet') }
+        // opts.addModule lets a test hold the module load pending.
+        addModule: (url) => {
+          env.addModuleCalls++
+          return opts.addModule ? opts.addModule(url) : (async () => { if (opts.workletThrows) throw new Error('no worklet') })()
+        }
       }
     }
     async resume () { this.state = 'running' }
-    createMediaStreamSource () { return { connect () {} } }
+    createMediaStreamSource () {
+      const source = { disconnected: false, connect () {}, disconnect () { this.disconnected = true } }
+      env.sources.push(source)
+      return source
+    }
     createMediaStreamDestination () { return { stream: { getAudioTracks: () => [{ id: 'gum-a' }] } } }
     createOscillator () { return { connect () {}, start () {} } }
     createGain () { return { gain: {}, connect () {} } }
     createScriptProcessor () {
-      const proc = { onaudioprocess: null, connect () {} }
+      const proc = { onaudioprocess: null, disconnected: false, connect () {}, disconnect () { this.disconnected = true } }
       env.scriptProcessors.push(proc)
       return proc
     }
@@ -145,6 +168,7 @@ function runScript (script, opts = {}) {
   }
 
   const elements = opts.elements || []
+  const sinks = [] // <audio> elements the capture attached tracks to
   const winListeners = {}
   const fakeWindow = {
     AudioContext: audio.AudioContext,
@@ -156,14 +180,19 @@ function runScript (script, opts = {}) {
     callingDebug: opts.callingDebug,
     addEventListener (ev, cb) { (winListeners[ev] = winListeners[ev] || []).push(cb) }
   }
+  // opts.subFrame runs the script as in an iframe (window.top is another window).
+  fakeWindow.top = opts.subFrame ? {} : fakeWindow
   const fakeDocument = {
-    createElement () {
-      return {
-        srcObject: null, muted: false, autoplay: false,
+    createElement (tag) {
+      const el = {
+        srcObject: null, muted: false, autoplay: false, paused: false,
         getContext () { return { fillRect () {} } },
         captureStream () { return { getVideoTracks: () => [{ id: 'v' }] } },
-        play () { return Promise.resolve() }
+        play () { return Promise.resolve() },
+        pause () { this.paused = true }
       }
+      if (tag === 'audio') sinks.push(el)
+      return el
     },
     querySelectorAll () { return elements }
   }
@@ -187,7 +216,8 @@ function runScript (script, opts = {}) {
     script
   )
   const FakeURL = { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} }
-  function FakeBlob () {}
+  const blobs = [] // source of every Blob built (the AudioWorklet module)
+  function FakeBlob (parts) { blobs.push(parts.join('')) }
   function FakeMediaStream (tracks) { this.tracks = tracks; this.getAudioTracks = () => tracks }
   fn(
     fakeWindow, fakeDocument, fakeNavigator, FakeWebSocket, audio.AudioWorkletNode, audio.AudioContext,
@@ -196,7 +226,7 @@ function runScript (script, opts = {}) {
   )
 
   const fireWindow = (ev) => (winListeners[ev] || []).forEach((cb) => cb())
-  return { clock, FakeWebSocket, audio, warnings, logs, pcInstances, fakeWindow, fakeNavigator, fakeDocument, OriginalRTCPeerConnection, fireWindow }
+  return { clock, FakeWebSocket, audio, sinks, blobs, warnings, logs, pcInstances, fakeWindow, fakeNavigator, fakeDocument, OriginalRTCPeerConnection, fireWindow }
 }
 
 // Parse the JSON text frames a fake WS received (binary frames are ArrayBuffers).
@@ -205,6 +235,11 @@ function jsonFrames (ws) {
 }
 function binaryFrames (ws) {
   return ws.sent.filter((f) => typeof f !== 'string')
+}
+// Deliver render quanta the way the transport processor posts them:
+// [trackIndex, samples, trackIndex, samples, ...].
+function feed (ctx, ...quanta) {
+  ctx.audio.transports[0].port.onmessage({ data: quanta })
 }
 // Open the loopback WS that connectWs() created (first instance) and flush.
 async function openLoopback (ctx) {
@@ -260,16 +295,6 @@ describe('webrtc-intercept getInterceptScript()', () => {
     assert.ok(getInterceptScript(WS, { platformType: 'sfu' }).includes('const DEBUG = false'))
   })
 
-  // Loopback WS resync after LocalAudioServer restart.
-  it('remembers sent mappings and replays them only on a reconnect (not first connect)', () => {
-    const s = getInterceptScript(WS, { platformType: 'sfu' })
-    assert.ok(s.includes('sentMappings'), 'records mappings already sent')
-    assert.ok(s.includes('hasConnectedOnce'), 'gates replay behind the first connect')
-    assert.ok(/hasConnectedOnce\s*&&\s*sentMappings\.size/.test(s), 'replays only after first connect')
-    assert.ok(s.includes('replaying'))
-    assert.ok(s.includes('hasConnectedOnce = true'))
-    assert.doesNotThrow(() => new Function(s))
-  })
 
   // Teams native-diar fallback + logging.
   it('logs and signals a degrade when Teams callingDebug disappears', () => {
@@ -319,50 +344,85 @@ describe('webrtc-intercept getInterceptScript()', () => {
     return pc
   }
 
-  describe('resample() (behavioral)', () => {
-    const resample = extractFn(getInterceptScript(WS, { platformType: 'sfu' }), 'resample',
-      'const TARGET_SAMPLE_RATE = 16000;')
+  // The JS resampler only runs when the browser refuses a 16 kHz AudioContext. The
+  // one it replaces was stateless per chunk and floored each chunk's output length
+  // (128 frames at 44.1 kHz -> 46 samples instead of 46.44): ~15850 samples/s
+  // instead of 16000, a discontinuity at every chunk boundary and no anti-aliasing.
+  describe('createResampler() (behavioral)', () => {
+    const script = getInterceptScript(WS, { platformType: 'sfu' })
+    const createResampler = extractFn(script, 'createResampler',
+      script.match(/const TARGET_SAMPLE_RATE = \d+;/)[0] + script.match(/const ANTI_ALIAS_HZ = \d+;/)[0])
 
-    it('returns the input unchanged when already at 16kHz', () => {
-      const input = Float32Array.from([0.1, 0.2, 0.3])
-      assert.strictEqual(resample(input, 16000), input)
+    const tone = (freq, rate, n) => Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin(2 * Math.PI * freq * i / rate))
+    // Deterministic pseudo-random generator (LCG) in [0, 1).
+    function lcg (seed) { let x = seed; return () => { x = (x * 1103515245 + 12345) % 2147483648; return x / 2147483648 } }
+    // Feed `input` to a fresh resampler in chunks of chunkLen() samples; return the
+    // concatenated output.
+    function run (rate, input, chunkLen) {
+      const resample = createResampler(rate)
+      const parts = []
+      let total = 0
+      for (let i = 0; i < input.length;) {
+        const n = Math.min(chunkLen(), input.length - i)
+        const out = Float32Array.from(resample(input.subarray(i, i + n)))
+        parts.push(out)
+        total += out.length
+        i += n
+      }
+      const all = new Float32Array(total)
+      let offset = 0
+      for (const part of parts) { all.set(part, offset); offset += part.length }
+      return all
+    }
+    const dbRms = (a, from, ref) => {
+      let sum = 0
+      for (let i = from; i < a.length; i++) sum += a[i] * a[i]
+      return 20 * Math.log10(Math.sqrt(sum / (a.length - from)) / ref)
+    }
+
+    it('yields exactly 16000 samples per second of input, whatever the chunking (no drift)', () => {
+      for (const rate of [44100, 48000, 22050, 8000]) {
+        const n = rate * 60 // one minute
+        const rnd = lcg(rate)
+        const out = run(rate, new Float32Array(n), () => 1 + Math.floor(rnd() * 600))
+        // Output sample k sits at input position k*rate/16000 and is interpolated
+        // towards the next input sample, so it exists once that one was received.
+        assert.strictEqual(out.length, Math.ceil((n - 1) * 16000 / rate), rate + ' Hz')
+      }
     })
 
-    it('halves the sample count when downsampling 48kHz -> 16kHz (3:1)', () => {
-      const input = Float32Array.from([0, 0.3, 0.6, 0.9, 1.2, 1.5])
-      const out = resample(input, 48000)
-      assert.strictEqual(out.length, 2) // floor(6 / 3)
-      // idx 0 -> input[0]; idx 1 -> i*ratio = 3 -> input[3]
-      assert.ok(Math.abs(out[0] - 0) < 1e-6)
-      assert.ok(Math.abs(out[1] - 0.9) < 1e-6)
+    it('does not depend on the chunk boundaries (bit-identical to a single pass)', () => {
+      const input = tone(440, 44100, 44100 * 2)
+      const whole = run(44100, input, () => input.length)
+      const rnd = lcg(7)
+      const chunked = run(44100, input, () => 1 + Math.floor(rnd() * 300))
+      assert.deepStrictEqual(chunked, whole)
     })
 
-    it('linearly interpolates when downsampling 44.1kHz -> 16kHz', () => {
-      const input = Float32Array.from([0, 1, 2, 3, 4, 5, 6])
-      const out = resample(input, 44100)
-      const ratio = 44100 / 16000
-      assert.strictEqual(out.length, Math.floor(input.length / ratio))
-      // sample 1: idx = ratio (~2.756) -> lerp(input[2], input[3], .756) = 2.756
-      const idx = ratio
-      const lo = Math.floor(idx); const frac = idx - lo
-      const expected = input[lo] * (1 - frac) + input[lo + 1] * frac
-      assert.ok(Math.abs(out[1] - expected) < 1e-6)
+    it('passes the speech band and attenuates what would alias by more than 30 dB', () => {
+      const ref = 0.5 / Math.SQRT2 // RMS of the input tones
+      const settle = 1600 // output samples skipped while the filter settles
+      for (const rate of [44100, 48000]) {
+        const pass = run(rate, tone(1000, rate, rate), () => 128)
+        assert.ok(Math.abs(dbRms(pass, settle, ref)) < 0.5, rate + ' Hz: 1 kHz within 0.5 dB')
+        // 12 kHz folds down to 4 kHz at a 16 kHz output rate.
+        const alias = run(rate, tone(12000, rate, rate), () => 128)
+        assert.ok(dbRms(alias, settle, ref) < -30, rate + ' Hz: 12 kHz down by more than 30 dB')
+      }
     })
 
-    it('upsamples 8kHz -> 16kHz, doubling the sample count', () => {
-      const input = Float32Array.from([0, 1, 2])
-      const out = resample(input, 8000)
-      assert.strictEqual(out.length, Math.floor(input.length / (8000 / 16000))) // 6
-      // ratio 0.5: idx 1 -> 0.5 -> lerp(0,1,.5)=0.5
-      assert.ok(Math.abs(out[1] - 0.5) < 1e-6)
-      assert.ok(Math.abs(out[2] - 1) < 1e-6)
+    it('decimates 48 kHz by exactly 3 (no interpolation needed)', () => {
+      const resample = createResampler(48000)
+      assert.strictEqual(resample(new Float32Array(6)).length, 2)
+      assert.strictEqual(resample(new Float32Array(48)).length, 16)
     })
 
-    it('clamps the high index at the last sample (no out-of-bounds read)', () => {
-      const input = Float32Array.from([0, 10])
-      const out = resample(input, 8000) // ratio 0.5, outLen 4
-      // last out idx 3 -> 1.5 -> lerp(input[1], input[1], .5) since hi clamps to len-1
-      assert.ok(out.every((v) => Number.isFinite(v)))
+    it('upsamples 8 kHz without filtering, interpolating between samples', () => {
+      const resample = createResampler(8000)
+      const out = resample(Float32Array.from([0, 1, 2]))
+      assert.deepStrictEqual(Array.from(out), [0, 0.5, 1, 1.5])
+      // The next chunk continues where the previous one stopped (2 -> 3).
+      assert.deepStrictEqual(Array.from(resample(Float32Array.from([3]))), [2, 2.5])
     })
   })
 
@@ -395,6 +455,119 @@ describe('webrtc-intercept getInterceptScript()', () => {
     })
   })
 
+  describe('16 kHz capture (behavioral)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+    const pcmSamples = (frames) => frames.reduce((n, f) => n + (f.byteLength - 4) / 2, 0)
+
+    it('asks for a 16 kHz AudioContext and sends its samples as they are when granted', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 48000, honorsRate: true } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t16'))
+      await flush(); await flush()
+      assert.ok(ctx.audio.contextOptions.some((o) => o && o.sampleRate === 16000), 'context requested at 16 kHz')
+      feed(ctx, 0, Float32Array.from([0.5, -0.5, 0.25]))
+      const bin = binaryFrames(ws)[0]
+      const view = new DataView(bin)
+      assert.strictEqual(bin.byteLength, 4 + 3 * 2, 'no resampling at 16 kHz')
+      assert.strictEqual(view.getInt16(4, true), Math.trunc(0.5 * 32767))
+      assert.strictEqual(view.getInt16(6, true), Math.trunc(-0.5 * 32768))
+      assert.strictEqual(ctx.warnings.filter((w) => w.includes('16 kHz AudioContext')).length, 0)
+    })
+
+    it('falls back to the default rate and the JS resampler when 16 kHz is refused (warned)', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 48000, rateRefused: true } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t48'))
+      await flush(); await flush()
+      assert.ok(ctx.warnings.some((w) => w.includes('16 kHz AudioContext unavailable')))
+      feed(ctx, 0, new Float32Array(48))
+      assert.strictEqual(pcmSamples(binaryFrames(ws)), 16)
+    })
+
+    it('carries the resampling phase across chunks: 44.1 kHz in 128-frame chunks gives exactly 16000/s', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 44100 } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('t44'))
+      await flush(); await flush()
+      // One second of render quanta (the last one partial).
+      for (let sent = 0; sent < 44100; sent += 128) feed(ctx, 0, new Float32Array(Math.min(128, 44100 - sent)))
+      assert.strictEqual(pcmSamples(binaryFrames(ws)), Math.ceil(44099 * 16000 / 44100)) // 16000, not 344 * 46
+    })
+
+    it('the ScriptProcessor fallback resamples with the same stateful resampler', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 44100, workletThrows: true } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('tsp'))
+      await flush(); await flush()
+      const proc = ctx.audio.scriptProcessors[0]
+      for (let sent = 0; sent < 44100 * 2; sent += 4096) {
+        const n = Math.min(4096, 44100 * 2 - sent)
+        proc.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(n) } })
+      }
+      assert.strictEqual(pcmSamples(binaryFrames(ws)), Math.ceil((44100 * 2 - 1) * 16000 / 44100)) // 32000
+    })
+  })
+
+  // Per-node worklet ports reorder tracks after a main-thread stall (each port's
+  // backlog is drained in one go); one transport keeps every quantum in render order.
+  describe('ordered delivery through one transport (behavioral)', () => {
+    const s = getInterceptScript(WS, { platformType: 'sfu' })
+
+    it('loads the module once and starts a single transport for tracks set up together', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('a'))
+      emitTrack(ctx, makeTrack('b'))
+      await flush(); await flush(); await flush()
+      assert.strictEqual(ctx.audio.addModuleCalls, 1)
+      assert.strictEqual(ctx.audio.transports.length, 1)
+      assert.deepStrictEqual(ctx.audio.transports[0].connected, [{ id: 'dest' }], 'transport kept processing')
+      assert.deepStrictEqual(ctx.audio.workletNodes.map((n) => n.options.processorOptions.trackIndex).sort(), [0, 1])
+    })
+
+    it('sends the quanta of a transport message in render order, each tagged with its track', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
+      const ws = await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('a'))
+      emitTrack(ctx, makeTrack('b'))
+      await flush(); await flush(); await flush()
+      feed(ctx, 0, new Float32Array(4), 1, new Float32Array(4), 0, new Float32Array(4), 1, new Float32Array(4))
+      assert.deepStrictEqual(binaryFrames(ws).map((f) => new DataView(f).getUint16(0, false)), [0, 1, 0, 1])
+    })
+
+    it('worklet module: captures share one queue that the transport posts in render order', async () => {
+      const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
+      await openLoopback(ctx)
+      emitTrack(ctx, makeTrack('m'))
+      await flush(); await flush()
+      const registered = {}
+      class FakeProcessor {
+        constructor () { this.port = { onmessage: null, posted: [], postMessage (m) { this.posted.push(m) } } }
+      }
+      new Function('AudioWorkletProcessor', 'registerProcessor', ctx.blobs[ctx.blobs.length - 1])(
+        FakeProcessor, (name, cls) => { registered[name] = cls })
+      const a = new registered['pcm-capture']({ processorOptions: { trackIndex: 0 } })
+      const b = new registered['pcm-capture']({ processorOptions: { trackIndex: 1 } })
+      const transport = new registered['pcm-transport']()
+      const quantum = (v) => [[Float32Array.from([v, v])]]
+      assert.strictEqual(a.process(quantum(0.25)), true)
+      b.process(quantum(0.5))
+      a.process(quantum(0.75))
+      b.process([[]]) // no channel (no input connected): nothing queued
+      transport.process()
+      const posted = transport.port.posted
+      assert.strictEqual(posted.length, 1)
+      assert.deepStrictEqual(posted[0].filter((x, i) => i % 2 === 0), [0, 1, 0])
+      assert.deepStrictEqual(posted[0].filter((x, i) => i % 2 === 1).map((q) => q[0]), [0.25, 0.5, 0.75])
+      transport.process()
+      assert.strictEqual(posted.length, 1, 'nothing posted for an empty queue')
+      a.port.onmessage({ data: 'stop' })
+      assert.strictEqual(a.process(quantum(1)), false, 'a stopped capture processor ends')
+      transport.process()
+      assert.strictEqual(posted.length, 1, 'and queues nothing more')
+    })
+  })
+
   describe('setupTrackCapture()/handleNewTrack() (behavioral)', () => {
     it('AudioWorklet path: worklet message sends a resampled PCM binary frame', async () => {
       const s = getInterceptScript(WS, { platformType: 'sfu' })
@@ -404,9 +577,10 @@ describe('webrtc-intercept getInterceptScript()', () => {
       await flush(); await flush()
       assert.strictEqual(ctx.audio.workletNodes.length, 1, 'a worklet node was created')
       const node = ctx.audio.workletNodes[0]
-      assert.strictEqual(typeof node.port.onmessage, 'function')
+      assert.strictEqual(node.name, 'pcm-capture')
+      assert.deepStrictEqual(node.options.processorOptions, { trackIndex: 0 }, 'the processor tags its quanta with the track index')
       // Feed 6 samples @48k -> 2 samples @16k -> 4 bytes PCM + 4 byte header.
-      node.port.onmessage({ data: Float32Array.from([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]) })
+      feed(ctx, 0, Float32Array.from([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]))
       const bins = binaryFrames(ws)
       assert.strictEqual(bins.length, 1)
       assert.strictEqual(bins[0].byteLength, 4 + 2 * 2, 'header(4) + 2 int16 samples')
@@ -418,8 +592,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('t1'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: new Float32Array(48) }) // 48 @48k -> 16 @16k
+      feed(ctx, 0, new Float32Array(48)) // 48 @48k -> 16 @16k
       const bins = binaryFrames(ws)
       assert.strictEqual(bins[0].byteLength, 4 + 16 * 2)
     })
@@ -494,6 +667,180 @@ describe('webrtc-intercept getInterceptScript()', () => {
       emitTrack(ctx, track)
       await flush()
       assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 2)
+    })
+  })
+
+  // An ended track keeps feeding its source node in Chromium (silence, at the full
+  // rate): a live Teams call streamed 170 s of zeros for a replaced track. The
+  // capture graph must be dismantled so the track's PCM stops.
+  describe('ended track teardown (behavioral)', () => {
+    async function capturedTrack (audioOpts) {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { audioOpts })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-end')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      return { ctx, ws, track }
+    }
+
+    it('AudioWorklet path: stops the processor, disconnects node and source, releases the sink', async () => {
+      const { ctx, ws, track } = await capturedTrack({ sampleRate: 16000 })
+      const node = ctx.audio.workletNodes[0]
+      feed(ctx, 0, new Float32Array(8))
+      assert.strictEqual(binaryFrames(ws).length, 1, 'captured while live')
+      track.fire('ended')
+      feed(ctx, 0, new Float32Array(8)) // a quantum still in flight from the worklet
+      assert.strictEqual(binaryFrames(ws).length, 1, 'in-flight quanta of an ended track are dropped')
+      assert.deepStrictEqual(node.port.posted, ['stop'], 'the processor stops queueing quanta')
+      assert.strictEqual(node.disconnected, true)
+      assert.strictEqual(ctx.audio.sources[0].disconnected, true)
+      assert.strictEqual(ctx.sinks[0].paused, true)
+      assert.strictEqual(ctx.sinks[0].srcObject, null)
+      const removedAt = ws.sent.findIndex((f) => typeof f === 'string' && JSON.parse(f).type === 'trackRemoved')
+      assert.strictEqual(removedAt, ws.sent.length - 1, 'trackRemoved is the last frame of the track')
+    })
+
+    it('ScriptProcessor path: drops onaudioprocess and disconnects', async () => {
+      const { ctx, track } = await capturedTrack({ sampleRate: 16000, workletThrows: true })
+      const proc = ctx.audio.scriptProcessors[0]
+      assert.strictEqual(typeof proc.onaudioprocess, 'function')
+      track.fire('ended')
+      assert.strictEqual(proc.onaudioprocess, null)
+      assert.strictEqual(proc.disconnected, true)
+      assert.strictEqual(ctx.audio.sources[0].disconnected, true)
+      assert.strictEqual(ctx.sinks[0].srcObject, null)
+    })
+
+    it('builds nothing for a track that ends while the AudioContext resumes', async () => {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s) // context starts suspended: setup awaits resume()
+      await openLoopback(ctx)
+      const track = makeTrack('t-early-end')
+      emitTrack(ctx, track)
+      track.fire('ended') // before resume() settles
+      await flush(); await flush()
+      assert.strictEqual(ctx.audio.sources.length, 0, 'no source node')
+      assert.strictEqual(ctx.sinks.length, 0, 'no sink element')
+      assert.strictEqual(ctx.audio.workletNodes.length, 0, 'no capture node')
+    })
+
+    it('tears down what was built when the track ends while the worklet module loads', async () => {
+      let loaded
+      const addModule = () => new Promise((resolve) => { loaded = resolve })
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { audioOpts: { addModule } })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-mid-end')
+      emitTrack(ctx, track)
+      await flush(); await flush() // resumed, source + sink built, module load pending
+      assert.strictEqual(ctx.audio.sources.length, 1)
+      track.fire('ended')
+      loaded()
+      await flush(); await flush()
+      assert.strictEqual(ctx.audio.workletNodes.length, 0, 'no capture node for an ended track')
+      assert.strictEqual(ctx.audio.scriptProcessors.length, 0, 'no fallback either')
+      assert.strictEqual(ctx.audio.sources[0].disconnected, true)
+      assert.strictEqual(ctx.sinks[0].srcObject, null)
+      assert.strictEqual(binaryFrames(ws).length, 0)
+    })
+
+    it('ignores a track that is already ended when it is announced', async () => {
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s)
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-dead')
+      track.readyState = 'ended'
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').length, 0)
+      assert.strictEqual(ctx.audio.sources.length, 0)
+    })
+
+    it('does not replay the participant mapping of an ended track after a reconnect', async () => {
+      const room = { state: 'connected', localParticipant: {}, remoteParticipants: [{ identity: 'id1', name: 'Alice', trackPublications: { forEach (cb) { [{ kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: { id: 't-map' } } }].forEach(cb) } } }] }
+      const s = getInterceptScript(WS, { platformType: 'sfu' })
+      const ctx = runScript(s, { elements: [{ __reactFiber$x: { memoizedProps: { room }, memoizedState: null, return: null } }] })
+      const ws = await openLoopback(ctx)
+      const track = makeTrack('t-map')
+      emitTrack(ctx, track)
+      await flush(); await flush()
+      ctx.clock.advance(3000)
+      ctx.clock.tickIntervals()
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantMapping').length, 1)
+      track.fire('ended')
+      ws.readyState = 3; ws.onclose() // loopback drops
+      ctx.clock.advance(1000); await flush()
+      const ws2 = ctx.FakeWebSocket.instances[ctx.FakeWebSocket.instances.length - 1]
+      assert.notStrictEqual(ws2, ws)
+      ws2._open(); await flush()
+      assert.strictEqual(jsonFrames(ws2).filter((f) => f.type === 'participantMapping').length, 0)
+    })
+  })
+
+  // addInitScript runs the script in every frame of the page: a live Teams join
+  // opened 8 loopback sockets on one path within 3 s.
+  describe('frames (behavioral)', () => {
+    const lkRoom = (trackId) => ({
+      state: 'connected',
+      localParticipant: {},
+      remoteParticipants: [{ identity: 'id1', name: 'Alice', trackPublications: { forEach (cb) { [{ kind: 'audio', isSubscribed: true, track: { mediaStreamTrack: { id: trackId } } }].forEach(cb) } } }]
+    })
+    const fiber = (room) => [{ __reactFiber$x: { memoizedProps: { room }, memoizedState: null, return: null } }]
+
+    it('the top frame connects at once', () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }))
+      assert.strictEqual(ctx.FakeWebSocket.instances.length, 1)
+    })
+
+    it('a sub-frame opens no socket until it captures a track, then announces it on open', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { subFrame: true })
+      await flush()
+      assert.strictEqual(ctx.FakeWebSocket.instances.length, 0, 'no socket for a frame without media')
+      emitTrack(ctx, makeTrack('sub-t'))
+      emitTrack(ctx, makeTrack('sub-t2'))
+      assert.strictEqual(ctx.FakeWebSocket.instances.length, 1, 'one socket once it captures')
+      const ws = await openLoopback(ctx)
+      assert.deepStrictEqual(jsonFrames(ws).filter((f) => f.type === 'trackAdded').map((f) => [f.trackId, f.trackIndex]),
+        [['sub-t', 0], ['sub-t2', 1]], 'the tracks added before the socket opened are announced')
+    })
+
+    it('a sub-frame runs no Teams poller: no participantLeft, no degrade', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }), { subFrame: true, callingDebug: undefined })
+      emitTrack(ctx, makeTrack('sub-t'))
+      const ws = await openLoopback(ctx)
+      ctx.clock.advance(3000)
+      assert.strictEqual(ctx.clock.intervals.size, 0, 'no poller started')
+      for (let i = 0; i < 40; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) }
+      assert.deepStrictEqual(jsonFrames(ws).map((f) => f.type), ['trackAdded'])
+    })
+
+    it('a sub-frame runs no SFU poller', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { subFrame: true, elements: fiber(lkRoom('sub-t')) })
+      emitTrack(ctx, makeTrack('sub-t'))
+      const ws = await openLoopback(ctx)
+      ctx.clock.advance(3000)
+      assert.strictEqual(ctx.clock.intervals.size, 0, 'no poller started')
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'participantMapping').length, 0)
+    })
+
+    it('every (re)connect announces the live tracks and their mappings, not the ended ones', async () => {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'sfu' }), { elements: fiber(lkRoom('t-live')) })
+      await flush()
+      emitTrack(ctx, makeTrack('t-live')) // before the first open: not sent yet
+      const ended = makeTrack('t-ended')
+      emitTrack(ctx, ended)
+      const ws1 = await openLoopback(ctx)
+      assert.deepStrictEqual(jsonFrames(ws1).map((f) => [f.type, f.trackIndex]), [['trackAdded', 0], ['trackAdded', 1]])
+      ctx.clock.advance(3000)
+      ctx.clock.tickIntervals() // maps t-live
+      ended.fire('ended')
+      ws1.readyState = 3; ws1.onclose() // the Node side restarts
+      ctx.clock.advance(1000); await flush()
+      const ws2 = await openLoopback(ctx)
+      assert.notStrictEqual(ws2, ws1)
+      assert.deepStrictEqual(jsonFrames(ws2).map((f) => [f.type, f.trackIndex]), [['trackAdded', 0], ['participantMapping', 0]])
+      assert.strictEqual(jsonFrames(ws2)[1].participant.name, 'Alice')
     })
   })
 
@@ -632,8 +979,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('hdr'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: Float32Array.from([1.0, -1.0]) }) // 16k -> no resample
+      feed(ctx, 0, Float32Array.from([1.0, -1.0])) // 16k -> no resample
       const bin = binaryFrames(ws)[0]
       const view = new DataView(bin)
       assert.strictEqual(view.getUint16(0, false), 0, 'trackIndex 0 big-endian')
@@ -649,25 +995,21 @@ describe('webrtc-intercept getInterceptScript()', () => {
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('big'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: new Float32Array(10) }) // 10 samples
+      feed(ctx, 0, new Float32Array(10)) // 10 samples
       const bin = binaryFrames(ws)[0]
       assert.strictEqual(bin.byteLength, 4 + 10 * 2)
     })
 
-    it('an empty PCM payload still produces a frame (header only) — no crash', async () => {
-      // Note: the current source does NOT special-case empty PCM in sendBinary; the
-      // worklet processor guards (c.length>0) upstream, but a direct empty payload
-      // yields a 4-byte header-only frame. Asserting CURRENT behaviour.
+    it('sends no frame for a chunk that yields no PCM', async () => {
+      // An empty chunk, or one too short to complete a resampled sample, would
+      // only produce a header-only frame, which the Node side drops anyway.
       const s = getInterceptScript(WS, { platformType: 'sfu' })
       const ctx = runScript(s, { audioOpts: { sampleRate: 16000 } })
       const ws = await openLoopback(ctx)
       emitTrack(ctx, makeTrack('empty'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: new Float32Array(0) })
-      const bin = binaryFrames(ws)[0]
-      assert.strictEqual(bin.byteLength, 4, 'header-only frame for empty PCM')
+      feed(ctx, 0, new Float32Array(0))
+      assert.strictEqual(binaryFrames(ws).length, 0)
     })
 
     it('sendBinary is a no-op while the loopback WS is not OPEN', async () => {
@@ -677,8 +1019,7 @@ describe('webrtc-intercept getInterceptScript()', () => {
       await flush()
       emitTrack(ctx, makeTrack('closed'))
       await flush(); await flush()
-      const node = ctx.audio.workletNodes[0]
-      node.port.onmessage({ data: Float32Array.from([0.5]) })
+      feed(ctx, 0, Float32Array.from([0.5]))
       assert.strictEqual(binaryFrames(ctx.FakeWebSocket.instances[0]).length, 0)
     })
   })
@@ -1029,14 +1370,23 @@ describe('webrtc-intercept getInterceptScript()', () => {
   })
 
   describe('Teams degrade / throttle (behavioral)', () => {
-    it('warnTeams throttles repeated messages to once per 5000ms', async () => {
-      // callingDebug absent -> every poll calls noteCallingDebugMissing -> warnTeams.
-      const s = getInterceptScript(WS, { platformType: 'teams' })
-      const ctx = runScript(s, { callingDebug: undefined })
-      await openLoopback(ctx)
+    const inCall = (...names) => ({ participants: { forEach (cb) { names.forEach((n) => cb({ mri: n, displayName: n, voiceLevel: 0 })) } } })
+    // A Teams page whose call was seen once (the bot was admitted).
+    async function admitted (callingDebug) {
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }), { callingDebug })
+      const ws = await openLoopback(ctx)
       ctx.clock.advance(3000)
-      ctx.clock.tickIntervals() // poll 1 -> warns (lastWarnAt set)
+      ctx.clock.tickIntervals()
+      return { ctx, ws }
+    }
+
+    it('warnTeams throttles repeated messages to once per 5000ms', async () => {
+      const { ctx } = await admitted({ observableCall: inCall('m1') })
+      ctx.clock.advance(5000) // the fake clock starts near 0: get past a first throttle window
+      ctx.fakeWindow.callingDebug = undefined // every poll now misses -> warnTeams
+      ctx.clock.advance(200); ctx.clock.tickIntervals() // warns (lastWarnAt set)
       const after1 = ctx.warnings.length
+      assert.ok(after1 > 0)
       ctx.clock.advance(200); ctx.clock.tickIntervals() // within throttle -> no new warn
       ctx.clock.advance(200); ctx.clock.tickIntervals()
       assert.strictEqual(ctx.warnings.length, after1, 'throttled within 5s')
@@ -1045,33 +1395,57 @@ describe('webrtc-intercept getInterceptScript()', () => {
     })
 
     it('missCount increments per miss and resets when callingDebug recovers', async () => {
-      const cd = { observableCall: null }
-      const s = getInterceptScript(WS, { platformType: 'teams' })
-      const ctx = runScript(s, { callingDebug: cd })
-      const ws = await openLoopback(ctx)
-      ctx.clock.advance(3000)
-      // 3 misses (observableCall null), spaced past the warn throttle to observe count.
-      ctx.clock.tickIntervals()
+      const cd = { observableCall: inCall('m1') }
+      const { ctx, ws } = await admitted(cd)
+      cd.observableCall = null
+      // 3 misses, spaced past the warn throttle to observe the count.
+      ctx.clock.advance(200); ctx.clock.tickIntervals()
       ctx.clock.advance(5000); ctx.clock.tickIntervals()
       ctx.clock.advance(5000); ctx.clock.tickIntervals()
       const missWarns = ctx.warnings.filter((w) => /miss \d+\/25/.test(w))
-      assert.ok(missWarns.length >= 1)
-      assert.ok(/miss 3\/25/.test(missWarns[missWarns.length - 1]) || missWarns.length >= 1)
+      assert.ok(/miss 3\/25/.test(missWarns[missWarns.length - 1]), missWarns.join(' | '))
       // API recovers -> a poll with a live call resets missCount (no degrade later).
-      cd.observableCall = { participants: { forEach () {} } }
+      cd.observableCall = inCall('m1')
       ctx.clock.advance(5000); ctx.clock.tickIntervals()
-      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 0)
+      cd.observableCall = null
+      for (let i = 0; i < 24; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 0, '24 misses after the reset')
     })
 
-    it('signals diarizationDegraded exactly once at the 25th consecutive miss', async () => {
-      const s = getInterceptScript(WS, { platformType: 'teams' })
-      const ctx = runScript(s, { callingDebug: undefined }) // absent every poll
-      const ws = await openLoopback(ctx)
-      ctx.clock.advance(3000)
-      for (let i = 0; i < 30; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) }
+    it('signals diarizationDegraded exactly once at the 25th consecutive miss after the call was seen', async () => {
+      const { ctx, ws } = await admitted({ observableCall: inCall('m1', 'm2') })
+      ctx.fakeWindow.callingDebug = undefined // the API vanishes mid-call
+      for (let i = 0; i < 24; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 0)
+      for (let i = 0; i < 10; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
       const degraded = jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded')
       assert.strictEqual(degraded.length, 1, 'degrade signalled exactly once')
       assert.strictEqual(degraded[0].mode, 'asr')
+      assert.deepStrictEqual(jsonFrames(ws).filter((f) => f.type === 'participantLeft').map((f) => f.participant.id), ['m1', 'm2'],
+        'everyone known left once the call vanished')
+    })
+
+    it('a throwing callingDebug counts as a miss once the call was seen', async () => {
+      const { ctx, ws } = await admitted({ observableCall: inCall('m1') })
+      Object.defineProperty(ctx.fakeWindow, 'callingDebug', { get () { throw new Error('gone') } })
+      for (let i = 0; i < 25; i++) { ctx.clock.advance(200); ctx.clock.tickIntervals() }
+      assert.strictEqual(jsonFrames(ws).filter((f) => f.type === 'diarizationDegraded').length, 1)
+    })
+
+    // A bot waiting more than ~5 s on the prejoin screen or in the lobby (no call
+    // yet) used to degrade the whole session to ASR diarization.
+    it('a long prejoin/lobby (no call yet) is not a miss: no degrade, no warning, no participantLeft', async () => {
+      const cd = { observableCall: null }
+      const ctx = runScript(getInterceptScript(WS, { platformType: 'teams' }), { callingDebug: cd })
+      const ws = await openLoopback(ctx)
+      ctx.clock.advance(3000)
+      for (let i = 0; i < 300; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) } // a minute in the lobby
+      Object.defineProperty(cd, 'observableCall', { get () { throw new Error('not ready') }, configurable: true })
+      for (let i = 0; i < 50; i++) { ctx.clock.tickIntervals(); ctx.clock.advance(200) }
+      Object.defineProperty(cd, 'observableCall', { value: inCall('m1'), writable: true, configurable: true }) // admitted
+      ctx.clock.tickIntervals()
+      assert.deepStrictEqual(jsonFrames(ws).map((f) => f.type), ['participantMapping'])
+      assert.deepStrictEqual(ctx.warnings, [])
     })
 
     it('the Teams poller is registered and its interval id is clearable', () => {

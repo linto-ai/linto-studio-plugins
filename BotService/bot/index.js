@@ -8,16 +8,6 @@ const AudioMixer = require('./AudioMixer')
 // from the enum-constrained DB but we validate defensively.
 const KNOWN_BOT_TYPES = ['jitsi', 'bigbluebutton', 'teams', 'visio']
 
-// Cap on per-track audio buffered while waiting for the participant mapping
-// (SFU pollers map ~2 s after join). ~150 × 20 ms frames ≈ 3 s of speech, so the
-// bot's first words are attributed instead of dropped.
-const MAX_EARLY_FRAMES = 150
-
-// How long an early-audio buffer may linger before the reaper drops it: a track
-// whose mapping never arrives would otherwise hold memory forever.
-const EARLY_AUDIO_MAX_AGE_MS = parseInt(process.env.EARLY_AUDIO_MAX_AGE_SECONDS || '30', 10) * 1000
-const EARLY_AUDIO_REAP_INTERVAL_MS = EARLY_AUDIO_MAX_AGE_MS
-
 // Audio-silence watchdog. Once admitted the bot should be receiving PCM; if the
 // in-page capture pipe dies silently the bot looks alive but no audio flows and
 // no other watchdog fires. Tear it down after a prolonged gap. 0 disables it.
@@ -28,6 +18,12 @@ const AUDIO_SILENCE_TIMEOUT_MS = (() => {
 // How often the silence watchdog re-checks the last-audio timestamp.
 const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
 
+// Period of the per-bot audio health log: one line summing up the audio path
+// (each track's input rate, the output rate against the wall clock, drops,
+// stalls, PCM of removed tracks), so that a capture or mixing fault shows in the
+// logs without a packet capture.
+const AUDIO_HEALTH_INTERVAL_MS = 60000
+
 // Parse an env timeout (in seconds) to ms, falling back to the default for a
 // missing OR malformed value. Without the Number.isFinite guard a non-numeric env
 // var yields NaN, and setTimeout(fn, NaN) fires ~immediately — the bot would
@@ -35,6 +31,13 @@ const AUDIO_SILENCE_CHECK_INTERVAL_MS = 5000
 function envTimeoutMs (name, defaultSeconds) {
   const v = parseInt(process.env[name], 10)
   return (Number.isFinite(v) && v > 0 ? v : defaultSeconds) * 1000
+}
+
+// A capture track is identified by the loopback connection it streams on plus its
+// in-page index: every document of the page (sub-frames, or the document that a
+// navigation replaces) numbers its own tracks from 0 on its own connection.
+function trackKey (connId, trackIndex) {
+  return `c${connId}:${trackIndex}`
 }
 
 // Page-console noise from meeting SPAs we never want in our logs.
@@ -45,9 +48,9 @@ const IGNORED_CONSOLE = [
 
 /**
  * Bot — drives one headless browser context that joins a single meeting, captures
- * its audio via the injected WebRTC interceptor, and (for SFU platforms) mixes
- * per-participant tracks into a diarized stream. Emits audio/speaker/participant
- * events for the BrokerClient to forward to a Transcriber.
+ * its audio via the injected WebRTC interceptor, and mixes the captured tracks
+ * into one stream (diarized from per-participant tracks on SFU platforms). Emits
+ * audio/speaker/participant events for the BrokerClient to forward to a Transcriber.
  */
 class Bot extends EventEmitter {
   constructor ({ session, channel, address, botType, browserPool, audioServer }) {
@@ -68,15 +71,16 @@ class Bot extends EventEmitter {
     // empty-meeting timer never arms — so leave anyway after this window.
     this.joinTimeoutMs = envTimeoutMs('JOIN_TIMEOUT_SECONDS', 120)
 
-    this.trackParticipants = new Map() // trackIndex -> { id, name }
+    this.trackParticipants = new Map() // trackKey -> { id, name }
+    this.removedTracks = new Map() // trackKey -> PCM frames received after its removal
+    this.ignoredAudioFrames = 0 // PCM frames of removed tracks, in total
     this.participants = new Map() // participantId -> { id, name }
-    this.earlyAudio = new Map() // trackIndex -> [Buffer] buffered until mapped (SFU)
-    this.earlyAudioFirstSeen = new Map() // trackIndex -> ts of first buffered frame (reaper)
-    this.earlyAudioReaper = null // interval dropping stale unmapped early-audio
     this.hasSeenParticipant = false
     this.hasSeenAudio = false // one-shot latch for the "first audio frame" log
     this.lastAudioAt = 0 // ts of the most recent PCM frame (silence watchdog)
     this.audioSilenceWatchdog = null
+    this.audioHealthTimer = null
+    this._audioHealth = null // counters at the start of the current health window
     this.diarizationDegraded = false // native-diar → ASR fallback latch
     this.emptyMeetingTimer = null
     this.joinWatchdog = null
@@ -127,10 +131,10 @@ class Bot extends EventEmitter {
 
       // Loopback audio sink for the in-page interceptor.
       this.audioServer.registerBot(this.wsPath, {
-        onBinary: (trackIndex, pcm) => this.handleAudioData(trackIndex, pcm),
-        onJson: (json) => this.handleJsonMessage(json),
+        onBinary: (trackIndex, pcm, connId) => this.handleAudioData(trackIndex, pcm, connId),
+        onJson: (json, connId) => this.handleJsonMessage(json, connId),
         // learn when the loopback audio pipe drops.
-        onClose: () => this.notifyAudioPipeClosed()
+        onClose: (connId) => this.notifyAudioPipeClosed(connId)
       })
 
       const localWsUrl = `ws://127.0.0.1:${this.audioServer.getPort()}${this.wsPath}`
@@ -162,12 +166,8 @@ class Bot extends EventEmitter {
       logger.info(`Bot[${this.contextId}]: login rules completed (${this.manifest.loginRules?.length || 0} rules)`)
       this._armJoinWatchdog()
 
-      if (this.isSfu) {
-        this._startMixer()
-        logger.info(`Bot[${this.contextId}]: SFU mode, AudioMixer started`)
-      } else {
-        logger.info(`Bot[${this.contextId}]: ${this.manifest.platformType} mode, pass-through audio`)
-      }
+      this._startMixer()
+      logger.info(`Bot[${this.contextId}]: ${this.manifest.platformType} mode, AudioMixer started`)
     } catch (error) {
       logger.error(`Bot[${this.contextId}]: init failed: ${error.message}`)
       await this.dispose()
@@ -196,104 +196,111 @@ class Bot extends EventEmitter {
     })
   }
 
+  // Every platform goes through the mixer: a page can carry several tracks at
+  // once (an SFU participant's mic and screen share, the track Teams replaces on
+  // admission next to its successor) and they must be summed, never interleaved.
+  // Speakers are derived from per-participant tracks on SFU platforms only: Teams
+  // reports them from the page (callingDebug), BBB relies on ASR diarization.
   _startMixer () {
     this.audioMixer = new AudioMixer()
     this.audioMixer.on('audio', (buffer) => this.emit('audio', buffer))
+    this._armAudioHealthLog()
+    if (!this.isSfu) return
     this.audioMixer.on('speakerChanged', (event) => this.emit('speakerChanged', event))
-    this.audioMixer.start()
+    for (const [key, participant] of this.trackParticipants) this.audioMixer.setTrackParticipant(key, participant)
   }
 
-  handleAudioData (trackIndex, pcmBuffer) {
-    // note every PCM frame for the silence watchdog.
-    this.lastAudioAt = Date.now()
-    if (this.isSfu) {
-      this._noteFirstAudio()
-      if (!this.audioMixer) return
-      const mapping = this.trackParticipants.get(trackIndex)
-      if (mapping) {
-        this.audioMixer.addAudio(mapping.id, pcmBuffer, Date.now(), mapping.name)
-      } else {
-        this._bufferEarlyAudio(trackIndex, pcmBuffer)
-      }
-    } else {
-      // MCU/Teams: a single server-mixed track, forwarded as-is.
-      // Teams puts anonymous bots in a LOBBY where the page carries no meeting audio;
-      // forwarding it there would push lobby silence to the ASR. Hold until a
-      // participant is detected (= admitted). Other MCU bots have no lobby → stream now.
-      if (this.manifest.platformType === 'teams' && !this.hasSeenParticipant) return
-      this._noteFirstAudio()
-      this.emit('audio', pcmBuffer)
+  _armAudioHealthLog () {
+    if (this.audioHealthTimer || this.disposed) return
+    this._audioHealth = this._audioHealthCounters(Date.now(), this.audioMixer.getStats())
+    this.audioHealthTimer = setInterval(() => this._logAudioHealth(), AUDIO_HEALTH_INTERVAL_MS)
+    if (typeof this.audioHealthTimer.unref === 'function') this.audioHealthTimer.unref()
+  }
+
+  _audioHealthCounters (at, stats) {
+    return {
+      at,
+      outputSamples: stats.outputSamples,
+      droppedSamples: stats.droppedSamples,
+      stalls: stats.stalls,
+      ignoredFrames: this.ignoredAudioFrames,
+      inputSamples: new Map(stats.tracks.map(t => [t.id, t.inputSamples]))
     }
   }
 
-  // Latch + log the first PCM frame we actually forward. Gated by the callers so
-  // it never fires for lobby audio on MCU bots.
+  // Log the audio health over the window since the previous call. The output
+  // should run at x1.00 real time once admitted; a track flowing next to another
+  // one is listed as such ("idle" when it is not delivering).
+  _logAudioHealth (now = Date.now()) {
+    if (!this.audioMixer || !this._audioHealth) return
+    const prev = this._audioHealth
+    const seconds = (now - prev.at) / 1000
+    if (seconds <= 0) return
+    const stats = this.audioMixer.getStats()
+    const perSecond = (samples) => Math.round(samples / seconds)
+    const output = stats.outputSamples - prev.outputSamples
+    const tracks = stats.tracks.map(t => `${t.id}${t.active ? '' : ' idle'} ${perSecond(t.inputSamples - (prev.inputSamples.get(t.id) || 0))}/s`)
+    logger.info(`Bot[${this.contextId}]: audio health over ${Math.round(seconds)}s: output ${perSecond(output)} samples/s ` +
+      `(x${(output / (seconds * AudioMixer.SAMPLE_RATE)).toFixed(2)} real time), ` +
+      `${stats.tracks.filter(t => t.active).length}/${stats.tracks.length} tracks flowing [${tracks.join(', ')}], ` +
+      `${stats.droppedSamples - prev.droppedSamples} samples dropped, ${stats.stalls - prev.stalls} stalls, ` +
+      `${this.ignoredAudioFrames - prev.ignoredFrames} frames of removed tracks ignored`)
+    this._audioHealth = this._audioHealthCounters(now, stats)
+  }
+
+  _cancelAudioHealthLog () {
+    if (!this.audioHealthTimer) return
+    clearInterval(this.audioHealthTimer)
+    this.audioHealthTimer = null
+  }
+
+  handleAudioData (trackIndex, pcmBuffer, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    // The page tears a track's capture down when the track ends, so PCM still
+    // tagged with a removed track comes from a leaked capture: an ended track
+    // keeps rendering silence, which must never reach the mix.
+    if (this.removedTracks.has(key)) {
+      this._noteRemovedTrackAudio(key)
+      return
+    }
+    // note every PCM frame for the silence watchdog.
+    this.lastAudioAt = Date.now()
+    if (!this.audioMixer) return
+    // Teams puts anonymous bots in a LOBBY where the page carries no meeting audio;
+    // forwarding it there would push lobby silence to the ASR. Hold until a
+    // participant is detected (= admitted). Other bots have no lobby → stream now.
+    if (this.manifest.platformType === 'teams' && !this.hasSeenParticipant) return
+    this._noteFirstAudio()
+    // An SFU track is mixed from its first frame, before the poller maps it to its
+    // participant (~2 s after join): only the speaker attribution waits for that.
+    this.audioMixer.addAudio(key, pcmBuffer)
+  }
+
+  // Count PCM of a removed track; warn on the first frame only, per track.
+  _noteRemovedTrackAudio (key) {
+    const ignored = this.removedTracks.get(key) + 1
+    this.removedTracks.set(key, ignored)
+    this.ignoredAudioFrames++
+    if (ignored === 1) logger.warn(`Bot[${this.contextId}]: ignoring PCM of removed track ${key} (its in-page capture is still running)`)
+  }
+
+  // Latch + log the first PCM frame we actually forward. Gated by the caller so
+  // it never fires for lobby audio on Teams bots.
   _noteFirstAudio () {
     if (this.hasSeenAudio) return
     this.hasSeenAudio = true
     logger.info(`Bot[${this.contextId}]: first audio frame received`)
   }
 
-  _bufferEarlyAudio (trackIndex, pcmBuffer) {
-    let buf = this.earlyAudio.get(trackIndex)
-    if (!buf) {
-      buf = []
-      this.earlyAudio.set(trackIndex, buf)
-      this.earlyAudioFirstSeen.set(trackIndex, Date.now()) // age for the reaper
-    }
-    if (buf.length < MAX_EARLY_FRAMES) buf.push(pcmBuffer)
-    this._armEarlyAudioReaper()
-  }
-
-  // Drop a track's early-audio buffer and its age marker together so the two maps
-  // never diverge. Called on map/flush, on track removal, and by the reaper.
-  _dropEarlyAudio (trackIndex) {
-    this.earlyAudio.delete(trackIndex)
-    this.earlyAudioFirstSeen.delete(trackIndex)
-  }
-
-  _flushEarlyAudio (trackIndex, participant) {
-    const buffered = this.earlyAudio.get(trackIndex)
-    if (!buffered || !this.audioMixer) { this._dropEarlyAudio(trackIndex); return }
-    for (const pcm of buffered) {
-      this.audioMixer.addAudio(participant.id, pcm, Date.now(), participant.name)
-    }
-    this._dropEarlyAudio(trackIndex)
-  }
-
-  // Periodically drop early-audio buffers whose track was never mapped so they
-  // cannot leak. Lazily armed on first early-audio, torn down once nothing is
-  // buffered; .unref()'d so it never keeps the process alive.
-  _armEarlyAudioReaper () {
-    if (this.earlyAudioReaper || this.disposed) return
-    this.earlyAudioReaper = setInterval(() => this._reapEarlyAudio(), EARLY_AUDIO_REAP_INTERVAL_MS)
-    if (typeof this.earlyAudioReaper.unref === 'function') this.earlyAudioReaper.unref()
-  }
-
-  _reapEarlyAudio (now = Date.now()) {
-    for (const [trackIndex, firstSeen] of [...this.earlyAudioFirstSeen.entries()]) {
-      if (now - firstSeen < EARLY_AUDIO_MAX_AGE_MS) continue
-      logger.debug(`Bot[${this.contextId}]: reaping stale early-audio for track ${trackIndex} (never mapped)`)
-      this._dropEarlyAudio(trackIndex)
-    }
-    if (this.earlyAudio.size === 0) this._cancelEarlyAudioReaper()
-  }
-
-  _cancelEarlyAudioReaper () {
-    if (!this.earlyAudioReaper) return
-    clearInterval(this.earlyAudioReaper)
-    this.earlyAudioReaper = null
-  }
-
-  handleJsonMessage (json) {
+  handleJsonMessage (json, connId = 0) {
     switch (json.type) {
       case 'trackAdded':
         break
       case 'trackRemoved':
-        this._onTrackRemoved(json.trackIndex)
+        this._onTrackRemoved(json.trackIndex, connId)
         break
       case 'participantMapping':
-        this._onParticipantMapping(json.trackIndex, json.participant)
+        this._onParticipantMapping(json.trackIndex, json.participant, connId)
         break
       case 'speakerChanged':
         // Teams native diarization (page-polled). SFU speaker changes come from
@@ -312,8 +319,12 @@ class Bot extends EventEmitter {
     }
   }
 
-  _onParticipantMapping (trackIndex, participant) {
-    this.trackParticipants.set(trackIndex, participant)
+  _onParticipantMapping (trackIndex, participant, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    this.trackParticipants.set(key, participant)
+    // Teams maps participants, not tracks (trackIndex is always 0): only SFU
+    // mappings attribute a track's audio.
+    if (this.isSfu && this.audioMixer && !this.removedTracks.has(key)) this.audioMixer.setTrackParticipant(key, participant)
     if (!this.participants.has(participant.id)) {
       this.participants.set(participant.id, participant)
       logger.info(`Bot[${this.contextId}]: participant joined: ${participant.name} (${this.participants.size} present)`)
@@ -327,14 +338,14 @@ class Bot extends EventEmitter {
     this.hasSeenParticipant = true
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
-    this._flushEarlyAudio(trackIndex, participant)
   }
 
-  _onTrackRemoved (trackIndex) {
-    const removed = this.trackParticipants.get(trackIndex)
-    this.trackParticipants.delete(trackIndex)
-    // always clean the early-audio buffer for a removed track, mapped or not.
-    this._dropEarlyAudio(trackIndex)
+  _onTrackRemoved (trackIndex, connId = 0) {
+    const key = trackKey(connId, trackIndex)
+    const removed = this.trackParticipants.get(key)
+    this.trackParticipants.delete(key)
+    this.removedTracks.set(key, 0)
+    if (this.audioMixer) this.audioMixer.removeTrack(key)
     if (!this.isSfu || !removed) return
     // SFU: a participant is gone once they have no remaining mapped tracks.
     const stillPresent = [...this.trackParticipants.values()].some(p => p.id === removed.id)
@@ -432,12 +443,28 @@ class Bot extends EventEmitter {
     this.audioSilenceWatchdog = null
   }
 
-  // The LocalAudioServer reports the in-page loopback socket closed. Not fatal on
+  // The LocalAudioServer reports an in-page loopback socket closed. Not fatal on
   // its own (the interceptor retries) but a strong signal the capture pipe is in
   // trouble; the audio-silence watchdog declares it dead if no audio resumes.
-  notifyAudioPipeClosed () {
+  // The tracks that streamed on it are forgotten: a document that reconnects
+  // streams them on the new connection (and replays their participant mappings),
+  // one that is gone (navigated away, removed frame) never sends for them again.
+  // Participants are left alone, their presence comes from mappings and leaves.
+  notifyAudioPipeClosed (connId = 0) {
     if (this.disposed) return
-    logger.debug(`Bot[${this.contextId}]: loopback audio connection closed (in-page interceptor will attempt to reconnect)`)
+    logger.debug(`Bot[${this.contextId}]: loopback audio connection ${connId} closed (in-page interceptor will attempt to reconnect)`)
+    const prefix = trackKey(connId, '')
+    for (const key of [...this.trackParticipants.keys()]) {
+      if (key.startsWith(prefix)) this.trackParticipants.delete(key)
+    }
+    if (this.audioMixer) {
+      for (const key of this.audioMixer.trackIds()) {
+        if (key.startsWith(prefix)) this.audioMixer.removeTrack(key)
+      }
+    }
+    for (const key of [...this.removedTracks.keys()]) {
+      if (key.startsWith(prefix)) this.removedTracks.delete(key)
+    }
   }
 
   getParticipantsList () {
@@ -515,9 +542,7 @@ class Bot extends EventEmitter {
     this._cancelJoinWatchdog()
     this._cancelEmptyMeetingTimer()
     this._cancelAudioSilenceWatchdog() // no timer outlives the bot
-    this._cancelEarlyAudioReaper()
-    this.earlyAudio.clear()
-    this.earlyAudioFirstSeen.clear()
+    this._cancelAudioHealthLog()
     if (this.audioMixer) { this.audioMixer.stop(); this.audioMixer = null }
     // Best-effort graceful leave before tearing the context down (skip if the page
     // is already gone). Guarded so a throwing leave-rule cannot skip the

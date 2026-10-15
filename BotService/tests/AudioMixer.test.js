@@ -3,689 +3,557 @@ const { describe, it, beforeEach, afterEach } = require('mocha')
 const AudioMixer = require('../bot/AudioMixer')
 const { logger } = require('live-srt-lib')
 
-const frame = (value, n = 320) => Buffer.from(new Int16Array(n).fill(value).buffer)
+const { SAMPLES_PER_FRAME } = AudioMixer // 320
 
-// Build a Buffer of n samples from an array of values (rest filled with 0).
-const samplesBuf = (values, n = values.length) => {
-  const arr = new Int16Array(n)
-  for (let i = 0; i < values.length && i < n; i++) arr[i] = values[i]
-  return Buffer.from(arr.buffer)
+const frame = (value, n = SAMPLES_PER_FRAME) => Buffer.from(new Int16Array(n).fill(value).buffer)
+const pcm = (values) => Buffer.from(Int16Array.from(values).buffer)
+const samplesOf = (buf) => Array.from(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2))
+
+// Record what a mixer emits.
+function record (mixer) {
+  const out = { frames: [], speakers: [] }
+  mixer.on('audio', (buf) => out.frames.push(buf))
+  mixer.on('speakerChanged', (ev) => out.speakers.push(ev.speaker ? ev.speaker.id : null))
+  return out
+}
+
+// Open tracks (an empty delivery makes a track flowing without giving it audio),
+// attributed to the participant of the same name, so that the following feed()
+// calls mix them together.
+function open (mixer, ids, attribute = true) {
+  for (const id of ids) {
+    if (attribute) mixer.setTrackParticipant(id, { id, name: id })
+    mixer.addAudio(id, Buffer.alloc(0))
+  }
+}
+// One delivery per track, in order: { trackId: Buffer }.
+function feed (mixer, deliveries) {
+  for (const [id, buf] of Object.entries(deliveries)) mixer.addAudio(id, buf)
 }
 
 describe('AudioMixer', () => {
-  let mixer
-  beforeEach(() => { mixer = new AudioMixer() })
+  let mixer, out
+  beforeEach(() => { mixer = new AudioMixer(); out = record(mixer) })
   afterEach(() => { mixer.stop() })
 
-  describe('#addAudio()', () => {
-    it('registers a participant on first audio', () => {
-      mixer.addAudio('p1', Buffer.from(new Int16Array([1000, 2000, 3000]).buffer), 0)
-      assert.equal(mixer.hasParticipant('p1'), true)
+  describe('single track (pure pass-through)', () => {
+    it('emits a 640-byte (20 ms) frame once a frame is buffered, nothing before', () => {
+      mixer.addAudio('t', frame(1000, 319))
+      assert.equal(out.frames.length, 0)
+      mixer.addAudio('t', frame(1000, 1))
+      assert.equal(out.frames.length, 1)
+      assert.equal(out.frames[0].length, 640)
     })
 
-    it('tracks multiple participants', () => {
-      mixer.addAudio('p1', frame(1000, 2), 0)
-      mixer.addAudio('p2', frame(500, 2), 0)
-      assert.deepEqual(mixer.getParticipants().map(p => p.id).sort(), ['p1', 'p2'])
+    it('outputs exactly the input samples, whatever the delivery sizes (bit-identical)', () => {
+      let seed = 1
+      const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+      const input = Int16Array.from({ length: 16000 * 10 }, () => Math.round((rnd() * 2 - 1) * 32767))
+      for (let i = 0; i < input.length;) {
+        const n = Math.min(1 + Math.floor(rnd() * 2000), input.length - i)
+        mixer.addAudio('t', pcm(input.subarray(i, i + n)))
+        i += n
+      }
+      const output = out.frames.flatMap(samplesOf)
+      assert.equal(output.length, Math.floor(input.length / SAMPLES_PER_FRAME) * SAMPLES_PER_FRAME)
+      assert.deepEqual(output, Array.from(input.subarray(0, output.length)))
+    })
+
+    it('emits nothing while no track delivers (no continuous silence)', () => {
+      mixer.addAudio('t', frame(1000))
+      assert.equal(out.frames.length, 1)
+      mixer.removeTrack('missing')
+      assert.equal(out.frames.length, 1)
+    })
+
+    it('emits a fresh Buffer per frame (not reused)', () => {
+      mixer.addAudio('t', frame(1000))
+      mixer.addAudio('t', frame(2000))
+      assert.notStrictEqual(out.frames[0], out.frames[1])
+      assert.equal(samplesOf(out.frames[0])[0], 1000)
+      assert.equal(samplesOf(out.frames[1])[0], 2000)
     })
 
     it('copies an unaligned (odd byteOffset) buffer without throwing', () => {
-      const backing = Buffer.alloc(6)
-      backing.writeInt16LE(1234, 0)
-      const unaligned = backing.subarray(1) // odd byteOffset
-      assert.doesNotThrow(() => mixer.addAudio('p1', unaligned, 0))
+      const backing = Buffer.alloc(SAMPLES_PER_FRAME * 2 + 1)
+      backing.writeInt16LE(1234, 1)
+      mixer.addAudio('t', backing.subarray(1))
+      assert.equal(samplesOf(out.frames[0])[0], 1234)
     })
   })
 
-  describe('#removeParticipant()', () => {
-    it('forgets the participant', () => {
-      mixer.addAudio('p1', frame(1000, 3), 0)
-      mixer.removeParticipant('p1')
-      assert.equal(mixer.hasParticipant('p1'), false)
+  // A live Teams call streamed two tracks at once (the one Teams replaced on
+  // admission kept rendering zeros next to the real one) and they were forwarded
+  // one after the other: 2x real time, the voice slowed down and chopped by
+  // 3-8 ms runs of zeros.
+  describe('several tracks are summed, never concatenated', () => {
+    it('sums simultaneous tracks sample by sample into one stream at the input rate', () => {
+      open(mixer, ['a', 'b'], false)
+      for (let k = 0; k < 50; k++) feed(mixer, { a: frame(1000, 128), b: frame(500, 128) })
+      const output = out.frames.flatMap(samplesOf)
+      assert.equal(output.length, Math.floor(50 * 128 / SAMPLES_PER_FRAME) * SAMPLES_PER_FRAME, 'one track worth of samples, not two')
+      assert.ok(output.every((v) => v === 1500))
     })
 
-    it('clears the current speaker if it was the removed participant', () => {
-      mixer.addAudio('p1', frame(5000), 0)
-      mixer.mixAndEmit()
-      assert.equal(mixer.getCurrentSpeaker().id, 'p1')
-      mixer.removeParticipant('p1')
-      assert.equal(mixer.getCurrentSpeaker(), null)
+    it('a voice next to a track of digital zeros comes out unchanged', () => {
+      open(mixer, ['zeros', 'voice'], false)
+      const voice = Int16Array.from({ length: 128 * 30 }, (_, i) => Math.round(8000 * Math.sin(i / 7)))
+      for (let k = 0; k < 30; k++) feed(mixer, { zeros: frame(0, 128), voice: pcm(voice.subarray(k * 128, (k + 1) * 128)) })
+      const output = out.frames.flatMap(samplesOf)
+      assert.deepEqual(output, Array.from(voice.subarray(0, output.length)))
+    })
+
+    it('clips the sum at +32767 and -32768', () => {
+      open(mixer, ['a', 'b'], false)
+      feed(mixer, { a: frame(30000), b: frame(20000) })
+      feed(mixer, { a: frame(-30000), b: frame(-20000) })
+      assert.equal(samplesOf(out.frames[0])[0], 32767)
+      assert.equal(samplesOf(out.frames[1])[0], -32768)
+    })
+
+    it('waits for a lagging track rather than emitting a frame without it', () => {
+      open(mixer, ['a', 'b'], false)
+      feed(mixer, { a: frame(1000, 3 * SAMPLES_PER_FRAME) })
+      assert.equal(out.frames.length, 0, 'held while b, still flowing, has no frame yet')
+      feed(mixer, { b: frame(1, 3 * SAMPLES_PER_FRAME) })
+      assert.equal(out.frames.length, 3)
+      assert.ok(out.frames.flatMap(samplesOf).every((v) => v === 1001))
+    })
+
+    it('lines a track that starts mid-stream up with the newest samples of the others', () => {
+      // a holds 200 samples when b delivers its first 128: those match a's last
+      // 128, so b starts after 72 samples of silence.
+      mixer.addAudio('a', pcm(Array.from({ length: 200 }, (_, i) => i)))
+      mixer.addAudio('b', frame(1000, 128))
+      mixer.addAudio('a', pcm(Array.from({ length: 120 }, (_, i) => 200 + i)))
+      mixer.addAudio('b', frame(1000, 120))
+      const output = out.frames.flatMap(samplesOf)
+      assert.equal(output.length, SAMPLES_PER_FRAME)
+      assert.deepEqual(output.slice(0, 72), Array.from({ length: 72 }, (_, i) => i), 'b silent before it started')
+      assert.deepEqual(output.slice(72), Array.from({ length: 248 }, (_, i) => 72 + i + 1000), 'then a + b aligned')
+    })
+
+    it('stops waiting for a track that fell maxLag behind, mixes its tail, and lines it up again on resume', () => {
+      const m = new AudioMixer({ maxLagMs: 40 }) // 640 samples
+      const o = record(m)
+      open(m, ['a', 'b'], false)
+      feed(m, { a: frame(1000, 100), b: frame(1, 100) })
+      // b stops delivering; a goes on.
+      m.addAudio('a', frame(1000, SAMPLES_PER_FRAME + 640 - 101))
+      assert.equal(o.frames.length, 0, 'still waiting: a is not yet maxLag ahead')
+      m.addAudio('a', frame(1000, 1))
+      assert.equal(o.frames.length, 3, 'a reached maxLag ahead: everything a holds is emitted')
+      const first = samplesOf(o.frames[0])
+      assert.deepEqual(first.slice(0, 100), new Array(100).fill(1001), "b's tail mixed where it belongs")
+      assert.deepEqual(first.slice(100), new Array(220).fill(1000), 'then a alone')
+      assert.equal(m.getStats().tracks.find((t) => t.id === 'b').stalls, 1)
+      assert.equal(m.getStats().tracks.find((t) => t.id === 'b').active, false)
+      assert.equal(m.getStats().stalls, 1, 'counted in the total too')
+      // a keeps flowing without waiting for b.
+      m.addAudio('a', frame(1000, SAMPLES_PER_FRAME))
+      assert.equal(o.frames.length, 4)
+      // b resumes: lined up with a's newest samples, waited for again.
+      m.addAudio('b', frame(1, 128))
+      m.addAudio('a', frame(1000, SAMPLES_PER_FRAME))
+      assert.equal(o.frames.length, 4, 'b is waited for again')
+      m.addAudio('b', frame(1, SAMPLES_PER_FRAME))
+      assert.equal(o.frames.length, 5)
+      m.stop()
+    })
+
+    // See _drain: an early track is not realigned below maxLag (it would take
+    // dropping its audio), and is realigned without loss beyond.
+    it('an early track (backlog on top of its flow) stays offset by at most maxLag, and loses nothing', () => {
+      const q = (v) => frame(v, 128)
+      for (const [backlogMs, offset] of [[100, 1600], [250, 4000], [1000, 0], [3000, 0]]) {
+        const m = new AudioMixer()
+        open(m, ['x', 'y'], false)
+        for (let i = 0; i < 50; i++) { m.addAudio('x', q(1)); m.addAudio('y', q(2)) }
+        m.addAudio('x', frame(1, backlogMs * 16))
+        for (let i = 0; i < 1000; i++) { m.addAudio('x', q(1)); m.addAudio('y', q(2)) }
+        const x = m.tracks.get('x')
+        const y = m.tracks.get('y')
+        assert.equal(x.samplesAvailable - y.samplesAvailable, offset, `${backlogMs} ms backlog`)
+        assert.ok(offset <= m.maxLagSamples)
+        assert.equal(m.getStats().droppedSamples, 0)
+        assert.equal(m.getStats().outputSamples + x.samplesAvailable, x.inputSamples, `${backlogMs} ms: all of x mixed or pending`)
+        m.stop()
+      }
+    })
+
+    it('a removed track is no longer waited for, and its tail goes with it', () => {
+      open(mixer, ['a', 'b'], false)
+      feed(mixer, { a: frame(1000, 2 * SAMPLES_PER_FRAME), b: frame(1, 100) })
+      assert.equal(out.frames.length, 0)
+      mixer.removeTrack('b')
+      assert.equal(out.frames.length, 2)
+      assert.ok(out.frames.flatMap(samplesOf).every((v) => v === 1000))
+      assert.equal(mixer.hasTrack('b'), false)
     })
   })
 
-  describe('#start()/#stop()', () => {
-    it('is idempotent', () => {
-      mixer.start()
-      const handle = mixer.mixInterval
-      mixer.start()
-      assert.equal(mixer.mixInterval, handle)
-      mixer.stop()
-      assert.equal(mixer.mixInterval, null)
+  // Frames are driven by the input, not by a wall-clock timer: there is nothing
+  // to drift against. Simulated hours of render-ordered deliveries (8 ms quanta at
+  // 16 kHz, in bursts) check that the output carries exactly the input, without a
+  // drop or a gap, with a latency that stays bounded.
+  describe('clocking: one hour of input', function () {
+    this.timeout(60000)
+
+    // Sample values of the two simulated tracks (small enough never to clip).
+    const valueA = (n) => (n % 2000) - 1000
+    const valueB = (n) => ((n * 7) % 600) - 300
+    const QUANTUM = 128
+    // Deepest track buffer right now, i.e. the mixer's latency in samples.
+    const buffered = (m) => {
+      let max = 0
+      for (const t of m.tracks.values()) max = Math.max(max, t.samplesAvailable)
+      return max
+    }
+
+    function deliver (m, id, value, from, n, scratch) {
+      for (let i = 0; i < n; i++) scratch.writeInt16LE(value(from + i), i * 2)
+      m.addAudio(id, scratch.subarray(0, n * 2))
+      return buffered(m)
+    }
+
+    for (const rate of [15840, 16160]) {
+      it(`two tracks of one page, input clock ${rate === 16160 ? '+' : '-'}1% off nominal, bursty, reordered within a quantum: exact sum, nothing dropped, bounded latency`, () => {
+        const m = new AudioMixer()
+        const quanta = Math.round(3600 * rate / QUANTUM) // one hour of input at that rate
+        const scratch = Buffer.alloc(QUANTUM * 2 * 4)
+        let seed = rate
+        const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+        let emitted = 0
+        let mismatches = 0
+        m.on('audio', (buf) => {
+          for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
+            const n = emitted + i
+            if (buf.readInt16LE(i * 2) !== valueA(n) + valueB(n)) mismatches++
+          }
+          emitted += SAMPLES_PER_FRAME
+        })
+        let maxBuffered = 0
+        let wallSeconds = 0
+        open(m, ['a', 'b'], false) // both captured from the start
+        // Bursts of 1-30 quanta (a main thread that was busy), each track's quanta in
+        // render order, the two tracks' order within a quantum at random, and up to
+        // 4 quanta of one track ahead of the other at times (jitter).
+        for (let q = 0; q < quanta;) {
+          const burst = Math.min(1 + Math.floor(rnd() * 30), quanta - q)
+          for (let k = 0; k < burst;) {
+            const ahead = Math.min(1 + Math.floor(rnd() * 4), burst - k)
+            const [first, second] = rnd() < 0.5 ? [['a', valueA], ['b', valueB]] : [['b', valueB], ['a', valueA]]
+            maxBuffered = Math.max(maxBuffered, deliver(m, first[0], first[1], (q + k) * QUANTUM, ahead * QUANTUM, scratch))
+            maxBuffered = Math.max(maxBuffered, deliver(m, second[0], second[1], (q + k) * QUANTUM, ahead * QUANTUM, scratch))
+            k += ahead
+          }
+          q += burst
+          wallSeconds += burst * QUANTUM / rate
+        }
+        const stats = m.getStats()
+        const input = quanta * QUANTUM
+        assert.equal(mismatches, 0, 'every output sample is a + b at the same position')
+        assert.equal(stats.outputSamples, Math.floor(input / SAMPLES_PER_FRAME) * SAMPLES_PER_FRAME, 'all the input, nothing more')
+        assert.ok(stats.tracks.every((t) => t.inputSamples === input && t.droppedSamples === 0 && t.stalls === 0))
+        // Latency: under a frame plus the deliveries one track can be ahead.
+        assert.ok(maxBuffered < SAMPLES_PER_FRAME + 4 * QUANTUM, `max buffered ${maxBuffered} samples`)
+        // The output follows the input clock, not a nominal one.
+        assert.ok(Math.abs(stats.outputSamples / wallSeconds - rate) < 1, `${stats.outputSamples / wallSeconds} samples/s`)
+        m.stop()
+      })
+    }
+
+    it('two sources 1% apart (one AudioContext cannot produce that): bounded latency, nothing dropped', () => {
+      const m = new AudioMixer()
+      const rates = { a: 16160, b: 15840 }
+      const next = { a: 0, b: 0 } // time of each track's next delivery
+      const sent = { a: 0, b: 0 }
+      let maxBuffered = 0
+      const quantumOf = { a: frame(100, QUANTUM), b: frame(1, QUANTUM) }
+      while (Math.min(next.a, next.b) < 3600) {
+        const id = next.a <= next.b ? 'a' : 'b'
+        m.addAudio(id, quantumOf[id])
+        sent[id] += QUANTUM
+        next[id] += QUANTUM / rates[id]
+        maxBuffered = Math.max(maxBuffered, buffered(m))
+      }
+      const stats = m.getStats()
+      const a = stats.tracks.find((t) => t.id === 'a')
+      const b = stats.tracks.find((t) => t.id === 'b')
+      assert.equal(a.droppedSamples + b.droppedSamples, 0)
+      assert.equal(a.stalls, 0, 'the faster track is never cut')
+      assert.ok(b.stalls > 0, 'the slower one is caught up with now and then')
+      assert.ok(maxBuffered <= SAMPLES_PER_FRAME + m.maxLagSamples + QUANTUM, `max buffered ${maxBuffered} samples`)
+      assert.ok(Math.abs(stats.outputSamples - sent.a) < SAMPLES_PER_FRAME + m.maxLagSamples, 'the output follows the faster track')
+      m.stop()
     })
   })
 
-  describe('#mixAndEmit()', () => {
-    it('emits a 640-byte (320-sample) S16LE frame', (done) => {
-      mixer.addAudio('p1', frame(1000), 0)
-      mixer.on('audio', (buf) => { assert.equal(buf.length, 640); done() })
-      mixer.mixAndEmit()
+  describe('speaker detection (SFU tracks attributed to participants)', () => {
+    it('emits speakerChanged for the highest-energy participant above the threshold', () => {
+      open(mixer, ['p1', 'p2'])
+      feed(mixer, { p1: frame(1000), p2: frame(5000) })
+      assert.deepEqual(out.speakers, ['p2'])
     })
 
-    it('sums participants additively', (done) => {
-      mixer.addAudio('p1', frame(1000), 0)
-      mixer.addAudio('p2', frame(500), 0)
-      mixer.on('audio', (buf) => {
-        const m = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
-        assert.equal(m[0], 1500)
-        done()
-      })
-      mixer.mixAndEmit()
+    it('does not emit speakerChanged below the energy threshold', () => {
+      open(mixer, ['quiet'])
+      feed(mixer, { quiet: frame(100) })
+      assert.equal(out.frames.length, 1)
+      assert.deepEqual(out.speakers, [])
     })
 
-    it('clips the mix at +32767', (done) => {
-      mixer.addAudio('p1', frame(30000), 0)
-      mixer.addAudio('p2', frame(20000), 0)
-      mixer.on('audio', (buf) => {
-        const m = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
-        assert.equal(m[0], 32767)
-        done()
-      })
-      mixer.mixAndEmit()
+    it('treats energy exactly AT the threshold as silence (strict >), one above as speech', () => {
+      open(mixer, ['edge'])
+      feed(mixer, { edge: frame(500) }) // RMS == 500, NOT > 500
+      assert.deepEqual(out.speakers, [])
+      feed(mixer, { edge: frame(501) })
+      assert.deepEqual(out.speakers, ['edge'])
     })
 
-    it('emits speakerChanged for the highest-energy speaker above threshold', (done) => {
-      mixer.addAudio('p1', frame(1000), 0)
-      mixer.addAudio('p2', frame(5000), 0)
-      mixer.on('speakerChanged', (ev) => {
-        assert.equal(ev.type, 'speakerChanged')
-        assert.equal(ev.speaker.id, 'p2')
-        assert.ok(ev.position >= 0)
-        done()
-      })
-      mixer.mixAndEmit()
+    it('computes energy from squares so a loud all-negative frame still becomes speaker', () => {
+      open(mixer, ['neg'])
+      feed(mixer, { neg: frame(-5000) })
+      assert.deepEqual(out.speakers, ['neg'])
     })
 
-    it('does not emit speakerChanged below the energy threshold', (done) => {
-      mixer.addAudio('quiet', frame(100), 0)
-      let emitted = false
-      mixer.on('speakerChanged', () => { emitted = true })
-      mixer.on('audio', () => setTimeout(() => { assert.equal(emitted, false); done() }, 5))
-      mixer.mixAndEmit()
+    it('breaks an exact energy tie in favour of the first-added track', () => {
+      open(mixer, ['first', 'second'])
+      feed(mixer, { first: frame(5000), second: frame(5000) })
+      assert.deepEqual(out.speakers, ['first'])
     })
 
-    it('does not emit an audio frame when no participant contributed (silence skip)', () => {
-      let frames = 0
-      mixer.on('audio', () => { frames++ })
-      mixer.mixAndEmit() // no participants at all
-      mixer.addAudio('p1', frame(1000), 0)
-      mixer.mixAndEmit() // p1 has a full frame -> emits
-      mixer.mixAndEmit() // p1 drained, nothing new -> skipped
-      assert.equal(frames, 1)
+    it('lets a strictly louder later track take over', () => {
+      open(mixer, ['a', 'b'])
+      feed(mixer, { a: frame(3000), b: frame(6000) })
+      assert.deepEqual(out.speakers, ['b'])
     })
 
     it('emits a single transition while the same speaker keeps talking', () => {
-      mixer.addAudio('p1', frame(5000), 0)
-      let count = 0
-      mixer.on('speakerChanged', () => { count++ })
-      mixer.mixAndEmit()
-      mixer.addAudio('p1', frame(5000), 0)
-      mixer.mixAndEmit()
-      assert.equal(count, 1)
+      open(mixer, ['p1'])
+      feed(mixer, { p1: frame(5000) })
+      feed(mixer, { p1: frame(5000) })
+      assert.deepEqual(out.speakers, ['p1'])
     })
 
-    it('treats energy exactly AT the threshold as silence (strict >)', () => {
-      // A constant-amplitude frame has RMS == |amplitude|. At exactly 500 the
-      // `energy > energyThreshold` guard is false, so nobody becomes dominant.
-      const m = new AudioMixer({ energyThreshold: 500 })
-      m.addAudio('edge', frame(500), 0) // RMS == 500, NOT > 500
-      let changed = false
-      m.on('speakerChanged', () => { changed = true })
-      m.mixAndEmit()
-      assert.equal(changed, false)
-      assert.equal(m.getCurrentSpeaker(), null)
-      m.stop()
+    it("a participant's energy is that of all their tracks together (mic + screen share)", () => {
+      mixer.setTrackParticipant('mic', { id: 'u1', name: 'Alice' })
+      mixer.setTrackParticipant('screen', { id: 'u1', name: 'Alice' })
+      mixer.setTrackParticipant('other', { id: 'u2', name: 'Bob' })
+      open(mixer, ['mic', 'screen', 'other'], false)
+      // 300 + 300 in phase = RMS 600 > 500, while Bob's 450 stays below.
+      feed(mixer, { mic: frame(300), screen: frame(300), other: frame(450) })
+      assert.deepEqual(out.speakers, ['u1'])
+      assert.equal(mixer.getCurrentSpeaker().name, 'Alice')
     })
 
-    it('treats energy one above the threshold as speech', () => {
-      const m = new AudioMixer({ energyThreshold: 500 })
-      m.addAudio('edge', frame(501), 0) // RMS == 501, > 500
-      let speaker = null
-      m.on('speakerChanged', (ev) => { speaker = ev.speaker })
-      m.mixAndEmit()
-      assert.ok(speaker && speaker.id === 'edge')
-      m.stop()
+    it('mixes unattributed tracks but never makes them the speaker', () => {
+      open(mixer, ['mapped'])
+      open(mixer, ['unmapped'], false)
+      feed(mixer, { mapped: frame(100), unmapped: frame(9000) })
+      assert.equal(samplesOf(out.frames[0])[0], 9100)
+      assert.deepEqual(out.speakers, [])
     })
 
-    it('breaks an exact energy tie in favour of the first-added participant', () => {
-      // Both frames carry identical RMS; the dominant-speaker scan uses a strict
-      // `energy > maxEnergy`, so the participant iterated first (insertion order
-      // in the Map) wins and the equal-energy latecomer never displaces them.
-      mixer.addAudio('first', frame(5000), 0)
-      mixer.addAudio('second', frame(5000), 0)
-      let speaker = null
-      mixer.on('speakerChanged', (ev) => { speaker = ev.speaker })
-      mixer.mixAndEmit()
-      assert.equal(speaker.id, 'first')
+    it('attribution can come before any audio and be renamed', () => {
+      mixer.setTrackParticipant('t', { id: 'u1', name: 'Old' })
+      mixer.setTrackParticipant('t', { id: 'u1', name: 'New' })
+      feed(mixer, { t: frame(5000) })
+      assert.equal(mixer.getCurrentSpeaker().name, 'New')
     })
 
-    it('does not flip speaker on a marginally-louder-then-equal tie within a frame', () => {
-      // 'a' added first at a higher energy; 'b' added second exactly equal to 'a'
-      // would not win (strict >), and a strictly louder 'b' would. Verify the
-      // strictly-louder later participant DOES take over (sanity vs the tie case).
-      mixer.addAudio('a', frame(3000), 0)
-      mixer.addAudio('b', frame(6000), 0)
-      let speaker = null
-      mixer.on('speakerChanged', (ev) => { speaker = ev.speaker })
-      mixer.mixAndEmit()
-      assert.equal(speaker.id, 'b')
-    })
-  })
-
-  describe('ring-buffer wraparound', () => {
-    it('mixes the correct samples after the write pointer wraps past the end', () => {
-      // 640-sample ring. Fill it, drain one frame, then write another frame: the
-      // write pointer wraps to 0 and the second frame must be returned intact.
-      const m = new AudioMixer({ bufferFrames: 2 })
-      m.addAudio('p1', frame(1111, 640), 0) // fills the ring, writePos -> 0 (wrapped)
-      const first = []
-      m.on('audio', (buf) => { first.push(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)[0]) })
-      m.mixAndEmit() // drains frame #1 (value 1111), readPos -> 320
-      m.addAudio('p1', frame(2222, 320), 0) // written at writePos 0..319 (post-wrap region)
-      m.mixAndEmit() // drains frame #2 (value 1111, the remaining tail) ...
-      m.mixAndEmit() // ... then the wrapped frame (value 2222)
-      assert.deepEqual(first, [1111, 1111, 2222])
-      assert.equal(m.getDroppedStats()[0].droppedSamples, 0)
-      m.stop()
+    it('carries the position of the transition (20 ms per mixed frame)', () => {
+      open(mixer, ['p1'])
+      const events = []
+      mixer.on('speakerChanged', (ev) => events.push(ev))
+      feed(mixer, { p1: frame(100) })
+      feed(mixer, { p1: frame(100) })
+      feed(mixer, { p1: frame(5000) })
+      assert.deepEqual(events, [{ type: 'speakerChanged', position: 40, speaker: { id: 'p1', name: 'p1' } }])
+      assert.equal(mixer.getPositionMs(), 60)
     })
 
-    it('keeps the freshest audio (drops oldest) when both pointers wrap on overflow', () => {
-      // Ring holds 2 frames. Write 3 frames back-to-back without draining: the
-      // first frame is overwritten, so the next two mixed frames are #2 and #3.
-      const m = new AudioMixer({ bufferFrames: 2 })
-      m.addAudio('p1', frame(100, 320), 0) // frame #1 (will be dropped)
-      m.addAudio('p1', frame(200, 320), 0) // frame #2
-      m.addAudio('p1', frame(300, 320), 0) // frame #3 -> overflow, drops 320 oldest samples
-      const vals = []
-      m.on('audio', (buf) => { vals.push(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)[0]) })
-      m.mixAndEmit()
-      m.mixAndEmit()
-      assert.deepEqual(vals, [200, 300])
-      assert.equal(m.getDroppedStats()[0].droppedSamples, 320)
-      m.stop()
+    it('removeParticipant clears their attribution and the current speaker, not their audio', () => {
+      open(mixer, ['p1', 'p2'])
+      feed(mixer, { p1: frame(5000), p2: frame(10) })
+      assert.equal(mixer.getCurrentSpeaker().id, 'p1')
+      mixer.removeParticipant('p1')
+      assert.equal(mixer.getCurrentSpeaker(), null)
+      feed(mixer, { p1: frame(5000), p2: frame(10) })
+      assert.equal(samplesOf(out.frames[1])[0], 5010, 'still mixed')
+      assert.deepEqual(out.speakers, ['p1'], 'but no longer attributed')
+      assert.equal(mixer.getStats().tracks.find((t) => t.id === 'p1').participantId, null)
+    })
+
+    it('removeParticipant of someone else keeps the current speaker', () => {
+      open(mixer, ['loud', 'other'])
+      feed(mixer, { loud: frame(5000), other: frame(10) })
+      mixer.removeParticipant('other')
+      assert.equal(mixer.getCurrentSpeaker().id, 'loud')
+      assert.doesNotThrow(() => mixer.removeParticipant('never-existed'))
     })
   })
 
   describe('silence/grace transitions', () => {
     it('emits silence only after the grace period, then re-attributes on the next loud frame', () => {
-      // Two participants so the silence (null-speaker) transition is allowed.
-      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 40 }) // 2 ticks of grace
-      const events = []
-      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
-      m.addAudio('loud', frame(5000), 0)
-      m.addAudio('quiet', frame(10), 0)
-      m.mixAndEmit() // 'loud' becomes dominant -> ['loud']
-      // Now everyone silent: grace is 40ms == 2 ticks; silence emitted on the 2nd.
-      m.addAudio('loud', frame(10), 0); m.addAudio('quiet', frame(10), 0)
-      m.mixAndEmit() // silence tick 1 (20ms) -> no transition yet
-      m.addAudio('loud', frame(10), 0); m.addAudio('quiet', frame(10), 0)
-      m.mixAndEmit() // silence tick 2 (40ms >= grace) -> null transition
-      assert.deepEqual(events, ['loud', null])
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 40 }) // 2 frames of grace
+      const o = record(m)
+      open(m, ['loud', 'quiet'])
+      feed(m, { loud: frame(5000), quiet: frame(10) })
+      feed(m, { loud: frame(10), quiet: frame(10) }) // 20 ms of silence: held
+      assert.deepEqual(o.speakers, ['loud'])
+      feed(m, { loud: frame(10), quiet: frame(10) }) // 40 ms >= grace: null
+      assert.deepEqual(o.speakers, ['loud', null])
       assert.equal(m.getCurrentSpeaker(), null)
-      // A fresh loud frame re-attributes the speaker.
-      m.addAudio('loud', frame(5000), 0); m.addAudio('quiet', frame(10), 0)
-      m.mixAndEmit()
-      assert.deepEqual(events, ['loud', null, 'loud'])
+      feed(m, { loud: frame(5000), quiet: frame(10) })
+      assert.deepEqual(o.speakers, ['loud', null, 'loud'])
       m.stop()
     })
 
     it('never emits a silence transition for a lone participant (pauses are not boundaries)', () => {
       const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 })
-      const events = []
-      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
-      m.addAudio('solo', frame(5000), 0)
-      m.mixAndEmit() // -> ['solo']
-      // Long silence from the only participant: size > 1 guard blocks the null event.
-      for (let i = 0; i < 10; i++) { m.addAudio('solo', frame(10), 0); m.mixAndEmit() }
-      assert.deepEqual(events, ['solo'])
-      assert.equal(m.getCurrentSpeaker().id, 'solo')
+      const o = record(m)
+      open(m, ['solo'])
+      feed(m, { solo: frame(5000) })
+      for (let i = 0; i < 10; i++) feed(m, { solo: frame(10) })
+      assert.deepEqual(o.speakers, ['solo'])
+      m.stop()
+    })
+
+    it('counts participants, not tracks: one participant with two tracks is still alone', () => {
+      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 })
+      const o = record(m)
+      m.setTrackParticipant('mic', { id: 'u1' })
+      m.setTrackParticipant('screen', { id: 'u1' })
+      open(m, ['mic', 'screen'], false)
+      feed(m, { mic: frame(5000), screen: frame(10) })
+      for (let i = 0; i < 5; i++) feed(m, { mic: frame(10), screen: frame(10) })
+      assert.deepEqual(o.speakers, ['u1'])
       m.stop()
     })
 
     it('resets the silence accumulator so an intra-speech pause never crosses the grace', () => {
-      // Speak, pause one tick (< grace), speak again: the silence counter resets
-      // on the loud frame, so no null transition is ever emitted.
       const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 40 })
-      const events = []
-      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
-      m.addAudio('a', frame(5000), 0); m.addAudio('b', frame(10), 0)
-      m.mixAndEmit() // ['a']
-      m.addAudio('a', frame(10), 0); m.addAudio('b', frame(10), 0)
-      m.mixAndEmit() // 20ms silence (< 40 grace) -> no transition
-      m.addAudio('a', frame(5000), 0); m.addAudio('b', frame(10), 0)
-      m.mixAndEmit() // 'a' loud again, same speaker -> no new transition, counter reset
-      assert.deepEqual(events, ['a'])
-      m.stop()
-    })
-  })
-
-  describe('#getDroppedStats()', () => {
-    it('reports zero drops for a participant within the ring capacity', () => {
-      mixer.addAudio('p1', frame(1000, 320), 0)
-      const stats = mixer.getDroppedStats()
-      assert.equal(stats.length, 1)
-      assert.equal(stats[0].id, 'p1')
-      assert.equal(stats[0].droppedSamples, 0)
-      assert.equal(stats[0].droppedFrames, 0)
-    })
-
-    it('counts samples overwritten on ring-buffer overflow', () => {
-      // bufferSize = 320 samples/frame * 160 frames = 51200 samples.
-      // Write 51200 + 1000 samples without draining -> 1000 dropped.
-      const overflow = new AudioMixer({ bufferFrames: 160 })
-      const big = Buffer.from(new Int16Array(51200 + 1000).fill(1000).buffer)
-      overflow.addAudio('p1', big, 0)
-      const stats = overflow.getDroppedStats()
-      assert.equal(stats[0].droppedSamples, 1000)
-      assert.equal(stats[0].droppedFrames, Math.floor(1000 / 320))
-      overflow.stop()
-    })
-
-    it('does not count drops once frames are drained by the mix tick', () => {
-      // Fill exactly to capacity, drain one frame, then add one frame: no overflow.
-      const exact = new AudioMixer({ bufferFrames: 2 }) // 640-sample ring
-      exact.addAudio('p1', frame(1000, 640), 0) // fills the ring exactly
-      exact.mixAndEmit() // drains 320 samples
-      exact.addAudio('p1', frame(1000, 320), 0) // fits in the freed space
-      assert.equal(exact.getDroppedStats()[0].droppedSamples, 0)
-      exact.stop()
-    })
-  })
-
-  describe('#getPositionMs()', () => {
-    it('advances 20 ms per mixed frame', () => {
-      assert.equal(mixer.getPositionMs(), 0)
-      mixer.addAudio('p1', frame(1000), 0)
-      mixer.mixAndEmit()
-      assert.equal(mixer.getPositionMs(), 20)
-    })
-
-    it('returns 0 before any mixAndEmit() call', () => {
-      const m = new AudioMixer()
-      m.addAudio('p1', frame(1000), 0) // adding audio alone must not advance the clock
-      assert.equal(m.getPositionMs(), 0)
-      m.stop()
-    })
-
-    it('advances correctly over 100+ ticks (not just one)', () => {
-      const m = new AudioMixer()
-      for (let i = 0; i < 137; i++) {
-        m.addAudio('p1', frame(1000), 0)
-        m.mixAndEmit()
-      }
-      assert.equal(m.getPositionMs(), 137 * 20)
-      m.stop()
-    })
-  })
-
-  describe('#constructor()', () => {
-    it('persists custom options on the instance', () => {
-      const m = new AudioMixer({ energyThreshold: 1234, silenceGraceMs: 5678, bufferFrames: 4 })
-      assert.equal(m.energyThreshold, 1234)
-      assert.equal(m.silenceGraceMs, 5678)
-      assert.equal(m.bufferSize, 320 * 4) // SAMPLES_PER_FRAME * bufferFrames
-      m.stop()
-    })
-
-    it('falls back to defaults when options are omitted', () => {
-      const m = new AudioMixer()
-      assert.equal(m.energyThreshold, 500)
-      assert.equal(m.silenceGraceMs, 2000)
-      assert.equal(m.bufferSize, 320 * 160)
-      m.stop()
-    })
-
-    it('keeps two instances fully independent (no shared state)', () => {
-      const a = new AudioMixer()
-      const b = new AudioMixer()
-      a.addAudio('only-in-a', frame(1000, 3), 0)
-      assert.equal(a.hasParticipant('only-in-a'), true)
-      assert.equal(b.hasParticipant('only-in-a'), false)
-      assert.notStrictEqual(a.participantBuffers, b.participantBuffers)
-      a.mixAndEmit()
-      assert.equal(a.getPositionMs(), 20)
-      assert.equal(b.getPositionMs(), 0) // b unaffected by a's tick
-      a.stop()
-      b.stop()
-    })
-  })
-
-  describe('#addAudio() participant updates', () => {
-    it('updates the participant name when a new name is supplied for an existing participant', () => {
-      mixer.addAudio('p1', frame(1000, 3), 0, 'Alice')
-      mixer.addAudio('p1', frame(1000, 3), 0, 'Bob')
-      assert.equal(mixer.participantBuffers.get('p1').name, 'Bob')
-    })
-
-    it('does not overwrite an existing name when called without a name', () => {
-      mixer.addAudio('p1', frame(1000, 3), 0, 'Alice')
-      mixer.addAudio('p1', frame(1000, 3), 0) // no name passed
-      assert.equal(mixer.participantBuffers.get('p1').name, 'Alice')
-    })
-
-    it('updates lastTimestamp after each addAudio() call', () => {
-      mixer.addAudio('p1', frame(1000, 3), 111)
-      assert.equal(mixer.participantBuffers.get('p1').lastTimestamp, 111)
-      mixer.addAudio('p1', frame(1000, 3), 222)
-      assert.equal(mixer.participantBuffers.get('p1').lastTimestamp, 222)
-    })
-  })
-
-  describe('#removeParticipant() idempotency', () => {
-    it('is a no-op (does not throw) for a non-existent participant', () => {
-      assert.doesNotThrow(() => mixer.removeParticipant('never-existed'))
-      assert.equal(mixer.hasParticipant('never-existed'), false)
-    })
-
-    it('does not clear the current speaker when removing a different participant', () => {
-      mixer.addAudio('loud', frame(5000), 0)
-      mixer.addAudio('other', frame(10, 3), 0)
-      mixer.mixAndEmit()
-      assert.equal(mixer.getCurrentSpeaker().id, 'loud')
-      mixer.removeParticipant('other') // not the current speaker
-      assert.equal(mixer.getCurrentSpeaker().id, 'loud')
-    })
-  })
-
-  describe('#stop() state reset', () => {
-    it('clears the participantBuffers Map completely', () => {
-      mixer.addAudio('p1', frame(1000, 3), 0)
-      mixer.addAudio('p2', frame(1000, 3), 0)
-      assert.equal(mixer.participantBuffers.size, 2)
-      mixer.stop()
-      assert.equal(mixer.participantBuffers.size, 0)
-    })
-
-    it('resets currentSpeaker, mixPosition and the silence accumulator', () => {
-      mixer.addAudio('p1', frame(5000), 0)
-      mixer.addAudio('p2', frame(10, 3), 0)
-      mixer.mixAndEmit()
-      assert.equal(mixer.getCurrentSpeaker().id, 'p1')
-      assert.equal(mixer.getPositionMs(), 20)
-      mixer.stop()
-      assert.equal(mixer.getCurrentSpeaker(), null)
-      assert.equal(mixer.getPositionMs(), 0)
-      assert.equal(mixer._silenceMs, 0)
-    })
-  })
-
-  describe('#start() after #stop()', () => {
-    it('reinitializes state and lets the mixer operate normally again', () => {
-      mixer.addAudio('p1', frame(5000), 0)
-      mixer.mixAndEmit()
-      assert.equal(mixer.getPositionMs(), 20)
-      mixer.stop()
-      assert.equal(mixer.getPositionMs(), 0)
-      assert.equal(mixer.mixInterval, null)
-
-      mixer.start()
-      assert.ok(mixer.mixInterval, 'a fresh interval is armed after restart')
-      assert.equal(mixer.getPositionMs(), 0)
-      assert.equal(mixer._silenceMs, 0)
-      mixer.stop() // clear the live timer
-
-      // After the restart cycle a manual tick still works normally.
-      mixer.addAudio('p1', frame(5000), 0)
-      let speaker = null
-      mixer.on('speakerChanged', (ev) => { speaker = ev.speaker })
-      mixer.mixAndEmit()
-      assert.ok(speaker && speaker.id === 'p1')
-      assert.equal(mixer.getPositionMs(), 20)
-    })
-  })
-
-  describe('#mixAndEmit() mixing edge-cases', () => {
-    it('clips the mix at -32768 (negative overflow)', (done) => {
-      mixer.addAudio('p1', frame(-30000), 0)
-      mixer.addAudio('p2', frame(-20000), 0)
-      mixer.on('audio', (buf) => {
-        const m = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
-        assert.equal(m[0], -32768)
-        done()
-      })
-      mixer.mixAndEmit()
-    })
-
-    it('skips participants with fewer than 320 buffered samples', (done) => {
-      mixer.addAudio('full', frame(1000, 320), 0) // exactly one frame
-      mixer.addAudio('short', frame(9000, 319), 0) // one sample short -> skipped
-      mixer.on('audio', (buf) => {
-        const m = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
-        // Only 'full' contributed; 'short' (would have been louder) was skipped.
-        assert.equal(m[0], 1000)
-        done()
-      })
-      mixer.mixAndEmit()
-      // 'short' is still pending, below the frame size, so it never became speaker.
-      assert.equal(mixer.getCurrentSpeaker().id, 'full')
-    })
-
-    it('emits a fresh Buffer on each tick (not reused across ticks)', () => {
-      mixer.addAudio('p1', frame(1000), 0)
-      mixer.addAudio('p1', frame(2000), 0)
-      const buffers = []
-      mixer.on('audio', (buf) => buffers.push(buf))
-      mixer.mixAndEmit()
-      mixer.mixAndEmit()
-      assert.equal(buffers.length, 2)
-      assert.notStrictEqual(buffers[0], buffers[1])
-      // The first buffer is not mutated by the second tick.
-      const m0 = new Int16Array(buffers[0].buffer, buffers[0].byteOffset, buffers[0].length / 2)
-      const m1 = new Int16Array(buffers[1].buffer, buffers[1].byteOffset, buffers[1].length / 2)
-      assert.equal(m0[0], 1000)
-      assert.equal(m1[0], 2000)
-    })
-
-    it('speakerChanged carries type and the position equal to the current mixPosition', () => {
-      mixer.addAudio('p1', frame(5000), 0)
-      mixer.addAudio('p2', frame(5000), 0) // second tick speaker change happens here
-      let ev = null
-      mixer.on('speakerChanged', (e) => { ev = e })
-      mixer.mixAndEmit()
-      assert.equal(ev.type, 'speakerChanged')
-      // The transition is emitted before mixPosition advances for this tick, so it
-      // equals the mixPosition value at emit time (0 on the first tick).
-      assert.equal(ev.position, 0)
-      assert.equal(mixer.getPositionMs(), 20)
-    })
-
-    it('produces no speakerChanged for a zero-amplitude (RMS 0) frame', () => {
-      const m = new AudioMixer()
-      m.addAudio('silent', frame(0), 0) // all samples 0 -> RMS 0
-      let changed = false
-      m.on('speakerChanged', () => { changed = true })
-      m.mixAndEmit()
-      assert.equal(changed, false)
-      assert.equal(m.getCurrentSpeaker(), null)
-      m.stop()
-    })
-
-    it('computes energy from squares so a loud all-negative frame still becomes speaker', () => {
-      // RMS of a constant -5000 frame == 5000 (sqrt of mean of squares), well above
-      // the threshold; negatives must not cancel out into a low/negative energy.
-      const m = new AudioMixer({ energyThreshold: 500 })
-      m.addAudio('neg', frame(-5000), 0)
-      let speaker = null
-      m.on('speakerChanged', (ev) => { speaker = ev.speaker })
-      m.mixAndEmit()
-      assert.ok(speaker && speaker.id === 'neg')
-      m.stop()
-    })
-  })
-
-  describe('multi-participant drop accounting', () => {
-    it('accumulates droppedSamples independently per participant', () => {
-      const m = new AudioMixer({ bufferFrames: 1 }) // 320-sample ring each
-      m.addAudio('a', samplesBuf([], 320 + 100), 0) // 100 dropped
-      m.addAudio('b', samplesBuf([], 320 + 640), 0) // 640 dropped
-      const stats = m.getDroppedStats()
-      const byId = Object.fromEntries(stats.map(s => [s.id, s.droppedSamples]))
-      assert.equal(byId.a, 100)
-      assert.equal(byId.b, 640)
-      m.stop()
-    })
-
-    it('keeps independent read/write pointers per participant on overflow', () => {
-      // Two participants, ring of 1 frame each. Overfill both with distinct values;
-      // each must independently keep only its own freshest frame.
-      const m = new AudioMixer({ bufferFrames: 1 })
-      m.addAudio('a', samplesBuf(new Array(320).fill(100), 320), 0) // dropped
-      m.addAudio('a', samplesBuf(new Array(320).fill(111), 320), 0) // kept
-      m.addAudio('b', samplesBuf(new Array(320).fill(200), 320), 0) // dropped
-      m.addAudio('b', samplesBuf(new Array(320).fill(222), 320), 0) // kept
-      m.on('audio', (buf) => {
-        const arr = new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2)
-        assert.equal(arr[0], 111 + 222) // both freshest frames mixed
-      })
-      m.mixAndEmit()
-      const byId = Object.fromEntries(m.getDroppedStats().map(s => [s.id, s.droppedSamples]))
-      assert.equal(byId.a, 320)
-      assert.equal(byId.b, 320)
-      m.stop()
-    })
-  })
-
-  describe('#getParticipants()', () => {
-    it('returns a fresh array each call (mutations do not persist)', () => {
-      mixer.addAudio('p1', frame(1000, 3), 0)
-      const first = mixer.getParticipants()
-      first.push({ id: 'injected' })
-      const second = mixer.getParticipants()
-      assert.notStrictEqual(first, second)
-      assert.deepEqual(second.map(p => p.id), ['p1'])
-    })
-  })
-
-  describe('#getCurrentSpeaker()', () => {
-    it('returns null before the first speakerChanged event', () => {
-      const m = new AudioMixer()
-      assert.equal(m.getCurrentSpeaker(), null)
-      m.addAudio('p1', frame(100), 0) // below threshold -> no speaker
-      m.mixAndEmit()
-      assert.equal(m.getCurrentSpeaker(), null)
-      m.stop()
-    })
-  })
-
-  describe('#getDroppedStats() framing & names', () => {
-    it('computes droppedFrames as floor(droppedSamples/320)', () => {
-      const m = new AudioMixer({ bufferFrames: 1 }) // 320-sample ring
-      m.addAudio('zero', samplesBuf([], 320 + 100), 0) // 100 dropped -> 0 frames
-      m.addAudio('one', samplesBuf([], 320 + 320), 0) // 320 dropped -> 1 frame
-      m.addAudio('two', samplesBuf([], 320 + 640), 0) // 640 dropped -> 2 frames
-      const byId = Object.fromEntries(m.getDroppedStats().map(s => [s.id, s.droppedFrames]))
-      assert.equal(byId.zero, 0)
-      assert.equal(byId.one, 1)
-      assert.equal(byId.two, 2)
-      m.stop()
-    })
-
-    it('includes the participant name in each entry', () => {
-      mixer.addAudio('p1', frame(1000, 3), 0, 'Alice')
-      mixer.addAudio('p2', frame(1000, 3), 0) // no name -> defaults to id
-      const byId = Object.fromEntries(mixer.getDroppedStats().map(s => [s.id, s.name]))
-      assert.equal(byId.p1, 'Alice')
-      assert.equal(byId.p2, 'p2')
-    })
-  })
-
-  describe('overflow warning throttle', () => {
-    let originalWarn
-    let calls
-    beforeEach(() => {
-      calls = []
-      originalWarn = logger.warn
-      logger.warn = (...args) => calls.push(args.join(' '))
-    })
-    afterEach(() => { logger.warn = originalWarn })
-
-    it('does not warn just below the 500-sample threshold but warns at exactly 500', () => {
-      const below = new AudioMixer({ bufferFrames: 1 }) // 320-sample ring
-      below.addAudio('p1', samplesBuf([], 320 + 499), 0) // 499 dropped -> no warn
-      assert.equal(calls.length, 0)
-      assert.equal(below.getDroppedStats()[0].droppedSamples, 499)
-      below.stop()
-
-      const at = new AudioMixer({ bufferFrames: 1 })
-      at.addAudio('p1', samplesBuf([], 320 + 500), 0) // 500 dropped -> exactly one warn
-      assert.equal(calls.length, 1)
-      assert.ok(calls[0].includes('500 samples dropped'))
-      at.stop()
-    })
-  })
-
-  describe('#hasParticipant() return type', () => {
-    it('returns strict booleans, not truthy/falsy values', () => {
-      assert.strictEqual(mixer.hasParticipant('missing'), false)
-      mixer.addAudio('p1', frame(1000, 3), 0)
-      assert.strictEqual(mixer.hasParticipant('p1'), true)
-    })
-  })
-
-  describe('silence-grace boundaries', () => {
-    it('allows the null transition with exactly two participants (the >1 boundary)', () => {
-      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 }) // 1 tick grace
-      const events = []
-      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
-      m.addAudio('a', frame(5000), 0)
-      m.addAudio('b', frame(10, 3), 0)
-      m.mixAndEmit() // ['a']
-      m.addAudio('a', frame(10), 0)
-      m.addAudio('b', frame(10), 0)
-      m.mixAndEmit() // 20ms silence >= grace, size == 2 (> 1) -> null transition
-      assert.deepEqual(events, ['a', null])
-      m.stop()
-    })
-
-    it('lets a participant added during the silence countdown unlock the null transition', () => {
-      // Lone speaker: the >1 guard blocks the null transition no matter how long the
-      // silence runs. Adding a second participant mid-countdown makes size > 1 so the
-      // next silent tick past the grace finally emits null.
-      const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 20 })
-      const events = []
-      m.on('speakerChanged', (ev) => { events.push(ev.speaker ? ev.speaker.id : null) })
-      m.addAudio('solo', frame(5000), 0)
-      m.mixAndEmit() // ['solo']
-      m.addAudio('solo', frame(10), 0)
-      m.mixAndEmit() // 20ms silence but size == 1 -> blocked, _silenceMs keeps growing
-      assert.deepEqual(events, ['solo'])
-      m.addAudio('late', frame(10, 3), 0) // size becomes 2
-      m.addAudio('solo', frame(10), 0)
-      m.mixAndEmit() // size > 1 and silence already past grace -> null
-      assert.deepEqual(events, ['solo', null])
-      assert.equal(m.getCurrentSpeaker(), null)
+      const o = record(m)
+      open(m, ['a', 'b'])
+      feed(m, { a: frame(5000), b: frame(10) })
+      feed(m, { a: frame(10), b: frame(10) }) // 20 ms of silence
+      feed(m, { a: frame(5000), b: frame(10) }) // a again: accumulator reset
+      feed(m, { a: frame(10), b: frame(10) }) // 20 ms again: still under the grace
+      assert.deepEqual(o.speakers, ['a'])
       m.stop()
     })
 
     it('resets the silence accumulator only when the removed participant was the speaker', () => {
       const m = new AudioMixer({ energyThreshold: 500, silenceGraceMs: 60 })
-      m.addAudio('spk', frame(5000), 0)
-      m.addAudio('other', frame(10, 3), 0)
-      m.mixAndEmit() // 'spk' is speaker, _silenceMs 0
-      m.addAudio('spk', frame(10), 0)
-      m.addAudio('other', frame(10), 0)
-      m.mixAndEmit() // silence accumulating: _silenceMs == 20
+      open(m, ['spk', 'other'])
+      feed(m, { spk: frame(5000), other: frame(10) })
+      feed(m, { spk: frame(10), other: frame(10) })
       assert.equal(m._silenceMs, 20)
-
-      // Removing a non-speaker must NOT reset the silence accumulator.
       m.removeParticipant('other')
       assert.equal(m._silenceMs, 20)
-      assert.equal(m.getCurrentSpeaker().id, 'spk')
-
-      // Removing the current speaker resets it (and clears the speaker).
       m.removeParticipant('spk')
       assert.equal(m._silenceMs, 0)
       assert.equal(m.getCurrentSpeaker(), null)
       m.stop()
+    })
+  })
+
+  describe('ring buffer', () => {
+    it('mixes the correct samples after the write pointer wraps past the end', () => {
+      const m = new AudioMixer({ bufferFrames: 2 }) // 640-sample ring
+      const o = record(m)
+      m.addAudio('t', pcm(Array.from({ length: 500 }, (_, i) => i)))
+      m.addAudio('t', pcm(Array.from({ length: 460 }, (_, i) => 500 + i))) // wraps
+      assert.deepEqual(o.frames.flatMap(samplesOf), Array.from({ length: 960 }, (_, i) => i))
+      assert.equal(m.getStats().tracks[0].droppedSamples, 0)
+      m.stop()
+    })
+
+    it('keeps the freshest audio of an oversized delivery and counts the drop', () => {
+      const m = new AudioMixer({ bufferFrames: 2 }) // 640-sample ring
+      const o = record(m)
+      m.addAudio('t', pcm(Array.from({ length: 740 }, (_, i) => i)))
+      assert.deepEqual(o.frames.flatMap(samplesOf), Array.from({ length: 640 }, (_, i) => 100 + i))
+      assert.equal(m.getStats().tracks[0].droppedSamples, 100)
+      m.removeTrack('t')
+      assert.equal(m.getStats().droppedSamples, 100, 'the total outlives the track')
+      m.stop()
+    })
+
+    describe('overflow warning throttle', () => {
+      let calls, originalWarn
+      beforeEach(() => { calls = []; originalWarn = logger.warn; logger.warn = (...args) => calls.push(args.join(' ')) })
+      afterEach(() => { logger.warn = originalWarn })
+
+      it('does not warn just below 500 dropped samples, warns once at 500', () => {
+        const below = new AudioMixer({ bufferFrames: 1 })
+        below.addAudio('t', frame(0, SAMPLES_PER_FRAME + 499))
+        assert.equal(calls.length, 0)
+        below.stop()
+        const at = new AudioMixer({ bufferFrames: 1 })
+        at.addAudio('t', frame(0, SAMPLES_PER_FRAME + 500))
+        assert.equal(calls.length, 1)
+        assert.ok(calls[0].includes('track t') && calls[0].includes('500 samples dropped'))
+        at.stop()
+      })
+    })
+  })
+
+  describe('#getStats()', () => {
+    it('reports output samples and, per track, input, drops, buffered audio, stalls and attribution', () => {
+      mixer.setTrackParticipant('a', { id: 'u1', name: 'A' })
+      mixer.addAudio('a', frame(1, 400))
+      const stats = mixer.getStats()
+      assert.equal(stats.outputSamples, SAMPLES_PER_FRAME)
+      assert.equal(stats.droppedSamples, 0)
+      assert.equal(stats.stalls, 0)
+      assert.deepEqual(stats.tracks, [{ id: 'a', participantId: 'u1', active: true, inputSamples: 400, droppedSamples: 0, bufferedSamples: 80, stalls: 0 }])
+    })
+
+    it('lists the track ids', () => {
+      mixer.addAudio('a', frame(1, 10))
+      mixer.setTrackParticipant('b', { id: 'u2' })
+      assert.deepEqual(mixer.trackIds(), ['a', 'b'])
+    })
+  })
+
+  describe('#constructor()', () => {
+    it('applies options and falls back to defaults', () => {
+      const custom = new AudioMixer({ energyThreshold: 1234, silenceGraceMs: 5678, bufferFrames: 4, maxLagMs: 100 })
+      assert.equal(custom.energyThreshold, 1234)
+      assert.equal(custom.silenceGraceMs, 5678)
+      assert.equal(custom.bufferSize, SAMPLES_PER_FRAME * 4)
+      assert.equal(custom.maxLagSamples, 1600)
+      const defaults = new AudioMixer()
+      assert.equal(defaults.energyThreshold, 500)
+      assert.equal(defaults.silenceGraceMs, 2000)
+      assert.equal(defaults.bufferSize, SAMPLES_PER_FRAME * 160)
+      assert.equal(defaults.maxLagSamples, 4800)
+    })
+
+    it('keeps two instances fully independent', () => {
+      const a = new AudioMixer()
+      const b = new AudioMixer()
+      a.addAudio('t', frame(1000))
+      assert.equal(a.hasTrack('t'), true)
+      assert.equal(b.hasTrack('t'), false)
+      assert.equal(a.getPositionMs(), 20)
+      assert.equal(b.getPositionMs(), 0)
+    })
+  })
+
+  describe('#stop()', () => {
+    it('clears tracks, position, speaker and counters; is idempotent', () => {
+      open(mixer, ['p1', 'p2'])
+      feed(mixer, { p1: frame(5000), p2: frame(10) })
+      mixer.stop()
+      mixer.stop()
+      assert.equal(mixer.tracks.size, 0)
+      assert.equal(mixer.getPositionMs(), 0)
+      assert.equal(mixer.getCurrentSpeaker(), null)
+      assert.deepEqual(mixer.getStats(), { outputSamples: 0, droppedSamples: 0, stalls: 0, tracks: [] })
+      assert.equal(mixer._silenceMs, 0)
     })
   })
 })

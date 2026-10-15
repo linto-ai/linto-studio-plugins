@@ -4,13 +4,17 @@
  * Produces a self-contained JavaScript string injected into the meeting page via
  * page.addInitScript(). It runs entirely in the browser and:
  *   1. patches RTCPeerConnection to capture every inbound audio track;
- *   2. resamples each track to 16 kHz S16LE in-page (AudioWorklet, ScriptProcessor
+ *   2. captures each track at 16 kHz S16LE in-page (AudioWorklet, ScriptProcessor
  *      fallback) and streams it as binary frames to the loopback LocalAudioServer;
  *   3. maps tracks to participants per platform so the Node side can do native
  *      diarization (SFU) or forward server-side speaker info (Teams).
  *
  * Binary frame: [uint16BE trackIndex][uint16BE reserved=0][...PCM]. Control
  * messages are sent as JSON text frames.
+ *
+ * The script runs in every document of the page (addInitScript injects it into
+ * each frame). Only the top-level document runs the platform pollers and connects
+ * at once; a sub-frame connects only if it captures a track.
  *
  * Only the block for the requested platform is emitted, so a Visio bot never
  * ships Teams introspection and vice-versa. The participant-mapping pollers
@@ -35,6 +39,8 @@ function getInterceptScript (localWsUrl, platformConfig) {
   const LOCAL_WS_URL = ${JSON.stringify(localWsUrl)};
   const PLATFORM_TYPE = ${JSON.stringify(platformType)};
   const DEBUG = ${JSON.stringify(debug)};
+  // The top-level document, where the meeting client runs; false in a sub-frame.
+  const IS_TOP = (function () { try { return window === window.top; } catch (e) { return false; } })();
 
   // getUserMedia shim. Headless Chromium has no real capture device, so the
   // meeting SPA's getUserMedia throws NotFoundError and the join never finalizes
@@ -83,6 +89,9 @@ function getInterceptScript (localWsUrl, platformConfig) {
     }
   } catch (e) {}
   const TARGET_SAMPLE_RATE = 16000;
+  // Cut-off of the anti-aliasing low-pass of the JS resampler: below the 8 kHz
+  // Nyquist of the output, above the band that matters to speech recognition.
+  const ANTI_ALIAS_HZ = 7000;
   const MAX_RECONNECT_RETRIES = 10;
   const RECONNECT_DELAY_MS = 1000;
   const intervals = [];
@@ -119,10 +128,10 @@ function getInterceptScript (localWsUrl, platformConfig) {
 
   // ── Loopback WebSocket to the Node LocalAudioServer ───────────────────────
   let ws = null, wsReady = false, reconnectAttempts = 0, reconnectTimer = null, disposed = false;
-  // Remember mappings already announced (trackIndex -> participant) so that after
-  // a Node-side LocalAudioServer crash/restart we can re-emit them on reconnect
-  // (the browser kept its mappings; the Node AudioMixer lost them).
-  let hasConnectedOnce = false;
+  // Mappings already made (trackIndex -> participant), re-announced on every
+  // connect along with the live tracks: control messages are not queued while the
+  // socket is down, and after a reconnect (Node side restarted) the Node state is
+  // keyed by the new connection.
   const sentMappings = new Map(); // trackIndex -> participant (sanitized)
   const headerBuf = new ArrayBuffer(4);
   const headerView = new DataView(headerBuf);
@@ -135,15 +144,13 @@ function getInterceptScript (localWsUrl, platformConfig) {
       ws.binaryType = 'arraybuffer';
       ws.onopen = function () {
         wsReady = true; reconnectAttempts = 0; log('ws connected');
-        // On a RE-open (Node side restarted), replay mappings ONLY — no audio —
-        // so already-mapped tracks are re-announced to the new mixer.
-        if (hasConnectedOnce && sentMappings.size > 0) {
-          log('ws reconnected, replaying', sentMappings.size, 'participant mappings');
-          sentMappings.forEach(function (participant, trackIndex) {
-            sendJson({ type: 'participantMapping', trackIndex: trackIndex, participant: participant });
-          });
-        }
-        hasConnectedOnce = true;
+        // Announce what this document captures (control only, no audio replay).
+        captures.forEach(function (capture) {
+          sendJson({ type: 'trackAdded', trackId: capture.trackId, trackIndex: capture.index });
+        });
+        sentMappings.forEach(function (participant, trackIndex) {
+          sendJson({ type: 'participantMapping', trackIndex: trackIndex, participant: participant });
+        });
       };
       ws.onclose = function () {
         wsReady = false;
@@ -183,21 +190,57 @@ function getInterceptScript (localWsUrl, platformConfig) {
   }
 
   // ── PCM conversion ────────────────────────────────────────────────────────
-  // Linear-interpolation resample (no anti-alias filter). Adequate for speech
-  // ASR at v1; revisit if downsampling artefacts hurt accuracy.
-  function resample(input, sourceRate) {
-    if (sourceRate === TARGET_SAMPLE_RATE) return input;
-    const ratio = sourceRate / TARGET_SAMPLE_RATE;
-    const outLen = Math.floor(input.length / ratio);
-    const out = new Float32Array(outLen);
-    for (let i = 0; i < outLen; i++) {
-      const idx = i * ratio;
-      const lo = Math.floor(idx);
-      const hi = Math.min(lo + 1, input.length - 1);
-      const frac = idx - lo;
-      out[i] = input[lo] * (1 - frac) + input[hi] * frac;
+  // Resampler from 'sourceRate' to 16 kHz for one track, only used when the
+  // AudioContext could not be created at 16 kHz. It is stateful, fed the track's
+  // chunks in order: filter state, the last sample and the read position carry
+  // over from one chunk to the next, so the output does not depend on how the
+  // input was chunked. The position is an exact integer phase (input sample +
+  // remainder in 1/16000ths), so 'sourceRate' input samples always yield exactly
+  // 16000 output samples: no drift, whatever the chunk lengths. Downsampling first
+  // runs an 8th-order Butterworth low-pass at ANTI_ALIAS_HZ (four biquads) so what
+  // lies above the output Nyquist does not alias into the speech band; output
+  // samples are then linearly interpolated.
+  function createResampler(sourceRate) {
+    const sections = [];
+    if (sourceRate > TARGET_SAMPLE_RATE) {
+      const w0 = 2 * Math.PI * ANTI_ALIAS_HZ / sourceRate, cosW0 = Math.cos(w0);
+      for (let k = 1; k <= 4; k++) {
+        const q = 1 / (2 * Math.sin((2 * k - 1) * Math.PI / 16)); // Butterworth poles
+        const alpha = Math.sin(w0) / (2 * q), a0 = 1 + alpha;
+        sections.push({
+          b0: (1 - cosW0) / 2 / a0, b1: (1 - cosW0) / a0, b2: (1 - cosW0) / 2 / a0,
+          a1: -2 * cosW0 / a0, a2: (1 - alpha) / a0, x1: 0, x2: 0, y1: 0, y2: 0
+        });
+      }
     }
-    return out;
+    let prev = 0; // last (filtered) input sample of the previous chunk
+    let pos = 0; // input index of the next output sample, -1 meaning 'prev'
+    let rem = 0; // and its fraction, in 1/TARGET_SAMPLE_RATE of an input sample
+    return function (input) {
+      const n = input.length;
+      const x = sections.length > 0 ? new Float32Array(n) : input;
+      for (let s = 0; s < sections.length; s++) {
+        const f = sections[s], from = s === 0 ? input : x;
+        for (let i = 0; i < n; i++) {
+          const v = from[i];
+          const y = f.b0 * v + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+          f.x2 = f.x1; f.x1 = v; f.y2 = f.y1; f.y1 = y;
+          x[i] = y;
+        }
+      }
+      const out = new Float32Array(Math.ceil(n * TARGET_SAMPLE_RATE / sourceRate) + 1);
+      let count = 0;
+      while (pos < n - 1) {
+        const a = pos < 0 ? prev : x[pos];
+        out[count++] = a + (x[pos + 1] - a) * (rem / TARGET_SAMPLE_RATE);
+        rem += sourceRate;
+        pos += Math.floor(rem / TARGET_SAMPLE_RATE);
+        rem %= TARGET_SAMPLE_RATE;
+      }
+      pos -= n;
+      if (n > 0) prev = x[n - 1];
+      return out.subarray(0, count);
+    };
   }
 
   function float32ToInt16(f32) {
@@ -214,16 +257,105 @@ function getInterceptScript (localWsUrl, platformConfig) {
   let trackIndexSeq = 0;
   const tracks = new Map(); // trackId -> { index, participantId }
   const processedTracks = new Set();
-  let sharedCtx = null, workletReady = false, audioSinks = [];
+  // trackIndex -> capture graph of a live track: { index, trackId, ended, sink, source, node, resample },
+  // filled in as setupTrackCapture() progresses. Also what keeps the sink element
+  // referenced (and playing) for as long as the track is captured.
+  const captures = new Map();
+  let sharedCtx = null, workletLoad = null, transport = null;
 
-  async function setupTrackCapture(track, tIdx) {
-    if (!sharedCtx) sharedCtx = new AudioContext();
-    const ctx = sharedCtx;
+  // AudioWorklet module. All the processors of a context share one
+  // AudioWorkletGlobalScope: each capture processor appends its track's render
+  // quantum to one queue there, and a single transport processor posts that queue
+  // to the page once per quantum. Posting from every capture node's own port would
+  // reorder the tracks: after a main-thread stall the page drains each port's
+  // backlog in one go, so one track's whole backlog reaches the Node mixer before
+  // the other's (measured in Chromium: ~600 ms of one track, then the other, after
+  // a 600 ms stall). Through one port the quanta stay in render order, interleaved
+  // across tracks. (ScriptProcessor callbacks share the main-thread task queue and
+  // stay interleaved on their own.)
+  const WORKLET_MODULE = [
+    'const queue = [];',
+    'class PCMCapture extends AudioWorkletProcessor {',
+    '  constructor(options) {',
+    '    super();',
+    '    this.trackIndex = options.processorOptions.trackIndex;',
+    '    this.live = true;',
+    '    this.port.onmessage = () => { this.live = false; };',
+    '  }',
+    '  process(inputs) {',
+    '    const c = inputs[0][0];',
+    '    if (this.live && c && c.length > 0) queue.push(this.trackIndex, new Float32Array(c));',
+    '    return this.live;',
+    '  }',
+    '}',
+    'class PCMTransport extends AudioWorkletProcessor {',
+    '  process() {',
+    '    if (queue.length > 0) this.port.postMessage(queue.splice(0, queue.length));',
+    '    return true;',
+    '  }',
+    '}',
+    'registerProcessor("pcm-capture", PCMCapture);',
+    'registerProcessor("pcm-transport", PCMTransport);'
+  ].join('\\n');
+
+  // One AudioContext for every track of the document, created at 16 kHz: Chromium
+  // then resamples each MediaStream source itself (band-limited sinc resampler)
+  // and the context clock yields exactly 16000 samples per second. Should that
+  // rate be refused, capture at the default rate and resample in JS.
+  function getSharedContext() {
+    if (sharedCtx) return sharedCtx;
+    try {
+      sharedCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    } catch (e) {
+      warn('16 kHz AudioContext unavailable, resampling in JS: ' + (e && e.message ? e.message : 'unknown'));
+      sharedCtx = new AudioContext();
+    }
+    return sharedCtx;
+  }
+
+  // Convert and send a chunk of a track's audio, at the context rate.
+  function sendPcm(capture, samples) {
+    const pcm = capture.resample ? capture.resample(samples) : samples;
+    if (pcm.length > 0) sendBinary(capture.index, float32ToInt16(pcm));
+  }
+
+  // Transport message: [trackIndex, samples, trackIndex, samples, ...] in render
+  // order. Quanta of a track torn down in the meantime are dropped, so nothing of
+  // a track is sent after its trackRemoved.
+  function onTransportMessage(e) {
+    const queue = e.data;
+    for (let i = 0; i < queue.length; i += 2) {
+      const capture = captures.get(queue[i]);
+      if (capture) sendPcm(capture, queue[i + 1]);
+    }
+  }
+
+  // Load the module and start the transport, once per context: tracks set up
+  // concurrently share the load, and a failure is kept so that every track falls
+  // back the same way.
+  function loadWorklet(ctx) {
+    if (!workletLoad) {
+      workletLoad = Promise.resolve().then(function () {
+        const url = URL.createObjectURL(new Blob([WORKLET_MODULE], { type: 'application/javascript' }));
+        return ctx.audioWorklet.addModule(url).finally(function () { URL.revokeObjectURL(url); });
+      }).then(function () {
+        transport = new AudioWorkletNode(ctx, 'pcm-transport');
+        transport.port.onmessage = onTransportMessage;
+        transport.connect(ctx.destination); // keeps it processing
+      });
+    }
+    return workletLoad;
+  }
+
+  async function setupTrackCapture(track, capture) {
+    const ctx = getSharedContext();
     // Headless Chromium starts the AudioContext suspended (no audio output to
     // drive it); without resuming, the AudioWorklet never pulls samples and no
     // PCM is ever captured.
     try { if (ctx.state !== 'running') await ctx.resume(); } catch (e) {}
-    const sourceRate = ctx.sampleRate;
+    // The track may have ended while we waited: build nothing for it.
+    if (capture.ended) return;
+    if (ctx.sampleRate !== TARGET_SAMPLE_RATE) capture.resample = createResampler(ctx.sampleRate);
     const ms = new MediaStream([track]);
     // Chrome quirk: a remote WebRTC audio track does NOT feed a
     // MediaStreamAudioSourceNode unless it is ALSO attached to a playing
@@ -232,47 +364,66 @@ function getInterceptScript (localWsUrl, platformConfig) {
       const sink = document.createElement('audio');
       sink.srcObject = ms; sink.muted = true; sink.autoplay = true;
       sink.play().catch(function () {});
-      (audioSinks = audioSinks || []).push(sink);
+      capture.sink = sink;
     } catch (e) {}
-    const source = ctx.createMediaStreamSource(ms);
+    capture.source = ctx.createMediaStreamSource(ms);
 
     try {
-      if (!workletReady) {
-        const code = 'class PCMCapture extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c&&c.length>0)this.port.postMessage(new Float32Array(c));return true;}}registerProcessor("pcm-capture",PCMCapture);';
-        const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
-        await ctx.audioWorklet.addModule(url);
-        URL.revokeObjectURL(url);
-        workletReady = true;
-      }
-      const node = new AudioWorkletNode(ctx, 'pcm-capture');
-      source.connect(node);
+      await loadWorklet(ctx);
+      // Same check after the module load: tear down the source and sink built above.
+      if (capture.ended) { teardownCapture(capture); return; }
+      const node = new AudioWorkletNode(ctx, 'pcm-capture', { processorOptions: { trackIndex: capture.index } });
+      capture.node = node;
+      capture.source.connect(node);
       node.connect(ctx.destination); // keeps the graph pulling
-      node.port.onmessage = function (e) { sendBinary(tIdx, float32ToInt16(resample(e.data, sourceRate))); };
-      log('AudioWorklet capture for track', tIdx);
+      log('AudioWorklet capture for track', capture.index);
     } catch (e) {
+      if (capture.ended) { teardownCapture(capture); return; }
       // The ScriptProcessor path is deprecated and degraded — surface the
       // fallback at warn (independent of DEBUG) so it is visible in the Node logs.
-      warn('AudioWorklet unavailable, falling back to ScriptProcessor (track ' + tIdx + '): ' + (e && e.message ? e.message : 'unknown'));
+      warn('AudioWorklet unavailable, falling back to ScriptProcessor (track ' + capture.index + '): ' + (e && e.message ? e.message : 'unknown'));
       const proc = ctx.createScriptProcessor(4096, 1, 1);
-      source.connect(proc);
+      capture.node = proc;
+      capture.source.connect(proc);
       proc.connect(ctx.destination);
-      proc.onaudioprocess = function (ev) {
-        sendBinary(tIdx, float32ToInt16(resample(ev.inputBuffer.getChannelData(0), sourceRate)));
-      };
+      proc.onaudioprocess = function (ev) { sendPcm(capture, ev.inputBuffer.getChannelData(0)); };
     }
   }
 
+  // Dismantle a track's capture graph. An ended track keeps feeding its source
+  // node (Chromium renders it as silence, at the full rate), so its PCM only stops
+  // once the processing node, the source and the sink element are all released.
+  function teardownCapture(capture) {
+    capture.ended = true;
+    captures.delete(capture.index);
+    const node = capture.node, source = capture.source, sink = capture.sink;
+    capture.node = capture.source = capture.sink = null;
+    if (node) {
+      // Stop the processor (it no longer queues quanta), or the ScriptProcessor callback.
+      if (node.port) node.port.postMessage('stop'); else node.onaudioprocess = null;
+      try { node.disconnect(); } catch (e) {}
+    }
+    if (source) { try { source.disconnect(); } catch (e) {} }
+    if (sink) { try { sink.pause(); sink.srcObject = null; } catch (e) {} }
+  }
+
   function handleNewTrack(track) {
-    if (!track || track.kind !== 'audio' || processedTracks.has(track.id)) return;
+    if (!track || track.kind !== 'audio' || track.readyState === 'ended' || processedTracks.has(track.id)) return;
     processedTracks.add(track.id);
-    const tIdx = trackIndexSeq++;
-    tracks.set(track.id, { index: tIdx, participantId: null });
-    sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: tIdx });
-    setupTrackCapture(track, tIdx).catch(function (e) { log('capture setup failed', e && e.message); });
+    const capture = { index: trackIndexSeq++, trackId: track.id, ended: false, sink: null, source: null, node: null, resample: null };
+    captures.set(capture.index, capture);
+    tracks.set(track.id, { index: capture.index, participantId: null });
+    // A sub-frame connects on its first track (announced once the socket opens).
+    if (!ws) connectWs();
+    sendJson({ type: 'trackAdded', trackId: track.id, trackIndex: capture.index });
+    setupTrackCapture(track, capture).catch(function (e) { log('capture setup failed', e && e.message); });
     track.addEventListener('ended', function () {
-      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: tIdx });
+      // Tear down first: nothing of this track is sent after its trackRemoved.
+      teardownCapture(capture);
+      sendJson({ type: 'trackRemoved', trackId: track.id, trackIndex: capture.index });
       tracks.delete(track.id);
       processedTracks.delete(track.id);
+      sentMappings.delete(capture.index); // never replay the mapping of a dead track
     });
   }
 
@@ -304,7 +455,12 @@ function getInterceptScript (localWsUrl, platformConfig) {
     log('mapped track', info.index, '->', clean.name);
   }
 
+  // The pollers read the meeting client's state, which lives in the top-level
+  // document: in a sub-frame they would only find "no call / no room" and report
+  // it (participantLeft, a native-diarization degrade) as if the meeting were gone.
+  if (IS_TOP) {
   ${platformBlock}
+  }
 
   window.addEventListener('beforeunload', function () {
     disposed = true;
@@ -312,8 +468,11 @@ function getInterceptScript (localWsUrl, platformConfig) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
   });
 
-  connectWs();
-  log('initialised for platform', PLATFORM_TYPE);
+  // The top-level document connects at once (its pollers report participants); a
+  // sub-frame only when it captures a track, so the many frames of a meeting SPA
+  // that never carry media do not each open a loopback socket.
+  if (IS_TOP) connectWs();
+  log('initialised for platform', PLATFORM_TYPE, IS_TOP ? 'in the top frame' : 'in a sub-frame');
 })();
 `
 }
@@ -452,8 +611,11 @@ const TEAMS_SPEAKER_BLOCK = `
   // Detect a prolonged disappearance of the (undocumented) callingDebug API and
   // signal a degrade so the Node side can fall back to ASR diarization. 200ms
   // poll → 25 consecutive misses ≈ 5s. Warnings are throttled and the degrade is
-  // signalled once.
-  let missCount = 0, degradeSignalled = false, lastWarnAt = 0;
+  // signalled once. Misses only count once the call has been seen: before that
+  // the bot is on the prejoin screen or in the lobby, where there is no call yet,
+  // and a slow admission must not degrade the whole session. (If the API is gone
+  // from the start, no participant is ever seen and the join watchdog fires.)
+  let missCount = 0, degradeSignalled = false, lastWarnAt = 0, callSeen = false;
   const NATIVE_DIAR_MISS_LIMIT = 25;
   const WARN_THROTTLE_MS = 5000;
   function warnTeams(message) {
@@ -481,19 +643,22 @@ const TEAMS_SPEAKER_BLOCK = `
       call = window.callingDebug && window.callingDebug.observableCall;
     } catch (e) {
       // The undocumented API threw (e.g. it was replaced/removed by an update).
-      noteCallingDebugMissing('threw: ' + (e && e.message ? e.message : 'unknown error'));
+      if (callSeen) noteCallingDebugMissing('threw: ' + (e && e.message ? e.message : 'unknown error'));
       return;
     }
     try {
       if (!call || !call.participants) {
-        // No live call yet OR the API surface vanished. Tear down known
-        // participants; count it toward the degrade detector.
+        // Not in the call yet: nobody is known, nothing is missing.
+        if (!callSeen) return;
+        // The call or the API surface vanished. Tear down known participants;
+        // count it toward the degrade detector.
         known.forEach(function (v, mri) { sendJson({ type: 'participantLeft', participant: sanitizeParticipant({ id: mri, name: v.name }) }); });
         known.clear();
         noteCallingDebugMissing(window.callingDebug ? 'present but no observable call' : 'absent');
         return;
       }
-      // API is back / available again: reset the degrade detector.
+      // In the call, or the API is back: reset the degrade detector.
+      callSeen = true;
       missCount = 0;
       const seen = new Set();
       // Pick the LOUDEST speaker, not the first one in iteration order. With

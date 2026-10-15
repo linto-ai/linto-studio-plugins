@@ -20,7 +20,8 @@ const ACK_TIMEOUT_MS = parseInt(process.env.TRANSCRIBER_ACK_TIMEOUT_SECONDS || '
  *
  * Handshake: on socket open it sends the `init` frame and then holds audio until
  * the Transcriber replies `{type:'ack'}` (ACK-gating), at which point buffered
- * frames are flushed. Speaker/participant control messages are forwarded as JSON.
+ * frames are flushed. Speaker/participant control messages are forwarded as JSON,
+ * on a socket whose `init` advertised native diarization only.
  *
  * Reconnect resilience: the ACK-gated audio buffer (and its dropped-frames
  * counter) is held in an injected shared state object so it survives a socket
@@ -43,6 +44,7 @@ class TranscriberStream {
     this._ackTimer = null
     this._ackedOnce = false // latch the "first ack" info log
     this._disposed = false
+    this._diarizationMode = null // as advertised in this socket's init, once sent
     // ACK-gated frames + dropped-frames counter live in a shared state object so
     // they outlive this stream across a reconnect. Default to a private one.
     this.state = opts.buffer || { buffered: [], droppedFrames: 0 }
@@ -153,11 +155,12 @@ class TranscriberStream {
   }
 
   _sendInit () {
+    this._diarizationMode = (this.bot.manifest && this.bot.manifest.diarizationMode) || 'asr'
     this.ws.send(JSON.stringify({
       type: 'init',
       encoding: 'pcm',
       sampleRate: 16000,
-      diarizationMode: (this.bot.manifest && this.bot.manifest.diarizationMode) || 'asr',
+      diarizationMode: this._diarizationMode,
       participants: this.bot.getParticipantsList()
     }))
   }
@@ -184,10 +187,17 @@ class TranscriberStream {
   }
 
   _sendControl (obj) {
-    // Control messages (speakerChanged / participant) are NOT ack-gated: the
-    // Transcriber creates the SpeakerTracker while processing `init` (before it
-    // sends `ack`) and tolerates control before audio, so forwarding as soon as
-    // the socket is open avoids dropping speaker boundaries during the handshake.
+    // Control messages (speakerChanged / participant) only exist for native
+    // diarization, and the Transcriber reads them as such only if this socket's
+    // init said so: otherwise every frame after init goes to the ASR as PCM, a
+    // JSON text decoded as audio (an odd length misaligning every following
+    // sample). That is the case of BBB (asr) and of the socket reopened after a
+    // Teams diarization degrade, whatever the bot emits meanwhile.
+    if (this._diarizationMode !== 'native') return
+    // They are NOT ack-gated: the Transcriber creates the SpeakerTracker while
+    // processing `init` (before it sends `ack`) and tolerates control before
+    // audio, so forwarding as soon as the socket is open avoids dropping speaker
+    // boundaries during the handshake.
     if (this._isOpen()) this.ws.send(JSON.stringify(obj))
   }
 

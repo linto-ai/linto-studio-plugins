@@ -193,3 +193,4 @@ class BrowserPool extends EventEmitter {
 }
 
 module.exports = BrowserPool
+module.exports.LAUNCH_ARGS = LAUNCH_ARGS

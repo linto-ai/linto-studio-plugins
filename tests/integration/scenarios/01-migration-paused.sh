@@ -76,7 +76,7 @@ TEST_SESSION_ID="00000000-0000-0000-0000-000000000001"
 psql_exec -c "DELETE FROM sessions WHERE id='${TEST_SESSION_ID}';" >/dev/null
 
 harness::log "inserting session with status='paused'"
-insert_sql="INSERT INTO sessions (id, name, status, visibility, \"createdAt\", \"updatedAt\") VALUES ('${TEST_SESSION_ID}', 'test-pause', 'paused', 'private', NOW(), NOW());"
+insert_sql="INSERT INTO sessions (id, \"privateId\", name, status, visibility, \"createdAt\", \"updatedAt\") VALUES ('${TEST_SESSION_ID}', gen_random_uuid(), 'test-pause', 'paused', 'private', NOW(), NOW());"
 if ! psql_exec -c "${insert_sql}" >/dev/null; then
     harness::err "failed to insert a session with status='paused'"
     exit 1

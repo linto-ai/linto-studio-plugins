@@ -347,11 +347,14 @@ class Bot extends EventEmitter {
   // the first frame is the admission; audio back after it was gone (the client
   // reconnecting its audio) cancels the leave.
   _noteMeetingAudio () {
+    // Audio from a new document: that is the meeting page now. Before the
+    // admission too: the join flow leaves pages on its way to the meeting (a
+    // portal such as Greenlight sends the page to the BBB client).
+    this.pageLeft = false
     if (!this.admitted) {
       if (this.loginComplete) this._admit('meeting audio flowing after the login rules')
       return
     }
-    this.pageLeft = false // audio from a new document: that is the meeting page now
     if (this.emptyMeetingTimer) {
       logger.info(`Bot[${this.contextId}]: meeting audio back, staying`)
       this._cancelEmptyMeetingTimer()

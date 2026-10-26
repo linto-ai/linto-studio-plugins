@@ -1393,6 +1393,21 @@ describe('Bot admission and meeting end without a participant poller (BBB)', () 
     await bot.dispose()
   })
 
+  // A Greenlight portal is the first page of the join: leaving it for the BBB
+  // client is no leave of the meeting, and must not count as its end later on.
+  it('a page left on the way to the meeting (a portal) is no evidence that the meeting ended', async () => {
+    const { bot, record } = makeInitBot('bigbluebutton', {}, { address: 'https://bbb.example.com/rooms/abc/join' })
+    assert.equal(await bot.init(), true)
+    const { onBinary: pcm, onJson: json } = record.registerBot[0].handlers
+    bot.emptyMeetingTimeoutMs = 40
+    json({ type: 'pageLeft' }, 1) // the portal page leaves for the BBB client, before the admission
+    pcm(0, frame(1000), 2) // the BBB client's audio
+    json({ type: 'trackRemoved', trackIndex: 0, connectionClosed: false }, 2) // renegotiation
+    assert.equal(bot.emptyMeetingTimer, null)
+    assert.ok(warns.some((w) => w.includes('meeting audio gone with no sign that the meeting ended')), warns.join(' | '))
+    await bot.dispose()
+  })
+
   it('while that leave is pending, the silence watchdog reports no dead pipe', async () => {
     const { bot, pcm, json } = await joinedBbb()
     const errors = []

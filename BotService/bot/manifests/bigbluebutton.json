@@ -6,26 +6,73 @@
   "meetingEndedSelector": "[data-test=\"meetingEndedModal\"]",
   "loginRules": [
     {
+      "action": "waitForSelector",
+      "selector": "#joinFormName, input[placeholder=\"Enter your name!\"], [data-test=\"guestMessage\"], [data-test=\"audioModal\"], [data-test=\"joinAudio\"], [data-test=\"audioDropdownMenu\"]",
+      "timeout": 60000
+    },
+    {
+      "if": "#joinFormName, input[placeholder=\"Enter your name!\"]",
       "action": "fill",
-      "selector": "input[placeholder=\"Enter your name!\"]",
+      "selector": "#joinFormName, input[placeholder=\"Enter your name!\"]",
       "value": "{{botName}}",
-      "timeout": 30000
+      "timeout": 10000
     },
     {
+      "if": "#consentCheck:not(:checked)",
       "action": "click",
-      "selector": "#room-join",
-      "timeout": 15000
+      "selector": "#consentCheck",
+      "timeout": 10000
     },
     {
+      "if": "form:has(#joinFormName) button[type=\"submit\"], #room-join",
       "action": "click",
-      "selector": "text=Listen only",
+      "selector": "form:has(#joinFormName) button[type=\"submit\"], #room-join",
+      "timeout": 10000
+    },
+    {
+      "action": "waitForSelector",
+      "selector": "[data-test=\"listenOnlyBtn\"], [data-test=\"audioModal\"] select:has(option[value=\"listen-only\"]), [data-test=\"audioDropdownMenu\"]",
       "timeout": 1800000
+    },
+    {
+      "if": "[data-test=\"listenOnlyBtn\"]",
+      "action": "click",
+      "selector": "[data-test=\"listenOnlyBtn\"]",
+      "timeout": 10000
+    },
+    {
+      "if": "[data-test=\"audioModal\"] select:has(option[value=\"listen-only\"])",
+      "action": "select",
+      "selector": "[data-test=\"audioModal\"] select:has(option[value=\"listen-only\"])",
+      "value": "listen-only",
+      "timeout": 10000
+    },
+    {
+      "if": "[data-test=\"audioModal\"] select:has(option[value=\"listen-only\"])",
+      "action": "click",
+      "selector": "[data-test=\"audioModal\"] [data-test=\"joinEchoTestButton\"]",
+      "timeout": 10000
     }
   ],
   "leaveRules": [
     {
+      "if": "[data-test=\"closeModal\"]",
       "action": "click",
-      "selector": "[aria-label=\"Leave audio\"]",
+      "selector": "[data-test=\"closeModal\"] >> visible=true >> nth=0",
+      "timeout": 3000,
+      "optional": true
+    },
+    {
+      "if": "[data-test=\"leaveMeetingDropdown\"]",
+      "action": "click",
+      "selector": "[data-test=\"leaveMeetingDropdown\"]",
+      "timeout": 3000,
+      "optional": true
+    },
+    {
+      "if": "[data-test=\"leaveMeetingDropdown\"]",
+      "action": "click",
+      "selector": "[data-test=\"directLogoutButton\"]",
       "timeout": 3000,
       "optional": true
     }

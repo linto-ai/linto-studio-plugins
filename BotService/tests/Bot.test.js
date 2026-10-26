@@ -1672,6 +1672,94 @@ describe('Bot.execRules / execRule', () => {
   })
 })
 
+// The BBB join rules, run on each variant of the pages a BBB link leads to (all
+// measured live: Greenlight 3.9, BBB 3.0 on its default media stack and on
+// LiveKit). The former rules targeted Greenlight 2 only and clicked the text
+// "Listen only", which Playwright refuses on BBB 2.6+ (it also matches the
+// screen-reader description of the button): every BBB bot failed to join.
+describe('bigbluebutton.json join rules', () => {
+  const manifest = require('../bot/manifests/bigbluebutton.json')
+  const SEL = {
+    gl3Name: '#joinFormName',
+    gl3Consent: '#consentCheck:not(:checked)',
+    gl3Submit: 'form:has(#joinFormName) button[type="submit"]',
+    gl2Name: 'input[placeholder="Enter your name!"]',
+    gl2Submit: '#room-join',
+    listenOnlyBtn: '[data-test="listenOnlyBtn"]',
+    listenOnlyOption: '[data-test="audioModal"] select:has(option[value="listen-only"])',
+    inAudio: '[data-test="audioDropdownMenu"]'
+  }
+
+  // A page showing the given selectors: a selector list matches when one of its
+  // members is shown.
+  async function joinOn (shown) {
+    const bot = makeBot('bigbluebutton')
+    bot.botName = 'LinTO Bot'
+    bot.page = makeFakePage({ count: (selector) => selector.split(/,\s*/).filter(s => shown.includes(s)).length })
+    await bot.execRules(bot.manifest.loginRules)
+    return bot.page.calls.locatorActions.map(({ action, selector, value }) => {
+      if (action === 'waitForSelector') return 'wait'
+      return value === undefined ? `${action} ${selector}` : `${action} ${selector} = ${value}`
+    })
+  }
+
+  it('Greenlight 3 room, BBB with the listen-only button (default settings)', async () => {
+    assert.deepEqual(await joinOn([SEL.gl3Name, SEL.gl3Consent, SEL.gl3Submit, SEL.listenOnlyBtn]), [
+      'wait',
+      `fill ${SEL.gl3Name}, ${SEL.gl2Name} = LinTO Bot`,
+      'click #consentCheck',
+      `click ${SEL.gl3Submit}, ${SEL.gl2Submit}`,
+      'wait',
+      `click ${SEL.listenOnlyBtn}`
+    ])
+  })
+
+  it('Greenlight 3 room without recording consent asked', async () => {
+    const actions = await joinOn([SEL.gl3Name, SEL.gl3Submit, SEL.listenOnlyBtn])
+    assert.ok(!actions.includes('click #consentCheck'))
+    assert.ok(actions.includes(`click ${SEL.gl3Submit}, ${SEL.gl2Submit}`))
+  })
+
+  it('Greenlight 2 room (legacy)', async () => {
+    assert.deepEqual(await joinOn([SEL.gl2Name, SEL.gl2Submit, SEL.listenOnlyBtn]), [
+      'wait',
+      `fill ${SEL.gl3Name}, ${SEL.gl2Name} = LinTO Bot`,
+      `click ${SEL.gl3Submit}, ${SEL.gl2Submit}`,
+      'wait',
+      `click ${SEL.listenOnlyBtn}`
+    ])
+  })
+
+  it('direct BBB link, audio settings dialog (listen-only mode off, LiveKit audio): listen-only picked as the microphone', async () => {
+    assert.deepEqual(await joinOn([SEL.listenOnlyOption]), [
+      'wait',
+      'wait',
+      `select ${SEL.listenOnlyOption} = listen-only`,
+      'click [data-test="audioModal"] [data-test="joinEchoTestButton"]'
+    ])
+  })
+
+  it('audio already joined (forced listen-only): nothing to click', async () => {
+    assert.deepEqual(await joinOn([SEL.inAudio]), ['wait', 'wait'])
+  })
+
+  it('waits long for the BBB audio choice (meeting not started, lobby), not for the landing page', () => {
+    const waits = manifest.loginRules.filter(r => r.action === 'waitForSelector')
+    assert.equal(waits.length, 2)
+    assert.ok(waits[0].timeout <= 60000, 'a wrong link fails within a minute')
+    assert.ok(waits[0].selector.includes('[data-test="guestMessage"]'), 'the BBB lobby is a landing page')
+    assert.equal(waits[1].timeout, 1800000)
+  })
+
+  it('selects by data-test and ids, never by visible text (locale, strict mode)', () => {
+    for (const rule of [...manifest.loginRules, ...manifest.leaveRules]) {
+      for (const sel of [rule.selector, rule.if].filter(Boolean)) {
+        assert.ok(!/(^|\s|>>\s*)text=/.test(sel) && !sel.includes(':has-text('), `${sel} matches on text`)
+      }
+    }
+  })
+})
+
 describe('Bot._template', () => {
   it('passes non-string values through unchanged', () => {
     const bot = makeBot('visio')

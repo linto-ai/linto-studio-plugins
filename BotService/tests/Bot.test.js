@@ -28,9 +28,12 @@ function makeFakePage (opts = {}) {
     filter: () => mkLocator(selector),
     first: () => mkLocator(selector)
   })
-  return {
+  const mainFrame = { url: () => page.mainFrameUrl }
+  const page = {
     calls,
     handlers,
+    mainFrameUrl: opts.mainFrameUrl || 'about:blank',
+    mainFrame: () => mainFrame,
     on (event, cb) { handlers[event] = cb },
     async addInitScript (script) { calls.addInitScript.push(script) },
     async route (pattern, handler) { calls.route.push({ pattern, handler }) },
@@ -40,6 +43,7 @@ function makeFakePage (opts = {}) {
     async evaluate (script) { calls.evaluate.push(script); if (rejectFor('evaluate', script)) throw new Error('evaluate failed') },
     async waitForTimeout (ms) { calls.waitForTimeout.push(ms) }
   }
+  return page
 }
 
 // Bot with a controllable fake page and recording browserPool/audioServer, so
@@ -546,20 +550,58 @@ describe('Bot.init', () => {
     await notBlocked.bot.dispose()
   })
 
+  // Runs the domain allowlist route of an initialized bot on one request:
+  // 'continue' or 'abort'. frame: the requesting frame ('main', 'sub', or
+  // 'none' for a service worker, whose request.frame() throws).
+  function allowlistOf (page) {
+    const routeHandler = page.calls.route[0].handler
+    return (url, { navigation = false, frame = 'main' } = {}) => {
+      let action = null
+      const request = {
+        url: () => url,
+        isNavigationRequest: () => navigation,
+        frame: () => {
+          if (frame === 'none') throw new Error('Service Worker requests do not have an associated frame')
+          return frame === 'main' ? page.mainFrame() : {}
+        }
+      }
+      routeHandler({ request: () => request, continue: () => { action = 'continue' }, abort: () => { action = 'abort' } })
+      return action
+    }
+  }
+
   it('the domain allowlist continues the host and its subdomains, aborts others', async () => {
     const { bot, page } = makeInitBot('bigbluebutton', {}, { address: 'https://bbb.example.com/room' })
     await bot.init()
-    const routeHandler = page.calls.route[0].handler
-    const run = (url) => {
-      let action = null
-      routeHandler({ request: () => ({ url: () => url }), continue: () => { action = 'continue' }, abort: () => { action = 'abort' } })
-      return action
-    }
+    const run = allowlistOf(page)
     assert.equal(run('https://bbb.example.com/x'), 'continue', 'exact host allowed')
     assert.equal(run('https://cdn.bbb.example.com/x'), 'continue', 'subdomain allowed')
     assert.equal(run('https://evil.com/x'), 'abort', 'foreign host aborted')
     assert.equal(run('https://allowed.evil.com/x'), 'abort', 'lookalike suffix not matched')
     assert.equal(run('not a url'), 'abort', 'unparseable url aborted (empty host)')
+    await bot.dispose()
+  })
+
+  // A Greenlight portal sends the page to its BBB server, a Scalelite load
+  // balancer redirects it to one of its nodes: with the allowlist pinned to the
+  // address host, the BBB client loaded but none of its scripts did (a blank page).
+  it('the domain allowlist follows the top-level document to another host, and blocks the rest', async () => {
+    const { bot, page } = makeInitBot('bigbluebutton', { mainFrameUrl: 'https://rooms.example.org/rooms/abc/join' },
+      { address: 'https://rooms.example.org/rooms/abc/join' })
+    await bot.init()
+    const run = allowlistOf(page)
+    assert.equal(run('https://bbb3.example.net/bigbluebutton/api/join?x', { navigation: true }), 'continue',
+      'the portal sends the top-level document to the BBB server')
+    assert.equal(run('https://bbb3.example.net/html5client/bundle.js'), 'abort', 'not before it is the document')
+    page.mainFrameUrl = 'https://bbb3.example.net/html5client/'
+    assert.equal(run('https://bbb3.example.net/html5client/bundle.js'), 'continue', "the document's own requests")
+    assert.equal(run('https://static.bbb3.example.net/font.woff'), 'continue', 'and its subdomains')
+    assert.equal(run('https://rooms.example.org/api/v1/x'), 'continue', 'the address host still')
+    assert.equal(run('https://tracker.example.com/t.js'), 'abort', 'any other host is blocked')
+    assert.equal(run('https://evil.example.com/', { navigation: true, frame: 'sub' }), 'abort', 'a frame navigates nowhere else')
+    assert.equal(run('https://evil.example.com/', { navigation: true, frame: 'none' }), 'abort', 'a frameless (service worker) request is checked on its host')
+    assert.equal(run('https://bbb3.example.net/sw.js', { frame: 'none' }), 'continue')
+    await bot.dispose()
   })
 
   it('a malformed address throws during allowlist setup and disposes', async () => {

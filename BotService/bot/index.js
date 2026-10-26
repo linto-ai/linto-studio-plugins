@@ -48,6 +48,15 @@ function trackKey (connId, trackIndex) {
   return `c${connId}:${trackIndex}`
 }
 
+// Hostname of a URL, '' when it does not parse (about:blank has none either).
+function hostOf (url) {
+  try { return new URL(url).hostname } catch (e) { return '' }
+}
+
+function isHostOrSubdomain (host, allowed) {
+  return !!host && !!allowed && (host === allowed || host.endsWith(`.${allowed}`))
+}
+
 // Bots created by this process: numbers each instance (see Bot.contextId).
 let instanceSeq = 0
 
@@ -188,9 +197,17 @@ class Bot extends EventEmitter {
           throw e
         }
         await this.page.route('**/*', (route) => {
-          let host = ''
-          try { host = new URL(route.request().url()).hostname } catch (e) { host = '' }
-          const ok = host === allowed || host.endsWith(`.${allowed}`)
+          const request = route.request()
+          const host = hostOf(request.url())
+          // The join flow may take the page to another host: a portal (Greenlight)
+          // sends it to its BBB server, a load balancer (Scalelite) redirects it to
+          // one of its nodes. A top-level navigation therefore goes anywhere, and
+          // the host of the top-level document is the meeting's host too, then: its
+          // own requests pass. Requests to any other host (sub-resources, frames)
+          // are still blocked.
+          const ok = this._isTopLevelNavigation(request) ||
+            isHostOrSubdomain(host, allowed) ||
+            isHostOrSubdomain(host, hostOf(this.page.mainFrame().url()))
           ok ? route.continue() : route.abort()
         })
       }
@@ -211,6 +228,16 @@ class Bot extends EventEmitter {
     }
     logger.info(`Bot[${this.contextId}]: initialization complete`)
     return true
+  }
+
+  // A navigation of the top-level document (not of a frame). A request of a
+  // service worker has no frame: request.frame() throws for it.
+  _isTopLevelNavigation (request) {
+    try {
+      return request.isNavigationRequest() && request.frame() === this.page.mainFrame()
+    } catch (e) {
+      return false
+    }
   }
 
   _wirePageDiagnostics () {

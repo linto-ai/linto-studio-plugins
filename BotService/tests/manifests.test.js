@@ -57,6 +57,11 @@ function assertRuleWellFormed (rule, ctx) {
   if ('optional' in rule) {
     assert.equal(typeof rule.optional, 'boolean', `${ctx}: optional must be a boolean`)
   }
+  // `if`: the rule runs only while the page shows this selector (Bot.execRules).
+  if ('if' in rule) {
+    assert.equal(typeof rule.if, 'string', `${ctx}: if must be a selector string`)
+    assert.ok(rule.if.length > 0, `${ctx}: if selector is empty`)
+  }
 }
 
 describe('bot manifests', () => {

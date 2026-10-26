@@ -658,6 +658,11 @@ class Bot extends EventEmitter {
   async execRules (rules, suppressErrors = false) {
     for (const rule of rules || []) {
       try {
+        // A rule with `if` runs only when the page shows an element matching that
+        // selector now, and is skipped otherwise: a manifest covers the variants of
+        // a page (a join portal or a direct link, two audio dialogs) by branching
+        // on what the page displays, without waiting for what it will not show.
+        if (rule.if && !(await this._isShown(rule.if))) continue
         await this.execRule(rule)
       } catch (e) {
         if (rule.optional || suppressErrors) {
@@ -683,7 +688,9 @@ class Bot extends EventEmitter {
         await this.page.locator(rule.selector).click({ timeout })
         break
       case 'waitForSelector':
-        await this.page.locator(rule.selector).waitFor({ timeout })
+        // The first visible element: a selector list ("a, b") waits for whichever
+        // of the expected pages shows up.
+        await this._visible(rule.selector).first().waitFor({ timeout })
         break
       case 'waitForTimeout':
         await this.page.waitForTimeout(rule.timeout)
@@ -713,6 +720,18 @@ class Bot extends EventEmitter {
         // an unknown action means the manifest references a verb this engine
         // does not implement.
         logger.warn(`Bot[${this.contextId}]: unknown rule action '${rule.action}' (manifest bug?)`)
+    }
+  }
+
+  _visible (selector) {
+    return this.page.locator(selector).filter({ visible: true })
+  }
+
+  async _isShown (selector) {
+    try {
+      return (await this._visible(selector).count()) > 0
+    } catch (e) {
+      return false
     }
   }
 

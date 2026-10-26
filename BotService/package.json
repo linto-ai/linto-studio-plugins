@@ -12,7 +12,7 @@
   "license": "EUPL",
   "dependencies": {
     "live-srt-lib": "file:../lib",
-    "playwright": "^1.49.0",
+    "playwright": "^1.51.0",
     "uuid": "^9.0.0",
     "ws": "^8.18.0"
   },

@@ -22,7 +22,11 @@ function makeFakePage (opts = {}) {
     focus: async () => { calls.locatorActions.push({ action: 'focus', selector }); if (rejectFor('focus', selector)) throw new Error('focus failed') },
     clear: async () => { calls.locatorActions.push({ action: 'clearInput', selector }); if (rejectFor('clearInput', selector)) throw new Error('clear failed') },
     // opts.count(selector): how many elements match (0 by default); may throw.
-    count: async () => (opts.count ? opts.count(selector) : 0)
+    count: async () => (opts.count ? opts.count(selector) : 0),
+    // The fake page shows every element it counts: the visible filter and the
+    // first-element pick keep the selector.
+    filter: () => mkLocator(selector),
+    first: () => mkLocator(selector)
   })
   return {
     calls,
@@ -1572,6 +1576,43 @@ describe('Bot.execRules / execRule', () => {
     assert.ok(acts.some(a => a.action === 'hover'))
     assert.ok(acts.some(a => a.action === 'focus'))
     assert.ok(acts.some(a => a.action === 'clearInput'))
+  })
+
+  it('a rule with `if` runs only while its selector is shown, and is skipped otherwise, even when not optional', async () => {
+    const bot = botWithPage({
+      count: (selector) => (selector === '#shown' ? 1 : 0),
+      rejectFor: (action, selector) => selector === '#never-reached'
+    })
+    await bot.execRules([
+      { if: '#shown', action: 'click', selector: '#a' },
+      { if: '#absent', action: 'click', selector: '#never-reached' },
+      { action: 'click', selector: '#b' }
+    ])
+    assert.deepEqual(bot.page.calls.locatorActions.map(a => a.selector), ['#a', '#b'])
+  })
+
+  it('an `if` check that fails (page navigating) skips the rule', async () => {
+    const bot = botWithPage({ count: () => { throw new Error('Execution context was destroyed') } })
+    await assert.doesNotReject(() => bot.execRules([{ if: '#x', action: 'click', selector: '#x' }]))
+    assert.deepEqual(bot.page.calls.locatorActions, [])
+  })
+
+  it('waitForSelector waits for the first visible element, so a selector list resolves on whichever page shows up', async () => {
+    const bot = botWithPage()
+    const chain = []
+    const realLocator = bot.page.locator
+    bot.page.locator = (selector) => {
+      const locator = realLocator(selector)
+      return {
+        filter: (opts) => {
+          chain.push(['filter', opts])
+          return { first: () => { chain.push(['first']); return locator } }
+        }
+      }
+    }
+    await bot.execRule({ action: 'waitForSelector', selector: '#a, #b', timeout: 10 })
+    assert.deepEqual(chain, [['filter', { visible: true }], ['first']])
+    assert.deepEqual(bot.page.calls.locatorActions, [{ action: 'waitForSelector', selector: '#a, #b' }])
   })
 
   it('an unknown action is tolerated (logged, no throw, no page call)', async () => {

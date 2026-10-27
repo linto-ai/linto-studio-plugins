@@ -1,6 +1,21 @@
 const { Model } = require("live-srt-lib")
 const { validateBotUrlResolved } = require("./bots.helpers")
 
+// Studio forces query.organizationId from the path, the admin route sends none.
+function invalidOrganizationId(organizationId) {
+    return organizationId != null && typeof organizationId !== 'string'
+}
+
+function channelInOrganization(organizationId) {
+    if (!organizationId) return {}
+    return { include: { model: Model.Session, attributes: [], required: true, where: { organizationId } } }
+}
+
+function botInOrganization(organizationId) {
+    if (!organizationId) return {}
+    return { include: { model: Model.Channel, attributes: [], required: true, ...channelInOrganization(organizationId) } }
+}
+
 module.exports = (webserver) => {
     return [
     {
@@ -8,8 +23,12 @@ module.exports = (webserver) => {
         method: 'get',
         controller: async (req, res, next) => {
             const { id } = req.params;
+            const { organizationId } = req.query;
+            if (invalidOrganizationId(organizationId)) {
+                return res.status(400).json({ error: 'organizationId must be a string' });
+            }
             try {
-                const bot = await Model.Bot.findByPk(id);
+                const bot = await Model.Bot.findByPk(id, botInOrganization(organizationId));
                 if (!bot) {
                     return res.status(404).json({ error: 'Bot not found' });
                 }
@@ -25,6 +44,10 @@ module.exports = (webserver) => {
             const limit = req.query.limit ?? 10
             const offset = req.query.offset ?? 0
             const channelId = req.query.channelId
+            const organizationId = req.query.organizationId
+            if (invalidOrganizationId(organizationId)) {
+                return res.status(400).json({ error: 'organizationId must be a string' });
+            }
 
             let where = {}
             if (channelId) {
@@ -35,7 +58,8 @@ module.exports = (webserver) => {
                 const results = await Model.Bot.findAndCountAll({
                     limit: limit,
                     offset: offset,
-                    where: where
+                    where: where,
+                    ...botInOrganization(organizationId)
                 });
 
                 res.json({
@@ -55,6 +79,10 @@ module.exports = (webserver) => {
                 if (!url || channelId === undefined || !provider) {
                     return res.status(400).json({ error: "url, channelId, and provider are required" });
                 }
+                const { organizationId } = req.query;
+                if (invalidOrganizationId(organizationId)) {
+                    return res.status(400).json({ error: "organizationId must be a string" });
+                }
                 // SSRF guard: the url is later handed to a headless Chromium via
                 // Playwright page.goto(), so reject loopback/private/metadata/non-http
                 // targets before creating the bot — including DNS names that
@@ -63,7 +91,7 @@ module.exports = (webserver) => {
                 if (urlError) {
                     return res.status(urlError.status).json({ error: urlError.error });
                 }
-                const channel = await Model.Channel.findByPk(channelId);
+                const channel = await Model.Channel.findByPk(channelId, channelInOrganization(organizationId));
                 if (!channel) {
                     return res.status(404).json({ error: "Channel not found" });
                 }
@@ -109,7 +137,12 @@ module.exports = (webserver) => {
                     return res.status(400).json({ error: "botId is required" });
                 }
 
-                const bot = await Model.Bot.findByPk(id)
+                const { organizationId } = req.query;
+                if (invalidOrganizationId(organizationId)) {
+                    return res.status(400).json({ error: "organizationId must be a string" });
+                }
+
+                const bot = await Model.Bot.findByPk(id, botInOrganization(organizationId))
 
                 if (!bot) {
                     return res.status(404).json({ error: "Bot not found" });

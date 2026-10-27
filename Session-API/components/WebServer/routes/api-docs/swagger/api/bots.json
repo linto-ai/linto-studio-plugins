@@ -32,7 +32,17 @@
           "schema": {
             "type": "integer"
           }
-      }],
+        },
+        {
+          "in": "query",
+          "name": "organizationId",
+          "description": "Only consider bots whose channel belongs to a session of this organization. Without it the scope is global.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "responses": {
         "200": {
           "description": "The list of bots",
@@ -54,6 +64,17 @@
         "bots"
       ],
       "summary": "Create a new bot",
+      "parameters": [
+        {
+          "in": "query",
+          "name": "organizationId",
+          "description": "The channel must belong to a session of this organization. Without it the scope is global.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "requestBody": {
         "content": {
           "application/json": {
@@ -92,6 +113,15 @@
           "schema": {
             "type": "integer"
           }
+        },
+        {
+          "in": "query",
+          "name": "organizationId",
+          "description": "Only consider bots whose channel belongs to a session of this organization. Without it the scope is global.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "responses": {
@@ -123,6 +153,15 @@
           "required": true,
           "schema": {
             "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "organizationId",
+          "description": "Only consider bots whose channel belongs to a session of this organization. Without it the scope is global.",
+          "required": false,
+          "schema": {
+            "type": "string"
           }
         }
       ],

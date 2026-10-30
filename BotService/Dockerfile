@@ -1,6 +1,6 @@
 # Debian base (bookworm): Playwright Chromium is not supported on Alpine, unlike
-# the other Node services which run node:22-alpine.
-ARG default_image=node:22-bookworm
+# the other Node services which run node:26-alpine.
+ARG default_image=node:26-bookworm
 FROM $default_image
 
 RUN apt-get update && apt-get install -y --no-install-recommends gosu netcat-openbsd \

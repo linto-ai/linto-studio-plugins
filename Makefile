@@ -57,7 +57,7 @@ clean-node-modules:
 	find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +
 
 clean-docker-node-modules:
-	docker run --rm -v $(PWD):/app -w /app node:20 /bin/sh -c 'find . -name "node_modules" -type d -prune -exec rm -rf {} +'
+	docker run --rm -v $(PWD):/app -w /app node:26 /bin/sh -c 'find . -name "node_modules" -type d -prune -exec rm -rf {} +'
 
 # ---------------------------------------------------------------------------
 # Integration tests (containerized harness in tests/integration/)

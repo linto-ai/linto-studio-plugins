@@ -1,4 +1,4 @@
-ARG default_image=node:22-alpine
+ARG default_image=node:26-alpine
 FROM $default_image
 
 RUN apk upgrade --no-cache && apk add --no-cache \

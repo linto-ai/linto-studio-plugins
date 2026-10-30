@@ -45,7 +45,7 @@ def buildAllPlugins(version, commit_sha) {
     buildDockerfile('Session-API', 'studio-plugins-sessionapi', version, commit_sha)
     buildDockerfile('migration', 'studio-plugins-migration', version, commit_sha)
     // BotService: build context is the repo root (default '.') so lib/ is available;
-    // image is heavy (bakes Playwright Chromium on a node:22-bookworm base).
+    // image is heavy (bakes Playwright Chromium on a node:26-bookworm base).
     buildDockerfile('BotService', 'studio-plugins-botservice', version, commit_sha)
     // VisioBotService: native LiveKit agent (Python, no Chromium); repo-root context (default '.').
     buildDockerfile('VisioBotService', 'studio-plugins-visio-botservice', version, commit_sha)

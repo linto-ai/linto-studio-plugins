@@ -29,10 +29,6 @@ eMeeting’s architecture is composed of the **LinTO Studio core components** an
 
 [https://github.com/linto-ai/linto-studio/tree/master/studio-frontend](https://github.com/linto-ai/linto-studio/tree/master/studio-frontend)
 
-**linto-studio-websocket**
-
-[https://github.com/linto-ai/linto-studio/tree/master/studio-websocket](https://github.com/linto-ai/linto-studio/tree/master/studio-websocket)
-
 **linto-studio-api**
 
 [https://github.com/linto-ai/linto-studio/tree/master/studio-api](https://github.com/linto-ai/linto-studio/tree/master/studio-api)
@@ -68,8 +64,7 @@ Docker builds available: linto-stt-whisper, linto-stt-kaldi
 These core components form the backbone of eMeeting, managing the user interface, application logic, and data storage:
 
 - **Studio Frontend (Web UI):** A web application (built with modern JS frameworks) that users interact with. It provides the main interface for uploading media, viewing live transcriptions, editing transcripts, managing meetings, etc. This frontend is packaged as a Docker container (`linto-studio-frontend`).
-- **Studio WebSocket Server:** A real-time communication server (`linto-studio-websocket`) that enables live updates between clients and the backend. For example, as the transcription progresses or as collaborators make edits/annotations, the WebSocket server pushes updates to all connected clients instantly. This ensures that all participants see the same real-time subtitles or transcript edits during a live session.
-- **Studio API (Backend):** A RESTful backend service (`linto-studio-api`) that handles business logic and data management for the Studio. This includes managing transcription tasks, orchestrating with other services (transcription, diarization, etc.), handling user authentication, and providing endpoints for the frontend (and external integrations) to query or control the system. The Studio API is also responsible for organizing media and transcript data in the database.
+- **Studio API (Backend):** A RESTful backend service (`linto-studio-api`) that handles business logic and data management for the Studio. It also hosts the real-time channel (Socket.IO) that pushes live updates to connected clients, so that all participants see the same real-time subtitles or transcript edits during a live session. This includes managing transcription tasks, orchestrating with other services (transcription, diarization, etc.), handling user authentication, and providing endpoints for the frontend (and external integrations) to query or control the system. The Studio API is also responsible for organizing media and transcript data in the database.
 - **Database (MongoDB):** A MongoDB database stores persistent data for LinTO Studio – such as uploaded media files metadata, transcription results, user accounts, organization info, and annotations. MongoDB runs as a container within the deployment and is used by the Studio API to persist and retrieve data.
 
 ### Auxiliary Services and AI Engines
@@ -154,7 +149,6 @@ The infrastructure requirements vary based on the services you intend to deploy.
 | **studio-api** | Backend web service | 1 CPU | N | 1 | 2 GB | 10 - 15 GB | Backend service needs for handling logs, uploads, and libraries. |
 | **studio-mongodb** | Web service database | 2 CPU | 1 | 1 | 2 GB | 5 GB | Data is stored within a database. |
 | **studio-frontend** | Web frontend service | 1 CPU | N (Easily scalable) | 1 | 512 MB | 3 GB | Static service, 5 GB covers system and configuration files. |
-| **studio-websocket** | WebSocket connection handler | 1 CPU | 1 | 1 | 2 GB | 5 - 10 GB | Space requirement depends on daily log volume. |
 
 This table summarizes the resource allocations per service, including CPU, memory, disk space, and scaling considerations.
 

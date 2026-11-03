@@ -14,7 +14,3 @@ services:
       - ${EMEETING_ROOT}/.envdefault.linto.docker
     ports: !override
       - "8003:8080"
-
-  studio-websocket:
-    ports: !override
-      - "8004:80"

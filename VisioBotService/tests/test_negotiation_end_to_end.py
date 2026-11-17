@@ -69,6 +69,7 @@ class _FakeRoom:
 
     async def connect(self, url, token, options=None):
         self.connected = True
+        self.options = options
 
     async def disconnect(self):
         self.disconnected = True
@@ -551,6 +552,48 @@ def test_a_reconnect_that_demotes_the_grant_switches_the_wire_shape():
     print("ok: a demoting reconnect moves the producer back to bare mixed PCM")
 
 
+class _Publication:
+    def __init__(self, kind, source):
+        self.kind = kind
+        self.source = source
+        self.track = None
+        self.subscribed = []
+
+    def set_subscribed(self, value):
+        self.subscribed.append(value)
+
+
+def test_the_bot_subscribes_to_microphones_only():
+    dialer = _Dialer(_ack(per_stream=False, mixed_recording=False))
+    mic = _Publication(_TRACK_KIND.KIND_AUDIO, _TRACK_SOURCE.SOURCE_MICROPHONE)
+    camera = _Publication(_TRACK_KIND.KIND_VIDEO, _TRACK_SOURCE.SOURCE_CAMERA)
+    late_mic = _Publication(_TRACK_KIND.KIND_AUDIO, _TRACK_SOURCE.SOURCE_UNKNOWN)
+    late_camera = _Publication(_TRACK_KIND.KIND_VIDEO, _TRACK_SOURCE.SOURCE_CAMERA)
+    screen = _Publication(_TRACK_KIND.KIND_VIDEO, _TRACK_SOURCE.SOURCE_SCREENSHARE)
+    screen_audio = _Publication(_TRACK_KIND.KIND_AUDIO, _TRACK_SOURCE.SOURCE_SCREENSHARE_AUDIO)
+    alice = types.SimpleNamespace(
+        identity="alice", name="Alice", track_publications={"mic": mic, "cam": camera}
+    )
+
+    async def drive():
+        bot = _make_bot()
+        bot.room.remote_participants = {"alice": alice}
+        assert await bot.start() is True
+        for pub in (late_mic, late_camera, screen, screen_audio):
+            bot.room.handlers["track_published"](pub, alice)
+        await bot.dispose()
+        return bot
+
+    with redirect_stdout(io.StringIO()):
+        bot = _run(dialer, drive)
+
+    assert bot.room.options == {"auto_subscribe": False}
+    assert mic.subscribed == [True] and late_mic.subscribed == [True]
+    assert camera.subscribed == late_camera.subscribed == []
+    assert screen.subscribed == screen_audio.subscribed == []
+    print("ok: the bot subscribes to the microphones only")
+
+
 _TESTS = [
     test_a_demoted_bot_runs_the_legacy_mixed_path,
     test_the_granted_dual_flow_carries_both_magics,
@@ -558,6 +601,7 @@ _TESTS = [
     test_a_reconnect_reannounces_the_live_roster,
     test_a_rename_inside_the_reconnect_gap_reaches_the_new_transcriber,
     test_a_reconnect_that_demotes_the_grant_switches_the_wire_shape,
+    test_the_bot_subscribes_to_microphones_only,
 ]
 
 

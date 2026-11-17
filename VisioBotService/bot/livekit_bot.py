@@ -473,6 +473,7 @@ class LiveKitBot:
 
         # 3. Wire room events BEFORE connecting so nothing published between
         #    connect() and the post-connect sweep is missed.
+        self.room.on("track_published", self._on_track_published)
         self.room.on("track_subscribed", self._on_track_subscribed)
         # A track can be unpublished and republished mid-call (mute/unmute on
         # some clients, a device change): the old pump must die and forget its
@@ -491,7 +492,8 @@ class LiveKitBot:
             await self.room.connect(
                 self.livekit_url,
                 self._token(),
-                options=rtc.RoomOptions(auto_subscribe=True),
+                # Microphones only (_subscribe_microphone): video costs CPU for nothing.
+                options=rtc.RoomOptions(auto_subscribe=False),
             )
         except Exception as e:  # noqa: BLE001
             print(f"LiveKitBot: room.connect failed: {e}", flush=True)
@@ -524,6 +526,7 @@ class LiveKitBot:
         self._register_participant(participant)
         identity = participant.identity
         for pub in participant.track_publications.values():
+            self._subscribe_microphone(pub)
             track = getattr(pub, "track", None)
             if track is None or not self._is_audio(track):
                 continue
@@ -561,7 +564,16 @@ class LiveKitBot:
         unknown = getattr(sources, "SOURCE_UNKNOWN", None)
         return source == microphone or (unknown is not None and source == unknown)
 
+    def _subscribe_microphone(self, publication) -> None:
+        if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
+            return
+        if self._is_microphone(publication):
+            publication.set_subscribed(True)
+
     # ---- event handlers (sync paho-style callbacks from the SDK) ----------
+    def _on_track_published(self, publication, participant) -> None:
+        self._subscribe_microphone(publication)
+
     def _on_track_subscribed(self, track, publication, participant) -> None:
         if not self._is_audio(track) or not self._is_microphone(publication):
             return
